@@ -1,0 +1,1785 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+// ── Secure Fetch Interceptor ─────────────────────────────
+(function(){
+  const _fetch = window.fetch;
+  window.fetch = function(url, opts) {
+    opts = opts || {};
+    const urlStr = typeof url === 'string' ? url : (url.url || '');
+    if (urlStr.startsWith('/api') || urlStr.includes('/api/')) {
+      opts.credentials = 'include';
+      const method = (opts.method || 'GET').toUpperCase();
+      if (['POST','PUT','DELETE','PATCH'].includes(method)) {
+        opts.headers = opts.headers || {};
+        if (!opts.headers['X-CSRF-Token'] && !opts.headers['x-csrf-token']) {
+          const m = document.cookie.match(/j2_csrf=([^;]+)/);
+          if (m) opts.headers['X-CSRF-Token'] = m[1];
+        }
+      }
+    }
+    return _fetch.call(this, url, opts);
+  };
+})();
+</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Netfactory — Logistics Management</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%2310b981'/><text x='50%25' y='55%25' dominant-baseline='middle' text-anchor='middle' fill='white' font-size='14' font-weight='800' font-family='sans-serif'>NF</text></svg>">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800;900&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+:root {
+  --bg: #f1f5f9; --text: #0f172a; --text-sec: #475569; --text-muted: #94a3b8;
+  --surface: #ffffff; --surface-2: #f8fafc; --border: #e2e8f0;
+  --sidebar-bg: #0f172a; --sidebar-text: rgba(255,255,255,.6); --sidebar-active-bg: rgba(16,185,129,.2);
+  --topbar-bg: #ffffff; --shadow: 0 1px 3px rgba(0,0,0,.06);
+  --card-hover: rgba(16,185,129,.03); --scrollbar: #cbd5e1; --scrollbar-hover: #94a3b8;
+  --modal-bg: #ffffff; --overlay: rgba(0,0,0,.6); --hamburger: #475569;
+}
+.theme-medium {
+  --bg: #1e293b; --text: #e2e8f0; --text-sec: #94a3b8; --text-muted: #64748b;
+  --surface: #253347; --surface-2: #1e293b; --border: #334155;
+  --sidebar-bg: #111827; --sidebar-text: rgba(255,255,255,.6); --sidebar-active-bg: rgba(16,185,129,.25);
+  --topbar-bg: #253347; --shadow: 0 1px 3px rgba(0,0,0,.15);
+  --card-hover: rgba(16,185,129,.06); --scrollbar: #334155; --scrollbar-hover: #475569;
+  --modal-bg: #253347; --overlay: rgba(0,0,0,.7); --hamburger: #94a3b8;
+}
+.theme-dark {
+  --bg: #0a0a0f; --text: #f1f5f9; --text-sec: #a1a1aa; --text-muted: #71717a;
+  --surface: #16161f; --surface-2: #111118; --border: #27272a;
+  --sidebar-bg: #09090b; --sidebar-text: rgba(255,255,255,.5); --sidebar-active-bg: rgba(16,185,129,.25);
+  --topbar-bg: #16161f; --shadow: 0 1px 3px rgba(0,0,0,.3);
+  --card-hover: rgba(16,185,129,.06); --scrollbar: #27272a; --scrollbar-hover: #3f3f46;
+  --modal-bg: #16161f; --overlay: rgba(0,0,0,.8); --hamburger: #a1a1aa;
+}
+body { font-family:'Plus Jakarta Sans','Segoe UI',system-ui,sans-serif; background:var(--bg); color:var(--text); overflow:hidden; }
+::-webkit-scrollbar { width:6px; height:6px; }
+::-webkit-scrollbar-track { background:transparent; }
+::-webkit-scrollbar-thumb { background:var(--scrollbar); border-radius:3px; }
+::-webkit-scrollbar-thumb:hover { background:var(--scrollbar-hover); }
+
+/* ── Layout ─────────────────────────────────── */
+.app { display:flex; height:100vh; }
+.sidebar { width:250px; background:var(--sidebar-bg); display:flex; flex-direction:column; flex-shrink:0; transition:width .3s; overflow:hidden; }
+.sidebar.collapsed { width:68px; }
+.sidebar-logo { padding:18px 16px; display:flex; align-items:center; gap:10px; border-bottom:1px solid rgba(255,255,255,.08); }
+.sidebar-logo .icon { width:36px; height:36px; border-radius:10px; background:linear-gradient(135deg,#10b981,#059669); display:flex; align-items:center; justify-content:center; color:#fff; font-weight:800; font-size:14px; font-family:'Space Grotesk',sans-serif; flex-shrink:0; }
+.sidebar-logo .text { white-space:nowrap; }
+.sidebar-logo .text h2 { font-size:14px; font-weight:700; color:#fff; font-family:'Space Grotesk',sans-serif; }
+.sidebar-logo .text span { font-size:9px; color:rgba(255,255,255,.4); letter-spacing:.5px; }
+.sidebar.collapsed .sidebar-logo .text { display:none; }
+.sidebar-nav { flex:1; padding:12px 8px; overflow-y:auto; }
+.nav-item { display:flex; align-items:center; gap:12px; padding:11px 14px; border-radius:10px; margin-bottom:3px; cursor:pointer; transition:all .2s; color:var(--sidebar-text); font-size:13px; font-weight:500; white-space:nowrap; }
+.nav-item:hover { background:rgba(255,255,255,.05); color:rgba(255,255,255,.8); }
+.nav-item.active { background:var(--sidebar-active-bg); color:#10b981; font-weight:700; }
+.nav-item .icon { font-size:18px; flex-shrink:0; width:24px; text-align:center; }
+.sidebar.collapsed .nav-item { justify-content:center; padding:11px 0; }
+.sidebar.collapsed .nav-item span:not(.icon) { display:none; }
+.sidebar-footer { padding:12px 8px; border-top:1px solid rgba(255,255,255,.08); }
+.sidebar-footer .nav-item .arrow { transition:transform .2s; }
+.sidebar.collapsed .sidebar-footer .nav-item span:not(.icon) { display:none; }
+
+.main { flex:1; display:flex; flex-direction:column; min-width:0; }
+
+/* ── Topbar ─────────────────────────────────── */
+.topbar { height:58px; background:var(--topbar-bg); border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; padding:0 24px; flex-shrink:0; }
+.topbar-left { display:flex; align-items:center; gap:12px; }
+.topbar-search { position:relative; }
+.topbar-search input { width:280px; padding:9px 14px 9px 36px; border:1px solid var(--border); border-radius:10px; font-size:13px; background:var(--surface-2); color:var(--text); font-family:inherit; outline:none; }
+.topbar-search input:focus { border-color:#10b981; box-shadow:0 0 0 3px rgba(16,185,129,.1); }
+.topbar-search .search-icon { position:absolute; left:12px; top:50%; transform:translateY(-50%); font-size:14px; color:var(--text-muted); }
+
+/* ── Content ────────────────────────────────── */
+.content { flex:1; padding:24px; overflow-y:auto; }
+.page-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:24px; flex-wrap:wrap; gap:12px; }
+.page-header h1 { font-size:24px; font-weight:800; font-family:'Space Grotesk',sans-serif; }
+.page-header p { color:var(--text-muted); font-size:13px; margin-top:4px; }
+
+/* ── Cards ──────────────────────────────────── */
+.card { background:var(--surface); border-radius:16px; border:1px solid var(--border); box-shadow:var(--shadow); padding:24px; transition:all .3s; }
+.card-flush { padding:0; overflow:hidden; }
+.card h3 { font-size:16px; font-weight:700; margin-bottom:18px; }
+.stat-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:16px; margin-bottom:24px; }
+.stat-card { display:flex; gap:16px; align-items:center; }
+.stat-icon { width:50px; height:50px; border-radius:14px; display:flex; align-items:center; justify-content:center; font-size:22px; }
+.stat-label { font-size:12px; color:var(--text-muted); font-weight:500; margin-bottom:2px; }
+.stat-value { font-size:22px; font-weight:800; font-family:'Space Grotesk',sans-serif; }
+.stat-sub { font-size:11px; color:var(--text-muted); margin-top:2px; }
+
+/* ── Tables ─────────────────────────────────── */
+.table-wrap { overflow-x:auto; }
+table { width:100%; border-collapse:collapse; min-width:700px; }
+th { padding:12px 16px; text-align:left; font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:.5px; border-bottom:2px solid var(--border); background:var(--surface); white-space:nowrap; }
+td { padding:14px 16px; font-size:13px; color:var(--text-sec); border-bottom:1px solid var(--border); }
+tr:hover td { background:var(--card-hover); }
+.table-footer { padding:14px 20px; border-top:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; font-size:12px; color:var(--text-muted); flex-wrap:wrap; gap:8px; }
+
+/* ── Badges ─────────────────────────────────── */
+.badge { display:inline-flex; align-items:center; gap:5px; padding:4px 12px; border-radius:20px; font-size:11px; font-weight:600; text-transform:capitalize; }
+.badge::before { content:''; width:6px; height:6px; border-radius:50%; }
+.badge-green { background:rgba(16,185,129,.1); color:#10b981; }
+.badge-green::before { background:#10b981; }
+.badge-yellow { background:rgba(245,158,11,.1); color:#f59e0b; }
+.badge-yellow::before { background:#f59e0b; }
+.badge-red { background:rgba(239,68,68,.1); color:#ef4444; }
+.badge-red::before { background:#ef4444; }
+.badge-blue { background:rgba(59,130,246,.1); color:#3b82f6; }
+.badge-blue::before { background:#3b82f6; }
+.badge-gray { background:rgba(148,163,184,.1); color:var(--text-muted); }
+.badge-gray::before { background:#94a3b8; }
+.badge-purple { background:rgba(139,92,246,.1); color:#8b5cf6; }
+.badge-purple::before { background:#8b5cf6; }
+
+/* ── Buttons ────────────────────────────────── */
+.btn { padding:10px 20px; border-radius:10px; font-size:13px; font-weight:600; cursor:pointer; font-family:inherit; display:inline-flex; align-items:center; gap:6px; border:none; transition:all .2s; }
+.btn-primary { background:linear-gradient(135deg,#10b981,#059669); color:#fff; }
+.btn-primary:hover { opacity:.9; transform:translateY(-1px); }
+.btn-secondary { background:var(--surface); color:var(--text-sec); border:1px solid var(--border); }
+.btn-secondary:hover { background:var(--surface-2); }
+.btn-danger { background:#ef4444; color:#fff; }
+.btn-sm { padding:6px 14px; font-size:12px; border-radius:8px; }
+
+/* ── Filters ────────────────────────────────── */
+.filters { display:flex; gap:8px; margin-bottom:20px; flex-wrap:wrap; }
+.filter-btn { padding:8px 18px; border-radius:8px; border:1px solid var(--border); background:var(--surface); color:var(--text-sec); font-size:12px; font-weight:600; cursor:pointer; font-family:inherit; transition:all .2s; }
+.filter-btn.active { background:#10b981; color:#fff; border-color:#10b981; }
+
+/* ── Modal ──────────────────────────────────── */
+.modal-overlay { position:fixed; inset:0; background:var(--overlay); backdrop-filter:blur(6px); z-index:300; display:flex; align-items:center; justify-content:center; padding:16px; opacity:0; pointer-events:none; transition:opacity .2s; }
+.modal-overlay.active { opacity:1; pointer-events:auto; }
+.modal { background:var(--modal-bg); border-radius:20px; max-width:600px; width:100%; max-height:90vh; overflow-y:auto; box-shadow:0 40px 80px rgba(0,0,0,.3); border:1px solid var(--border); transform:translateY(20px); transition:transform .2s; }
+.modal-overlay.active .modal { transform:translateY(0); }
+.modal-header { padding:22px 24px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+.modal-header h2 { font-size:18px; font-weight:700; font-family:'Space Grotesk',sans-serif; }
+.modal-close { cursor:pointer; font-size:18px; color:var(--text-muted); background:none; border:none; padding:4px; }
+.modal-close:hover { color:var(--text); }
+.modal-body { padding:24px; }
+
+/* ── Forms ──────────────────────────────────── */
+.form-group { margin-bottom:14px; }
+.form-group label { font-size:12px; font-weight:600; color:var(--text-sec); margin-bottom:6px; display:block; }
+.form-group input, .form-group select, .form-group textarea { width:100%; padding:12px 14px; border:1px solid var(--border); border-radius:10px; font-size:13px; background:var(--surface-2); color:var(--text); font-family:inherit; outline:none; }
+.form-group input:focus, .form-group select:focus, .form-group textarea:focus { border-color:#10b981; box-shadow:0 0 0 3px rgba(16,185,129,.1); }
+.form-group textarea { resize:vertical; min-height:80px; }
+.form-row { display:grid; grid-template-columns:1fr 1fr; gap:0 14px; }
+.form-actions { display:flex; gap:12px; margin-top:8px; }
+.form-actions .btn { flex:1; justify-content:center; }
+.form-actions .btn-primary { flex:2; }
+
+/* ── Confirm Modal ──────────────────────────── */
+.confirm-overlay { position:fixed; inset:0; background:var(--overlay); backdrop-filter:blur(4px); z-index:400; display:flex; align-items:center; justify-content:center; padding:16px; }
+.confirm-box { background:var(--modal-bg); border-radius:16px; padding:28px; max-width:400px; width:100%; text-align:center; box-shadow:0 20px 60px rgba(0,0,0,.3); }
+.confirm-box h3 { font-size:16px; font-weight:700; margin-bottom:8px; }
+.confirm-box p { font-size:13px; color:var(--text-sec); margin-bottom:20px; line-height:1.5; }
+.confirm-actions { display:flex; gap:10px; justify-content:center; }
+
+/* ── Grids ──────────────────────────────────── */
+.grid-2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(350px,1fr)); gap:16px; }
+.grid-3 { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:16px; }
+
+/* ── Category Cards ─────────────────────────── */
+.cat-card { padding:16px; border-radius:12px; background:rgba(16,185,129,.05); border:1px solid rgba(16,185,129,.15); text-align:center; cursor:pointer; transition:all .2s; }
+.cat-card:hover { border-color:#10b981; transform:translateY(-2px); box-shadow:0 4px 12px rgba(16,185,129,.15); }
+.cat-card .count { font-size:28px; font-weight:800; color:#10b981; font-family:'Space Grotesk',sans-serif; }
+.cat-card .name { font-size:12px; font-weight:600; color:var(--text-sec); margin-top:4px; }
+
+/* ── Empty State ────────────────────────────── */
+.empty { padding:48px 24px; text-align:center; color:var(--text-muted); }
+.empty .icon { font-size:48px; margin-bottom:12px; }
+.empty h3 { font-size:16px; font-weight:600; color:var(--text-sec); margin-bottom:6px; }
+.empty p { font-size:13px; }
+
+/* ── Responsive ─────────────────────────────── */
+@media(max-width:768px) {
+  .sidebar { position:fixed; z-index:200; transform:translateX(-100%); transition:transform .3s; }
+  .sidebar.mobile-open { transform:translateX(0); }
+  .hamburger { display:block !important; }
+  .topbar-search input { width:180px; }
+}
+@media(min-width:769px) { .hamburger { display:none !important; } .mobile-overlay { display:none !important; } }
+
+/* ── Loading ────────────────────────────────── */
+.loading { display:flex; align-items:center; justify-content:center; padding:48px; }
+.spinner { width:32px; height:32px; border:3px solid var(--border); border-top-color:#10b981; border-radius:50%; animation:spin .8s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+
+/* ── Toast ──────────────────────────────────── */
+.toast-container { position:fixed; top:20px; right:20px; z-index:500; display:flex; flex-direction:column; gap:8px; }
+.toast { padding:14px 20px; border-radius:12px; font-size:13px; font-weight:500; color:#fff; box-shadow:0 10px 30px rgba(0,0,0,.15); animation:slideInRight .3s; min-width:280px; display:flex; align-items:center; gap:10px; }
+.toast-success { background:#10b981; }
+.toast-error { background:#ef4444; }
+.toast-info { background:#3b82f6; }
+@keyframes slideInRight { from { opacity:0; transform:translateX(60px); } to { opacity:1; transform:translateX(0); } }
+
+/* ── Mono text ──────────────────────────────── */
+.mono { font-family:'SF Mono','Fira Code',monospace; font-size:12px; font-weight:600; }
+.text-green { color:#10b981; }
+.text-red { color:#ef4444; }
+.text-blue { color:#3b82f6; }
+.text-muted { color:var(--text-muted); }
+.text-bold { font-weight:700; color:var(--text); }
+.fw700 { font-weight:700; }
+.mb24 { margin-bottom:24px; }
+.mb16 { margin-bottom:16px; }
+.mt8 { margin-top:8px; }
+
+/* ── Theme Toggle ──────────────────────────── */
+.theme-toggle { display:flex; gap:4px; background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:3px; }
+.theme-btn { width:28px; height:28px; border-radius:6px; border:none; cursor:pointer; font-size:14px; background:transparent; transition:all .2s; display:flex; align-items:center; justify-content:center; }
+.theme-btn.active { background:#10b981; box-shadow:0 2px 6px rgba(16,185,129,.3); }
+
+/* ── Category Stats Scroll ─────────────────── */
+.cat-stats-scroll::-webkit-scrollbar { height:5px; }
+.cat-stats-scroll::-webkit-scrollbar-track { background:transparent; }
+.cat-stats-scroll::-webkit-scrollbar-thumb { background:#10b981; border-radius:3px; }
+.cat-stats-scroll::-webkit-scrollbar-thumb:hover { background:#059669; }
+
+/* ── Pagination ────────────────────────────── */
+.pg-controls { display:flex; gap:4px; align-items:center; flex-wrap:wrap; }
+.pg-btn { padding:5px 12px; border-radius:6px; border:1px solid var(--border); background:var(--surface); color:var(--text-sec); font-size:12px; font-weight:600; cursor:pointer; font-family:inherit; transition:all .15s; }
+.pg-btn:hover:not(:disabled) { border-color:#10b981; color:#10b981; }
+.pg-btn:disabled { opacity:.4; cursor:not-allowed; }
+.pg-btn.pg-current { background:#10b981; color:#fff; border-color:#10b981; }
+.pg-btn.pg-showall { margin-left:8px; }
+.pg-btn.pg-showall-active { background:rgba(239,68,68,.1); color:#ef4444; border-color:rgba(239,68,68,.3); }
+.pg-ellipsis { padding:0 4px; color:var(--text-muted); font-size:12px; }
+.log-scroll { max-height:70vh; overflow-y:auto; }
+.log-scroll::-webkit-scrollbar { width:6px; }
+.log-scroll::-webkit-scrollbar-track { background:transparent; }
+.log-scroll::-webkit-scrollbar-thumb { background:#f87171; border-radius:3px; }
+.log-scroll::-webkit-scrollbar-thumb:hover { background:#ef4444; }
+</style>
+</head>
+<body>
+
+<div class="app" id="app">
+  <!-- Mobile Overlay -->
+  <div class="mobile-overlay" id="mobileOverlay" onclick="toggleMobile()" style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:199;display:none;"></div>
+
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">
+      <div class="icon">NF</div>
+      <div class="text">
+        <h2>Netfactory</h2>
+        <span>LOGISTICS</span>
+      </div>
+    </div>
+    <nav class="sidebar-nav" id="sidebarNav"></nav>
+    <div class="sidebar-footer">
+      <div class="nav-item" onclick="toggleSidebar()">
+        <span class="icon arrow" id="collapseArrow">◀</span>
+        <span>Collapse</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <div class="main">
+    <!-- Topbar -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <div class="hamburger" onclick="toggleMobile()" style="cursor:pointer;padding:8px;">
+          <div style="width:20px;height:2px;background:var(--hamburger);margin-bottom:4px;"></div>
+          <div style="width:20px;height:2px;background:var(--hamburger);margin-bottom:4px;"></div>
+          <div style="width:20px;height:2px;background:var(--hamburger);"></div>
+        </div>
+        <div class="topbar-search">
+          <span class="search-icon">🔍</span>
+          <input id="globalSearch" placeholder="Search products, vendors, POs..." oninput="handleGlobalSearch(this.value)">
+        </div>
+      </div>
+      <div class="theme-toggle" id="themeToggle">
+        <button class="theme-btn active" data-theme="light" title="Light" onclick="setTheme('light')">☀️</button>
+        <button class="theme-btn" data-theme="medium" title="Medium" onclick="setTheme('medium')">🌤️</button>
+        <button class="theme-btn" data-theme="dark" title="Dark" onclick="setTheme('dark')">🌙</button>
+      </div>
+    </header>
+
+    <!-- Content -->
+    <main class="content" id="pageContent">
+      <div class="loading"><div class="spinner"></div></div>
+    </main>
+  </div>
+</div>
+
+<!-- Toast Container -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+// ============================================================
+// NETFACTORY LOGISTICS MANAGEMENT SYSTEM
+// ============================================================
+
+const API = '/api/logistics';
+const ADMIN_API = '/api/admin';
+let TOKEN = localStorage.getItem('j2_admin_token') || '';
+let currentPage = 'dashboard';
+let state = { categories:[], products:[], vendors:[], purchaseOrders:[], stock:[], transactions:[], dashData:null };
+
+// ── Theme ────────────────────────────────────────────────────
+function setTheme(t) {
+  const app = document.documentElement;
+  app.classList.remove('theme-medium','theme-dark');
+  if (t !== 'light') app.classList.add('theme-' + t);
+  // Update hamburger lines
+  document.querySelectorAll('.hamburger div').forEach(d => d.style.background = getComputedStyle(document.documentElement).getPropertyValue('--hamburger').trim());
+  // Update toggle buttons
+  document.querySelectorAll('.theme-btn').forEach(b => b.classList.toggle('active', b.dataset.theme === t));
+  localStorage.setItem('j2_logistics_theme', t);
+}
+(function(){var t=localStorage.getItem('j2_logistics_theme');if(t&&t!=='light')setTheme(t);})();
+
+// ── Auth ────────────────────────────────────────────────────
+async function checkAuth() {
+  if (!TOKEN) { redirectLogin(); return false; }
+  try {
+    const r = await apiFetch(`${ADMIN_API}/me`);
+    if (!r || r.error) { redirectLogin(); return false; }
+    return true;
+  } catch { redirectLogin(); return false; }
+}
+function redirectLogin() { window.location.href = '/crm/?redirect=logistics'; }
+
+// ── API Helpers ─────────────────────────────────────────────
+async function apiFetch(url, opts = {}) {
+  try {
+    const r = await fetch(url, { headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json', ...opts.headers }, ...opts });
+    if (r.status === 401) { redirectLogin(); return { error: 'Unauthorized' }; }
+    return await r.json();
+  } catch (e) { console.error('API error:', e); return { error: e.message }; }
+}
+async function apiPost(url, data) { return apiFetch(url, { method: 'POST', body: JSON.stringify(data) }); }
+async function apiPut(url, data) { return apiFetch(url, { method: 'PUT', body: JSON.stringify(data) }); }
+
+// ── Toast ───────────────────────────────────────────────────
+function toast(msg, type = 'success') {
+  const el = document.createElement('div');
+  el.className = 'toast toast-' + type;
+  el.innerHTML = (type === 'success' ? '✓' : type === 'error' ? '✗' : 'ℹ') + ' ' + msg;
+  document.getElementById('toastContainer').appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 300); }, 3500);
+}
+
+// ── Confirm Modal ───────────────────────────────────────────
+function showConfirm(title, msg, onYes) {
+  const el = document.createElement('div');
+  el.className = 'confirm-overlay';
+  el.innerHTML = `<div class="confirm-box"><h3>${title}</h3><p>${msg}</p><div class="confirm-actions"><button class="btn btn-secondary" onclick="this.closest('.confirm-overlay').remove()">Cancel</button><button class="btn btn-primary" id="confirmYes">Confirm</button></div></div>`;
+  document.body.appendChild(el);
+  el.querySelector('#confirmYes').onclick = () => { el.remove(); onYes(); };
+}
+
+// ── Pagination System ──────────────────────────────────────
+const pg = {};
+function pgInit(key, perPage) { pg[key] = { page:1, showAll:false, perPage:perPage||8 }; }
+function pgSlice(key, list) {
+  const s = pg[key]; if (!s || s.showAll) return list;
+  const start = (s.page - 1) * s.perPage;
+  return list.slice(start, start + s.perPage);
+}
+function pgGo(key, page, renderFn) { pg[key].page = page; renderFn(); }
+function pgToggleAll(key, renderFn) {
+  const s = pg[key]; s.showAll = !s.showAll; if (!s.showAll) s.page = 1;
+  // Toggle scroll class on table wrap
+  const wrap = document.getElementById(key + 'Wrap');
+  if (wrap) { if (s.showAll) wrap.classList.add('log-scroll'); else wrap.classList.remove('log-scroll'); }
+  renderFn();
+}
+function pgFooter(key, total, renderFnName) {
+  const s = pg[key]; if (!s) return '';
+  const perPage = s.perPage;
+  const totalPages = Math.ceil(total / perPage);
+  const page = s.page;
+
+  // Status text
+  let statusText;
+  if (s.showAll) { statusText = 'Showing all ' + total + ' items'; }
+  else {
+    const start = Math.min((page - 1) * perPage + 1, total);
+    const end = Math.min(page * perPage, total);
+    statusText = 'Showing ' + start + '–' + end + ' of ' + total + ' items';
+  }
+
+  // Build page numbers
+  let pages = '';
+  if (!s.showAll && totalPages > 1) {
+    const range = [];
+    for (let i = 1; i <= totalPages; i++) {
+      if (i === 1 || i === totalPages || (i >= page - 1 && i <= page + 1)) range.push(i);
+      else if (range[range.length - 1] !== '...') range.push('...');
+    }
+    pages = '<button class="pg-btn" ' + (page <= 1 ? 'disabled' : 'onclick="pgGo(\'' + key + '\',' + (page - 1) + ',' + renderFnName + ')"') + '>Prev</button>';
+    range.forEach(p => {
+      if (p === '...') pages += '<span class="pg-ellipsis">…</span>';
+      else pages += '<button class="pg-btn' + (p === page ? ' pg-current' : '') + '" onclick="pgGo(\'' + key + '\',' + p + ',' + renderFnName + ')">' + p + '</button>';
+    });
+    pages += '<button class="pg-btn" ' + (page >= totalPages ? 'disabled' : 'onclick="pgGo(\'' + key + '\',' + (page + 1) + ',' + renderFnName + ')"') + '>Next</button>';
+  }
+
+  const showAllBtn = '<button class="pg-btn pg-showall' + (s.showAll ? ' pg-showall-active' : '') + '" onclick="pgToggleAll(\'' + key + '\',' + renderFnName + ')">' + (s.showAll ? 'Paginated' : 'Show All') + '</button>';
+
+  return '<div class="table-footer"><span>' + statusText + '</span><div class="pg-controls">' + pages + showAllBtn + '</div></div>';
+}
+
+// ── Sidebar Navigation ──────────────────────────────────────
+const navItems = [
+  { id:'dashboard', icon:'📦', label:'Dashboard' },
+  { id:'products', icon:'🏷️', label:'Products' },
+  { id:'categories', icon:'📂', label:'Categories' },
+  { id:'vendors', icon:'🏭', label:'Vendors' },
+  { id:'purchase-orders', icon:'📋', label:'Purchase Orders' },
+  { id:'stock', icon:'📊', label:'Stock Levels' },
+  { id:'transactions', icon:'🔄', label:'Transactions' },
+];
+
+function renderNav() {
+  document.getElementById('sidebarNav').innerHTML = navItems.map(n =>
+    `<div class="nav-item ${currentPage === n.id ? 'active' : ''}" onclick="navigate('${n.id}')"><span class="icon">${n.icon}</span><span>${n.label}</span></div>`
+  ).join('');
+}
+
+function navigate(page) {
+  currentPage = page;
+  renderNav();
+  renderPage();
+  toggleMobile(true);
+}
+
+function toggleSidebar() {
+  const s = document.getElementById('sidebar');
+  s.classList.toggle('collapsed');
+  document.getElementById('collapseArrow').textContent = s.classList.contains('collapsed') ? '▶' : '◀';
+}
+
+function toggleMobile(close) {
+  const s = document.getElementById('sidebar');
+  const o = document.getElementById('mobileOverlay');
+  if (close) { s.classList.remove('mobile-open'); o.style.display = 'none'; return; }
+  s.classList.toggle('mobile-open');
+  o.style.display = s.classList.contains('mobile-open') ? 'block' : 'none';
+}
+
+// ── Format Helpers ──────────────────────────────────────────
+const fmt = n => '₱' + Number(n || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtDate = d => d ? new Date(d).toLocaleDateString('en-PH', { year:'numeric', month:'short', day:'numeric' }) : '—';
+const statusBadge = (s) => {
+  const map = { draft:'gray', ordered:'blue', partial:'yellow', received:'green', cancelled:'red', in_stock:'green', deployed:'blue', defective:'red', returned:'yellow', for_rma:'purple', active:'green', inactive:'gray' };
+  return `<span class="badge badge-${map[s] || 'gray'}">${(s||'').replace(/_/g,' ')}</span>`;
+};
+
+// ── Global Search ───────────────────────────────────────────
+function handleGlobalSearch(q) {
+  if (!q || q.length < 2) return;
+  // Navigate to products with search
+  currentPage = 'products';
+  renderNav();
+  renderProductsPage(q);
+}
+
+// ============================================================
+// PAGE RENDERING
+// ============================================================
+
+async function renderPage() {
+  const c = document.getElementById('pageContent');
+  c.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  switch(currentPage) {
+    case 'dashboard': await renderDashboard(); break;
+    case 'products': await renderProductsPage(); break;
+    case 'categories': await renderCategoriesPage(); break;
+    case 'vendors': await renderVendorsPage(); break;
+    case 'purchase-orders': await renderPOPage(); break;
+    case 'stock': await renderStockPage(); break;
+    case 'transactions': await renderTransactionsPage(); break;
+    default: await renderDashboard();
+  }
+}
+
+// ── DASHBOARD ───────────────────────────────────────────────
+async function renderDashboard() {
+  const c = document.getElementById('pageContent');
+  const d = await apiFetch(API + '/dashboard');
+  if (d.error) { c.innerHTML = `<div class="empty"><div class="icon">⚠️</div><h3>Error loading dashboard</h3><p>${d.error}</p></div>`; return; }
+  state.dashData = d;
+
+  c.innerHTML = `
+    <div class="page-header">
+      <div><h1>Logistics Dashboard</h1><p>Inventory, procurement & supply chain overview</p></div>
+      <div style="font-size:12px;color:var(--text-muted);padding:8px 16px;background:var(--surface);border-radius:10px;border:1px solid var(--border);">📅 ${new Date().toLocaleDateString('en-PH', { weekday:'long', year:'numeric', month:'long', day:'numeric' })}</div>
+    </div>
+
+    <div class="stat-grid">
+      <div class="card stat-card">
+        <div class="stat-icon" style="background:rgba(16,185,129,.1);">🏷️</div>
+        <div><div class="stat-label">Products</div><div class="stat-value">${d.products.total}</div><div class="stat-sub">${d.products.active} active</div></div>
+      </div>
+      <div class="card stat-card">
+        <div class="stat-icon" style="background:rgba(59,130,246,.1);">📦</div>
+        <div><div class="stat-label">Total Stock</div><div class="stat-value">${Number(d.stock.total).toLocaleString()}</div><div class="stat-sub">${d.stock.lowStock} low stock alerts</div></div>
+      </div>
+      <div class="card stat-card">
+        <div class="stat-icon" style="background:rgba(245,158,11,.1);">📋</div>
+        <div><div class="stat-label">Purchase Orders</div><div class="stat-value">${d.purchaseOrders.total}</div><div class="stat-sub">${d.purchaseOrders.pending} pending</div></div>
+      </div>
+      <div class="card stat-card">
+        <div class="stat-icon" style="background:rgba(139,92,246,.1);">🏭</div>
+        <div><div class="stat-label">Vendors</div><div class="stat-value">${d.vendors.total}</div><div class="stat-sub">${d.vendors.active} active</div></div>
+      </div>
+    </div>
+
+    <div class="grid-2 mb24">
+      <div class="card" style="overflow:hidden;">
+        <h3>Stock by Category</h3>
+        <div class="cat-stats-scroll" style="display:flex;gap:10px;overflow-x:auto;padding-bottom:6px;" id="catStatsRow"></div>
+      </div>
+
+      <div class="card">
+        <h3>PO Status Summary</h3>
+        ${d.purchaseOrders.byStatus.length === 0 ? '<div class="empty" style="padding:24px;"><div class="icon">📋</div><p>No purchase orders yet</p></div>' :
+          d.purchaseOrders.byStatus.map(s => `
+            <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);">
+              <div style="flex:1;">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                  <span>${statusBadge(s.status)}</span>
+                  <span class="text-bold">${s.cnt}</span>
+                </div>
+                <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">Total: ${fmt(s.total)}</div>
+              </div>
+            </div>
+          `).join('')
+        }
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Recent Transactions</h3>
+      ${d.recentTransactions.length === 0 ? '<div class="empty" style="padding:24px;"><div class="icon">🔄</div><p>No transactions yet</p></div>' : `
+        <div class="table-wrap"><table>
+          <thead><tr><th>Date</th><th>Product</th><th>Type</th><th>Qty</th><th>By</th></tr></thead>
+          <tbody>${d.recentTransactions.map(t => `<tr>
+            <td>${fmtDate(t.created_at)}</td>
+            <td><span class="text-bold">${t.product?.name || '—'}</span><br><span class="mono text-muted">${t.product?.sku || ''}</span></td>
+            <td>${statusBadge(t.type)}</td>
+            <td class="fw700">${t.quantity > 0 ? '+' : ''}${t.quantity}</td>
+            <td>${t.creator?.full_name || '—'}</td>
+          </tr>`).join('')}</tbody>
+        </table></div>`}
+    </div>`;
+
+  // Render category stat cards
+  const catColors = [
+    {bg:'rgba(16,185,129,.1)', text:'#10b981', icon:'📦'},
+    {bg:'rgba(59,130,246,.1)', text:'#3b82f6', icon:'🏷️'},
+    {bg:'rgba(245,158,11,.1)', text:'#f59e0b', icon:'📋'},
+    {bg:'rgba(139,92,246,.1)', text:'#8b5cf6', icon:'🔧'},
+    {bg:'rgba(236,72,153,.1)', text:'#ec4899', icon:'⚡'},
+    {bg:'rgba(6,182,212,.1)', text:'#06b6d4', icon:'🔌'},
+    {bg:'rgba(249,115,22,.1)', text:'#f97316', icon:'📡'},
+    {bg:'rgba(34,197,94,.1)', text:'#22c55e', icon:'🧰'}
+  ];
+  const catRow = document.getElementById('catStatsRow');
+  if (catRow) {
+    catRow.innerHTML = d.categoryStats.map((cat, i) => {
+      const cl = catColors[i % catColors.length];
+      return '<div onclick="navigate(\'products\')" style="min-width:160px;flex:1;display:flex;align-items:center;gap:12px;padding:14px 16px;border-radius:12px;background:var(--surface-2);border:1px solid var(--border);cursor:pointer;transition:all .2s;" onmouseenter="this.style.borderColor=\'' + cl.text + '\';this.style.transform=\'translateY(-2px)\'" onmouseleave="this.style.borderColor=\'var(--border)\';this.style.transform=\'none\'">'
+        + '<div style="width:42px;height:42px;border-radius:10px;background:' + cl.bg + ';display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;">' + cl.icon + '</div>'
+        + '<div style="min-width:0;">'
+        + '<div style="font-size:20px;font-weight:800;font-family:\'Space Grotesk\',sans-serif;color:' + cl.text + ';">' + Number(cat.total_stock).toLocaleString() + '</div>'
+        + '<div style="font-size:12px;font-weight:600;color:var(--text-sec);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + cat.name + '</div>'
+        + '<div style="font-size:10px;color:var(--text-muted);margin-top:1px;">' + cat.product_count + ' products</div>'
+        + '</div></div>';
+    }).join('');
+  }
+}
+
+// ── PRODUCTS PAGE ───────────────────────────────────────────
+async function renderProductsPage(searchQ) {
+  const c = document.getElementById('pageContent');
+  const [prodRes, catRes, venRes] = await Promise.all([
+    apiFetch(API + '/products' + (searchQ ? '?search=' + encodeURIComponent(searchQ) : '')),
+    apiFetch(API + '/categories'),
+    apiFetch(API + '/vendors'),
+  ]);
+  state.products = prodRes.products || [];
+  state.categories = catRes.categories || [];
+  state.vendors = venRes.vendors || [];
+  if (!pg.prod) pgInit('prod', 8);
+
+  c.innerHTML = `
+    <div class="page-header">
+      <h1>Products</h1>
+      <button class="btn btn-primary" onclick="openProductModal()">+ Add Product</button>
+    </div>
+    <div class="card mb16" style="padding:16px;">
+      <div style="display:flex;gap:12px;flex-wrap:wrap;">
+        <input id="prodSearch" placeholder="Search products..." value="${searchQ||''}" oninput="filterProducts()" style="flex:1;min-width:200px;padding:11px 16px;border:1px solid var(--border);border-radius:10px;font-size:13px;background:var(--surface-2);font-family:inherit;outline:none;">
+        <select id="prodCatFilter" onchange="filterProducts()" style="padding:10px 14px;border:1px solid var(--border);border-radius:10px;font-size:13px;background:var(--surface-2);font-family:inherit;">
+          <option value="">All Categories</option>
+          ${state.categories.map(c => `<option value="${c.id}">${c.name}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="card card-flush">
+      <div class="table-wrap" id="prodWrap"><table>
+        <thead><tr><th>SKU</th><th>Product</th><th>Category</th><th>Vendor</th><th>Unit Price</th><th>Stock</th><th>Type</th><th>Actions</th></tr></thead>
+        <tbody id="productsTableBody"></tbody>
+      </table></div>
+      <div id="prodFooter"></div>
+    </div>`;
+  filterProducts();
+}
+
+let _prodFiltered = [];
+function filterProducts() {
+  const q = (document.getElementById('prodSearch')?.value || '').toLowerCase();
+  const cat = document.getElementById('prodCatFilter')?.value;
+  let list = state.products;
+  if (q) list = list.filter(p => (p.name + ' ' + (p.sku||'') + ' ' + (p.description||'')).toLowerCase().includes(q));
+  if (cat) list = list.filter(p => p.category_id === parseInt(cat));
+  _prodFiltered = list;
+  if (pg.prod) pg.prod.page = 1;
+  renderProdRows();
+}
+
+function renderProdRows() {
+  const list = _prodFiltered;
+  const tbody = document.getElementById('productsTableBody');
+  if (!tbody) return;
+  const stockQty = (p) => p.is_serialized ? (p._count?.onu_devices || 0) : (p.stock?.[0]?.quantity || 0);
+  const minAlert = (p) => p.min_stock > 0 && stockQty(p) <= p.min_stock;
+  const paged = pgSlice('prod', list);
+
+  tbody.innerHTML = paged.length === 0 ? '<tr><td colspan="8" style="text-align:center;padding:32px;color:var(--text-muted);">No products found</td></tr>' :
+    paged.map(p => `<tr>
+      <td class="mono text-green">${p.sku || '—'}</td>
+      <td><div class="text-bold">${p.name}</div>${p.description ? `<div style="font-size:11px;color:var(--text-muted);">${p.description}</div>` : ''}</td>
+      <td>${p.category?.name || '—'}</td>
+      <td>${p.vendor?.name || '—'}</td>
+      <td class="fw700">${fmt(p.unit_price)}</td>
+      <td><span style="font-weight:700;color:${minAlert(p) ? '#ef4444' : '#10b981'};">${stockQty(p)}</span> <span class="text-muted">${p.unit}</span>${minAlert(p) ? ' ⚠️' : ''}</td>
+      <td>${p.is_serialized ? '<span class="badge badge-purple">Serialized</span>' : '<span class="badge badge-blue">Bulk</span>'}</td>
+      <td><button class="btn btn-sm btn-secondary" onclick="openProductModal(${p.id})">Edit</button></td>
+    </tr>`).join('');
+  document.getElementById('prodFooter').innerHTML = pgFooter('prod', list.length, 'renderProdRows');
+}
+
+function openProductModal(editId) {
+  const p = editId ? state.products.find(x => x.id === editId) : null;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay active';
+  overlay.innerHTML = `<div class="modal">
+    <div class="modal-header"><h2>${p ? 'Edit' : 'Add'} Product</h2><button class="modal-close" onclick="this.closest('.modal-overlay').remove()">✕</button></div>
+    <div class="modal-body">
+      <div class="form-row">
+        <div class="form-group"><label>Product Name *</label><input id="pName" value="${p?.name||''}" placeholder="e.g. HUAWEI HG8546M"></div>
+        <div class="form-group"><label>SKU</label><input id="pSku" value="${p?.sku||''}" placeholder="e.g. ONU-HW-8546M"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Category</label><select id="pCat">
+          <option value="">— Select —</option>
+          ${state.categories.map(c => `<option value="${c.id}" ${p?.category_id===c.id ? 'selected' : ''}>${c.name}</option>`).join('')}
+        </select></div>
+        <div class="form-group"><label>Vendor</label><select id="pVen">
+          <option value="">— Select —</option>
+          ${state.vendors.map(v => `<option value="${v.id}" ${p?.vendor_id===v.id ? 'selected' : ''}>${v.name}</option>`).join('')}
+        </select></div>
+      </div>
+      <div class="form-group"><label>Description</label><input id="pDesc" value="${p?.description||''}" placeholder="Optional description"></div>
+      <div class="form-row">
+        <div class="form-group"><label>Unit</label><select id="pUnit">
+          ${['pcs','m','roll','box','set','kg','pack'].map(u => `<option ${(p?.unit||'pcs')===u ? 'selected' : ''}>${u}</option>`).join('')}
+        </select></div>
+        <div class="form-group"><label>Unit Price (₱)</label><input id="pPrice" type="number" step="0.01" value="${p?.unit_price||'0'}"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Min Stock Alert</label><input id="pMin" type="number" value="${p?.min_stock||'0'}"></div>
+        <div class="form-group"><label>Tracking Type</label><select id="pSerialized">
+          <option value="false" ${!p?.is_serialized ? 'selected' : ''}>Bulk (quantity)</option>
+          <option value="true" ${p?.is_serialized ? 'selected' : ''}>Serialized (individual)</option>
+        </select></div>
+      </div>
+      ${p ? `<div class="form-group"><label>Active</label><select id="pActive"><option value="true" ${p.is_active !== false ? 'selected' : ''}>Active</option><option value="false" ${p.is_active === false ? 'selected' : ''}>Inactive</option></select></div>` : ''}
+      <div class="form-actions">
+        <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveProduct(${editId||'null'})">${p ? 'Save Changes' : 'Add Product'}</button>
+      </div>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+}
+
+async function saveProduct(editId) {
+  const data = {
+    name: document.getElementById('pName').value,
+    sku: document.getElementById('pSku').value || null,
+    categoryId: document.getElementById('pCat').value || null,
+    vendorId: document.getElementById('pVen').value || null,
+    description: document.getElementById('pDesc').value,
+    unit: document.getElementById('pUnit').value,
+    unitPrice: document.getElementById('pPrice').value,
+    minStock: document.getElementById('pMin').value,
+    isSerialized: document.getElementById('pSerialized').value === 'true',
+  };
+  if (!data.name) return toast('Product name required', 'error');
+  if (editId) {
+    const el = document.getElementById('pActive');
+    if (el) data.isActive = el.value === 'true';
+  }
+  const r = editId ? await apiPut(API + '/products/' + editId, data) : await apiPost(API + '/products', data);
+  if (r.error) return toast(r.error, 'error');
+  toast(r.message);
+  document.querySelector('.modal-overlay')?.remove();
+  renderProductsPage();
+}
+
+// ── CATEGORIES PAGE ─────────────────────────────────────────
+async function renderCategoriesPage() {
+  const c = document.getElementById('pageContent');
+  const r = await apiFetch(API + '/categories');
+  state.categories = r.categories || [];
+  if (!pg.cat) pgInit('cat', 8);
+
+  c.innerHTML = `
+    <div class="page-header">
+      <h1>Product Categories</h1>
+      <button class="btn btn-primary" onclick="openCategoryModal()">+ Add Category</button>
+    </div>
+    <div class="card card-flush">
+      <div class="table-wrap" id="catWrap"><table>
+        <thead><tr><th>Order</th><th>Name</th><th>Description</th><th>Products</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody id="catTableBody"></tbody>
+      </table></div>
+      <div id="catFooter"></div>
+    </div>`;
+  renderCatRows();
+}
+
+function renderCatRows() {
+  const list = state.categories;
+  const paged = pgSlice('cat', list);
+  const tbody = document.getElementById('catTableBody');
+  if (!tbody) return;
+  tbody.innerHTML = paged.length === 0 ? '<tr><td colspan="6" style="text-align:center;padding:32px;color:var(--text-muted);">No categories</td></tr>' :
+    paged.map(cat => `<tr>
+      <td class="fw700">${cat.sort_order}</td>
+      <td class="text-bold">${cat.name}</td>
+      <td class="text-muted">${cat.description || '—'}</td>
+      <td class="fw700">${cat._count?.products || 0}</td>
+      <td>${statusBadge(cat.is_active ? 'active' : 'inactive')}</td>
+      <td><button class="btn btn-sm btn-secondary" onclick="openCategoryModal(${cat.id})">Edit</button></td>
+    </tr>`).join('');
+  document.getElementById('catFooter').innerHTML = pgFooter('cat', list.length, 'renderCatRows');
+}
+
+function openCategoryModal(editId) {
+  const cat = editId ? state.categories.find(c => c.id === editId) : null;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay active';
+  overlay.innerHTML = `<div class="modal"><div class="modal-header"><h2>${cat ? 'Edit' : 'Add'} Category</h2><button class="modal-close" onclick="this.closest('.modal-overlay').remove()">✕</button></div><div class="modal-body">
+    <div class="form-group"><label>Name *</label><input id="catName" value="${cat?.name||''}"></div>
+    <div class="form-group"><label>Description</label><input id="catDesc" value="${cat?.description||''}"></div>
+    <div class="form-group"><label>Sort Order</label><input id="catSort" type="number" value="${cat?.sort_order||0}"></div>
+    ${cat ? `<div class="form-group"><label>Active</label><select id="catActive"><option value="true" ${cat.is_active !== false ? 'selected' : ''}>Active</option><option value="false" ${cat.is_active === false ? 'selected' : ''}>Inactive</option></select></div>` : ''}
+    <div class="form-actions"><button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Cancel</button><button class="btn btn-primary" onclick="saveCategory(${editId||'null'})">${cat ? 'Save' : 'Add Category'}</button></div>
+  </div></div>`;
+  document.body.appendChild(overlay);
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+}
+
+async function saveCategory(editId) {
+  const data = { name: document.getElementById('catName').value, description: document.getElementById('catDesc').value, sortOrder: parseInt(document.getElementById('catSort').value) || 0 };
+  if (!data.name) return toast('Name required', 'error');
+  if (editId) { const el = document.getElementById('catActive'); if (el) data.isActive = el.value === 'true'; }
+  const r = editId ? await apiPut(API + '/categories/' + editId, data) : await apiPost(API + '/categories', data);
+  if (r.error) return toast(r.error, 'error');
+  toast(r.message);
+  document.querySelector('.modal-overlay')?.remove();
+  renderCategoriesPage();
+}
+
+// ── VENDORS PAGE ────────────────────────────────────────────
+function formatPhone(p) {
+  if (!p) return '';
+  const d = p.replace(/\D/g, '');
+  if (d.length === 11 && d.startsWith('09')) return '(' + d.slice(0,4) + ') ' + d.slice(4,7) + ' - ' + d.slice(7);
+  return p;
+}
+function formatIntlPhone(p) {
+  if (!p) return '';
+  const d = p.replace(/\D/g, '');
+  if (d.length === 12 && d.startsWith('63')) return '(' + d.slice(0,4) + ') ' + d.slice(4,8) + ' - ' + d.slice(8);
+  return p;
+}
+function maskLocalPhone(el) {
+  let d = el.value.replace(/\D/g, '');
+  if (d.length > 11) d = d.slice(0, 11);
+  if (d.length >= 8) el.value = '(' + d.slice(0,4) + ') ' + d.slice(4,7) + ' - ' + d.slice(7);
+  else if (d.length >= 5) el.value = '(' + d.slice(0,4) + ') ' + d.slice(4);
+  else if (d.length >= 1) el.value = '(' + d;
+}
+function maskIntlPhone(el) {
+  let d = el.value.replace(/\D/g, '');
+  if (d.length > 12) d = d.slice(0, 12);
+  if (d.length >= 9) el.value = '(' + d.slice(0,4) + ') ' + d.slice(4,8) + ' - ' + d.slice(8);
+  else if (d.length >= 5) el.value = '(' + d.slice(0,4) + ') ' + d.slice(4);
+  else if (d.length >= 1) el.value = '(' + d;
+}
+
+const PAYMENT_TERMS = ['', 'PROFORMA', 'CASH ON DELIVERY', 'NET 7 DAYS', 'NET 15 DAYS', 'NET 30 DAYS', 'NET 45 DAYS', 'NET 60 DAYS', 'NET 90 DAYS', '50/50 SPLIT', 'INSTALLMENT', 'CONSIGNMENT', 'UPON COMPLETION', 'LETTER OF CREDIT'];
+
+async function renderVendorsPage() {
+  const c = document.getElementById('pageContent');
+  const r = await apiFetch(API + '/vendors?include_inactive=true');
+  state.vendors = r.vendors || [];
+  if (!pg.ven) pgInit('ven', 8);
+
+  c.innerHTML = `
+    <div class="page-header">
+      <h1>Vendors</h1>
+      <button class="btn btn-primary" onclick="openVendorModal()">+ Add Vendor</button>
+    </div>
+    <div class="card card-flush">
+      <div class="table-wrap" id="venWrap"><table>
+        <thead><tr><th>Vendor</th><th>Contact</th><th>Phone Numbers</th><th>Location</th><th>Terms</th><th>Products</th><th>POs</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody id="venTableBody"></tbody>
+      </table></div>
+      <div id="venFooter"></div>
+    </div>`;
+  renderVenRows();
+}
+
+function renderVenRows() {
+  const list = state.vendors;
+  const paged = pgSlice('ven', list);
+  const tbody = document.getElementById('venTableBody');
+  if (!tbody) return;
+  tbody.innerHTML = paged.length === 0 ? '<tr><td colspan="9" style="text-align:center;padding:32px;color:var(--text-muted);">No vendors</td></tr>' :
+    paged.map(v => `<tr>
+      <td><div class="text-bold">${v.name}</div>${v.email ? `<div style="font-size:11px;color:var(--text-muted);">${v.email}</div>` : ''}${v.website ? `<div style="font-size:11px;color:#3b82f6;">${v.website}</div>` : ''}</td>
+      <td>${v.contact || '—'}</td>
+      <td>${v.phone ? formatPhone(v.phone) : '—'}${v.phone2 ? `<br><span class="text-muted">${formatPhone(v.phone2)}</span>` : ''}${v.phone3 ? `<br><span class="text-muted">${formatIntlPhone(v.phone3)}</span>` : ''}</td>
+      <td>${[v.city, v.municipality, v.province].filter(Boolean).join(', ') || '—'}${v.postal_code ? `<br><span class="text-muted">${v.postal_code}</span>` : ''}</td>
+      <td>${v.terms || '—'}</td>
+      <td class="fw700">${v._count?.products || 0}</td>
+      <td class="fw700">${v._count?.purchase_orders || 0}</td>
+      <td>${statusBadge(v.is_active ? 'active' : 'inactive')}</td>
+      <td><button class="btn btn-sm btn-secondary" onclick="openVendorModal(${v.id})">Edit</button></td>
+    </tr>`).join('');
+  document.getElementById('venFooter').innerHTML = pgFooter('ven', list.length, 'renderVenRows');
+}
+
+// ── Address cache & cascading helpers ──
+const addrCache = { provinces: null, cities: {}, barangays: {} };
+
+async function loadProvinces() {
+  if (addrCache.provinces) return addrCache.provinces;
+  const r = await apiFetch(API + '/address/provinces');
+  addrCache.provinces = r.provinces || [];
+  return addrCache.provinces;
+}
+async function loadCities(provinceCode) {
+  if (addrCache.cities[provinceCode]) return addrCache.cities[provinceCode];
+  const r = await apiFetch(API + '/address/cities-municipalities?province_code=' + provinceCode);
+  addrCache.cities[provinceCode] = r.cities || [];
+  return addrCache.cities[provinceCode];
+}
+async function loadBarangays(cityMunCode) {
+  if (addrCache.barangays[cityMunCode]) return addrCache.barangays[cityMunCode];
+  const r = await apiFetch(API + '/address/barangays?city_mun_code=' + cityMunCode);
+  addrCache.barangays[cityMunCode] = r.barangays || [];
+  return addrCache.barangays[cityMunCode];
+}
+
+async function onProvinceChange(provinceCode) {
+  const mSel = document.getElementById('vMunicipality');
+  const bSel = document.getElementById('vCity');
+  const pCode = document.getElementById('vPostal');
+  mSel.innerHTML = '<option value="">— Loading... —</option>';
+  bSel.innerHTML = '<option value="">— Select Municipality first —</option>';
+  pCode.value = '';
+  if (!provinceCode) { mSel.innerHTML = '<option value="">— Select Province first —</option>'; return; }
+  const cities = await loadCities(provinceCode);
+  mSel.innerHTML = '<option value="">— Select Municipality / City —</option>' + cities.map(c => '<option value="' + c.code + '" data-name="' + c.name + '" data-zip="' + (c.zip_code||'') + '">' + c.name + (c.is_city ? ' (City)' : '') + '</option>').join('');
+}
+
+async function onMunicipalityChange(cityMunCode) {
+  const bSel = document.getElementById('vCity');
+  const pCode = document.getElementById('vPostal');
+  bSel.innerHTML = '<option value="">— Loading... —</option>';
+  const mSel = document.getElementById('vMunicipality');
+  const selOpt = mSel.options[mSel.selectedIndex];
+  pCode.value = (selOpt && selOpt.dataset.zip) ? selOpt.dataset.zip : '';
+  if (!cityMunCode) { bSel.innerHTML = '<option value="">— Select Municipality first —</option>'; return; }
+  const brgys = await loadBarangays(cityMunCode);
+  bSel.innerHTML = '<option value="">— Select Barangay —</option>' + brgys.map(b => '<option value="' + b.code + '" data-name="' + b.name + '">' + b.name + '</option>').join('');
+}
+
+async function openVendorModal(editId) {
+  const v = editId ? state.vendors.find(x => x.id === editId) : null;
+  const provinces = await loadProvinces();
+  const provOptions = provinces.map(p => {
+    const sel = (v && v.province && v.province.toUpperCase() === p.name.toUpperCase()) ? ' selected' : '';
+    return '<option value="' + p.code + '" data-name="' + p.name + '"' + sel + '>' + p.name + '</option>';
+  }).join('');
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay active';
+  overlay.innerHTML = `<div class="modal" style="max-width:650px;">
+    <div class="modal-header"><h2>${v ? 'Edit' : 'Add'} Vendor</h2><button class="modal-close" onclick="this.closest('.modal-overlay').remove()">✕</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label>Vendor / Company Name *</label><input id="vName" value="${v?.name||''}"></div>
+      <div class="form-group"><label>Contact Person</label><input id="vContact" value="${v?.contact||''}"></div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 14px;">
+        <div class="form-group"><label>Phone 1 (Mobile)</label><input id="vPhone" value="${v?.phone ? formatPhone(v.phone) : ''}" placeholder="(09XX) XXX - XXXX" maxlength="17" oninput="maskLocalPhone(this)"></div>
+        <div class="form-group"><label>Phone 2 (Mobile/Landline)</label><input id="vPhone2" value="${v?.phone2 ? formatPhone(v.phone2) : ''}" placeholder="(09XX) XXX - XXXX" maxlength="17" oninput="maskLocalPhone(this)"></div>
+        <div class="form-group"><label>Phone 3 (International)</label><input id="vPhone3" value="${v?.phone3 ? formatIntlPhone(v.phone3) : ''}" placeholder="(63XX) XXXX - XXXX" maxlength="19" oninput="maskIntlPhone(this)"></div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group"><label>Email</label><input id="vEmail" value="${v?.email||''}" type="email"></div>
+        <div class="form-group"><label>Website</label><input id="vWebsite" value="${v?.website||''}" placeholder="https://example.com"></div>
+      </div>
+
+      <div class="form-group"><label>Street Address</label><input id="vAddress" value="${v?.address||''}"></div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 14px;">
+        <div class="form-group"><label>Province</label><select id="vProvince" onchange="onProvinceChange(this.value)">
+          <option value="">— Select Province —</option>${provOptions}
+        </select></div>
+        <div class="form-group"><label>Municipality / City</label><select id="vMunicipality" onchange="onMunicipalityChange(this.value)">
+          <option value="">— Select Province first —</option>
+        </select></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 14px;">
+        <div class="form-group"><label>Barangay</label><select id="vCity">
+          <option value="">— Select Municipality first —</option>
+        </select></div>
+        <div class="form-group"><label>Postal Code</label><input id="vPostal" value="${v?.postal_code||''}" maxlength="10" readonly style="background:#f0f0f0;cursor:not-allowed;"></div>
+      </div>
+
+      <div class="form-group"><label>Payment Terms</label><select id="vTerms">
+        ${PAYMENT_TERMS.map(t => `<option value="${t}" ${(v?.terms||'') === t ? 'selected' : ''}>${t || '— Select Terms —'}</option>`).join('')}
+      </select></div>
+
+      <div class="form-group"><label>Notes</label><textarea id="vNotes">${v?.notes||''}</textarea></div>
+      ${v ? `<div class="form-group"><label>Active</label><select id="vActive"><option value="true" ${v.is_active !== false ? 'selected' : ''}>Active</option><option value="false" ${v.is_active === false ? 'selected' : ''}>Inactive</option></select></div>` : ''}
+      <div class="form-actions"><button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Cancel</button><button class="btn btn-primary" onclick="saveVendor(${editId||'null'})">${v ? 'Save Changes' : 'Add Vendor'}</button></div>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+
+  // If editing, cascade-load existing address selections
+  if (v && v.province) {
+    const provSel = document.getElementById('vProvince');
+    if (provSel.value) {
+      await onProvinceChange(provSel.value);
+      const mSel = document.getElementById('vMunicipality');
+      if (v.municipality) {
+        for (let i = 0; i < mSel.options.length; i++) {
+          if (mSel.options[i].dataset.name && mSel.options[i].dataset.name.toUpperCase() === v.municipality.toUpperCase()) {
+            mSel.selectedIndex = i;
+            await onMunicipalityChange(mSel.value);
+            if (mSel.options[i].dataset.zip && !document.getElementById('vPostal').value) {
+              document.getElementById('vPostal').value = mSel.options[i].dataset.zip;
+            }
+            break;
+          }
+        }
+        const bSel = document.getElementById('vCity');
+        if (v.city) {
+          for (let i = 0; i < bSel.options.length; i++) {
+            if (bSel.options[i].dataset.name && bSel.options[i].dataset.name.toUpperCase() === v.city.toUpperCase()) {
+              bSel.selectedIndex = i;
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+async function saveVendor(editId) {
+  const stripPhone = v => v ? v.replace(/[\(\)\s\-]/g, '') : '';
+  const getSelText = id => { const el = document.getElementById(id); const opt = el.options[el.selectedIndex]; return (opt && opt.dataset && opt.dataset.name) ? opt.dataset.name : ''; };
+  const data = {
+    name: document.getElementById('vName').value,
+    contact: document.getElementById('vContact').value,
+    phone: stripPhone(document.getElementById('vPhone').value),
+    phone2: stripPhone(document.getElementById('vPhone2').value),
+    phone3: stripPhone(document.getElementById('vPhone3').value),
+    email: document.getElementById('vEmail').value,
+    website: document.getElementById('vWebsite').value,
+    address: document.getElementById('vAddress').value,
+    province: getSelText('vProvince'),
+    municipality: getSelText('vMunicipality'),
+    city: getSelText('vCity'),
+    postalCode: document.getElementById('vPostal').value,
+    terms: document.getElementById('vTerms').value,
+    notes: document.getElementById('vNotes').value,
+  };
+  if (!data.name) return toast('Vendor name required', 'error');
+  if (editId) { const el = document.getElementById('vActive'); if (el) data.isActive = el.value === 'true'; }
+  const r = editId ? await apiPut(API + '/vendors/' + editId, data) : await apiPost(API + '/vendors', data);
+  if (r.error) return toast(r.error, 'error');
+  toast(r.message);
+  document.querySelector('.modal-overlay')?.remove();
+  renderVendorsPage();
+}
+
+// ── PURCHASE ORDERS PAGE ────────────────────────────────────
+async function renderPOPage() {
+  const c = document.getElementById('pageContent');
+  const [poRes, venRes, prodRes] = await Promise.all([
+    apiFetch(API + '/purchase-orders'),
+    apiFetch(API + '/vendors'),
+    apiFetch(API + '/products'),
+  ]);
+  state.purchaseOrders = poRes.purchaseOrders || [];
+  state.vendors = venRes.vendors || [];
+  state.products = prodRes.products || [];
+  if (!pg.po) pgInit('po', 8);
+  window._poFilter = '';
+
+  c.innerHTML = `
+    <div class="page-header">
+      <h1>Purchase Orders</h1>
+      <button class="btn btn-primary" onclick="openPOModal()">+ Create PO</button>
+    </div>
+    <div class="filters" id="poFilters">
+      <button class="filter-btn active" data-f="">All</button>
+      <button class="filter-btn" data-f="draft">Draft</button>
+      <button class="filter-btn" data-f="ordered">Ordered</button>
+      <button class="filter-btn" data-f="partial">Partial</button>
+      <button class="filter-btn" data-f="received">Received</button>
+      <button class="filter-btn" data-f="cancelled">Cancelled</button>
+    </div>
+    <div class="card card-flush">
+      <div class="table-wrap" id="poWrap"><table>
+        <thead><tr><th>PO #</th><th>Vendor</th><th>Order Date</th><th>Expected</th><th>Total</th><th>Items</th><th>Status</th><th>Created By</th></tr></thead>
+        <tbody id="poTableBody"></tbody>
+      </table></div>
+      <div id="poFooter"></div>
+    </div>`;
+
+  document.querySelectorAll('#poFilters .filter-btn').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('#poFilters .filter-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      window._poFilter = btn.dataset.f;
+      if (pg.po) pg.po.page = 1;
+      renderPORows();
+    };
+  });
+  renderPORows();
+}
+
+function renderPORows() {
+  let list = state.purchaseOrders;
+  if (window._poFilter) list = list.filter(p => p.status === window._poFilter);
+  const paged = pgSlice('po', list);
+  document.getElementById('poTableBody').innerHTML = paged.length === 0 ?
+    '<tr><td colspan="8" style="text-align:center;padding:32px;color:var(--text-muted);">No purchase orders</td></tr>' :
+    paged.map(po => `<tr style="cursor:pointer;" onclick="openPODetail(${po.id})">
+      <td class="mono text-green">${po.po_number}</td>
+      <td class="text-bold">${po.vendor?.name || '\u2014'}</td>
+      <td>${fmtDate(po.order_date)}</td>
+      <td>${fmtDate(po.expected_date)}</td>
+      <td class="fw700">${fmt(po.total_amount)}</td>
+      <td class="fw700">${po._count?.items || 0}</td>
+      <td>${statusBadge(po.status)}</td>
+      <td>${po.creator?.full_name || '\u2014'}</td>
+    </tr>`).join('');
+  document.getElementById('poFooter').innerHTML = pgFooter('po', list.length, 'renderPORows');
+}
+
+// ═══════════════════════════════════════════════════
+// PO DETAIL MODAL (with fees breakdown + actions)
+// ═══════════════════════════════════════════════════
+async function openPODetail(poId) {
+  const r = await apiFetch(API + '/purchase-orders/' + poId);
+  if (r.error) return toast(r.error, 'error');
+  const po = r.purchaseOrder;
+  const sub = Number(po.subtotal || 0);
+  const ship = Number(po.shipping_fee || 0);
+  const handle = Number(po.handling_fee || 0);
+  const disc = Number(po.discount || 0);
+  const total = Number(po.total_amount || 0);
+  const hasFees = ship > 0 || handle > 0 || disc > 0;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay active';
+  overlay.innerHTML = `<div class="modal" style="max-width:750px;">
+    <div class="modal-header">
+      <div><h2>${po.po_number}</h2><div style="font-size:12px;color:var(--text-muted);margin-top:4px;">${po.vendor?.name || ''}</div></div>
+      <div style="display:flex;align-items:center;gap:12px;">${statusBadge(po.status)}<button class="modal-close" onclick="this.closest('.modal-overlay').remove()">\u2715</button></div>
+    </div>
+    <div class="modal-body">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:14px;margin-bottom:20px;">
+        <div><div class="stat-label">ORDER DATE</div><div class="text-bold">${fmtDate(po.order_date)}</div></div>
+        <div><div class="stat-label">EXPECTED</div><div class="text-bold">${fmtDate(po.expected_date)}</div></div>
+        <div><div class="stat-label">RECEIVED</div><div class="text-bold">${fmtDate(po.received_date)}</div></div>
+        <div><div class="stat-label">CREATED BY</div><div class="text-bold">${po.creator?.full_name || '\u2014'}</div></div>
+      </div>
+
+      <h3 style="font-size:14px;margin-bottom:10px;">Line Items</h3>
+      <div class="table-wrap" style="margin-bottom:16px;"><table style="min-width:550px;">
+        <thead><tr><th>Product</th><th style="text-align:center;">Serialized</th><th>Qty</th><th>Received</th><th>Unit Price</th><th>Total</th></tr></thead>
+        <tbody>${po.items.map(i => {
+          const isSer = i.product?.is_serialized;
+          const fullyRcvd = i.received_qty >= i.quantity;
+          const partRcvd = i.received_qty > 0;
+          return `<tr>
+          <td><div class="text-bold">${i.product?.name || '\u2014'}</div><div class="mono text-muted">${i.product?.sku || ''}</div></td>
+          <td style="text-align:center;">${isSer ? '<span style="background:#dbeafe;color:#2563eb;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:600;">SERIAL</span>' : '<span style="color:var(--text-muted);font-size:11px;">No</span>'}</td>
+          <td class="fw700">${i.quantity}</td>
+          <td style="font-weight:700;color:${fullyRcvd ? '#10b981' : partRcvd ? '#f59e0b' : '#94a3b8'};">${i.received_qty}/${i.quantity}${isSer && partRcvd ? ' <a href="#" onclick="event.preventDefault();event.stopPropagation();viewReceivedSerials('+i.id+')" style="font-size:11px;color:#2563eb;margin-left:4px;">\ud83d\udccb View</a>' : ''}</td>
+          <td>${fmt(i.unit_price)}</td>
+          <td class="fw700">${fmt(i.quantity * Number(i.unit_price))}</td>
+        </tr>`;}).join('')}</tbody>
+      </table></div>
+
+      <div style="border-top:1px solid var(--border);padding-top:12px;">
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;">
+          <div style="display:flex;gap:24px;font-size:13px;"><span style="color:var(--text-muted);min-width:120px;text-align:right;">Subtotal:</span><span class="fw700" style="min-width:100px;text-align:right;">${fmt(sub)}</span></div>
+          ${ship > 0 ? `<div style="display:flex;gap:24px;font-size:13px;"><span style="color:var(--text-muted);min-width:120px;text-align:right;">Shipping:</span><span style="min-width:100px;text-align:right;">${fmt(ship)}</span></div>` : ''}
+          ${handle > 0 ? `<div style="display:flex;gap:24px;font-size:13px;"><span style="color:var(--text-muted);min-width:120px;text-align:right;">Handling:</span><span style="min-width:100px;text-align:right;">${fmt(handle)}</span></div>` : ''}
+          ${disc > 0 ? `<div style="display:flex;gap:24px;font-size:13px;"><span style="color:#ef4444;min-width:120px;text-align:right;">Discount:</span><span style="color:#ef4444;min-width:100px;text-align:right;">-${fmt(disc)}</span></div>` : ''}
+          <div style="display:flex;gap:24px;font-size:16px;border-top:${hasFees ? '2px solid #e2e8f0;padding-top:8px;margin-top:4px' : 'none'};"><span style="color:var(--text-muted);min-width:120px;text-align:right;font-size:14px;">Total:</span><span style="font-size:20px;font-weight:800;font-family:'Space Grotesk',sans-serif;min-width:100px;text-align:right;">${fmt(total)}</span></div>
+        </div>
+      </div>
+
+      ${po.notes ? `<div style="padding:12px;background:var(--surface-2);border-radius:10px;margin-top:16px;font-size:13px;color:var(--text-sec);">\ud83d\udcdd ${po.notes}</div>` : ''}
+
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:20px;">
+        ${['draft','ordered'].includes(po.status) ? `<button class="btn btn-secondary" onclick="openEditPOModal(${po.id})">\u270f\ufe0f Edit PO</button>` : ''}
+        ${po.status === 'draft' ? `<button class="btn btn-primary" onclick="updatePOStatus(${po.id},'ordered')">Mark as Ordered</button>` : ''}
+        ${['ordered','partial'].includes(po.status) ? `<button class="btn btn-primary" onclick="openSmartReceive(${po.id})">Receive Items</button>` : ''}
+        <button class="btn btn-secondary" onclick="duplicatePO(${po.id})">\ud83d\udccb Duplicate PO</button>
+        ${po.status === 'draft' ? `<button class="btn btn-danger" onclick="showConfirm('Cancel this PO?','This cannot be undone.',()=>updatePOStatus(${po.id},'cancelled'))">Cancel PO</button>` : ''}
+      </div>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+}
+
+// ═══════════════════════════════════════════════════
+// VIEW RECEIVED SERIALS
+// ═══════════════════════════════════════════════════
+async function viewReceivedSerials(poItemId) {
+  const r = await apiFetch(API + '/purchase-orders/0/items/' + poItemId + '/serials');
+  if (r.error) return toast(r.error, 'error');
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay active';
+  overlay.style.zIndex = '1100';
+  overlay.innerHTML = `<div class="modal" style="max-width:600px;">
+    <div class="modal-header"><h2>Received Serials \u2014 ${r.item.productName}</h2><button class="modal-close" onclick="this.closest('.modal-overlay').remove()">\u2715</button></div>
+    <div class="modal-body">
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">${r.item.receivedQty} of ${r.item.quantity} received</p>
+      ${r.serials.length === 0 ? '<div style="text-align:center;padding:24px;color:var(--text-muted);">No serials recorded yet</div>' :
+      `<div class="table-wrap"><table style="min-width:400px;">
+        <thead><tr><th>#</th><th>Serial Number</th><th>MAC Address</th><th>Status</th></tr></thead>
+        <tbody>${r.serials.map((s, idx) => {
+          const onu = r.onus.find(o => o.id === s.onuId);
+          return `<tr>
+            <td>${idx + 1}</td>
+            <td class="mono" style="font-size:12px;">${s.serial || '\u2014'}</td>
+            <td class="mono" style="font-size:12px;">${s.mac || '\u2014'}</td>
+            <td>${onu ? statusBadge(onu.status) : '\u2014'}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table></div>`}
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+}
+
+// ═══════════════════════════════════════════════════
+// STATUS UPDATE + DUPLICATE
+// ═══════════════════════════════════════════════════
+async function updatePOStatus(poId, status) {
+  const r = await apiPut(API + '/purchase-orders/' + poId + '/status', { status });
+  if (r.error) return toast(r.error, 'error');
+  toast(r.message);
+  document.querySelector('.modal-overlay')?.remove();
+  renderPOPage();
+}
+
+async function duplicatePO(poId) {
+  const r = await apiPost(API + '/purchase-orders/' + poId + '/duplicate', {});
+  if (r.error) return toast(r.error, 'error');
+  toast(r.message);
+  document.querySelector('.modal-overlay')?.remove();
+  renderPOPage();
+}
+
+// ═══════════════════════════════════════════════════
+// SMART RECEIVE — Routes to bulk or serial
+// ═══════════════════════════════════════════════════
+async function openSmartReceive(poId) {
+  const r = await apiFetch(API + '/purchase-orders/' + poId);
+  if (r.error) return toast(r.error, 'error');
+  const po = r.purchaseOrder;
+  const unreceived = po.items.filter(i => i.received_qty < i.quantity);
+  if (unreceived.length === 0) return toast('All items already received', 'info');
+
+  const bulkItems = unreceived.filter(i => !i.product?.is_serialized);
+  const serialItems = unreceived.filter(i => i.product?.is_serialized);
+
+  document.querySelector('.modal-overlay')?.remove();
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay active';
+  overlay.innerHTML = `<div class="modal" style="max-width:650px;">
+    <div class="modal-header"><h2>Receive Items \u2014 ${po.po_number}</h2><button class="modal-close" onclick="this.closest('.modal-overlay').remove()">\u2715</button></div>
+    <div class="modal-body">
+
+      ${serialItems.length > 0 ? `
+      <div style="margin-bottom:20px;">
+        <h3 style="font-size:14px;margin-bottom:12px;display:flex;align-items:center;gap:8px;">
+          <span style="background:#dbeafe;color:#2563eb;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:600;">SERIAL</span>
+          Serialized Items \u2014 Receive One at a Time
+        </h3>
+        ${serialItems.map(i => `
+          <div style="padding:14px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;margin-bottom:10px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+              <div>
+                <div class="text-bold">${i.product?.name || '\u2014'}</div>
+                <div class="mono text-muted" style="font-size:11px;">${i.product?.sku || ''}</div>
+              </div>
+              <div style="display:flex;align-items:center;gap:12px;">
+                <span style="font-size:13px;color:#64748b;">Received: <strong style="color:${i.received_qty > 0 ? '#f59e0b' : '#94a3b8'};">${i.received_qty}</strong> / ${i.quantity}</span>
+                <button class="btn btn-primary btn-sm" onclick="openSerialReceiveModal(${po.id}, ${i.id}, '${(i.product?.name||'').replace(/'/g,"\\'")}', ${i.quantity}, ${i.received_qty})">Receive Unit</button>
+              </div>
+            </div>
+          </div>
+        `).join('')}
+      </div>` : ''}
+
+      ${bulkItems.length > 0 ? `
+      <div>
+        <h3 style="font-size:14px;margin-bottom:12px;">Bulk Items \u2014 Enter Quantity</h3>
+        ${bulkItems.map(i => `
+          <div style="padding:12px;background:var(--surface-2);border-radius:10px;margin-bottom:10px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+              <div>
+                <div class="text-bold">${i.product?.name || '\u2014'}</div>
+                <div class="mono text-muted" style="font-size:11px;">${i.product?.sku || ''}</div>
+              </div>
+              <span class="text-muted" style="font-size:12px;">Ordered: ${i.quantity} | Received: ${i.received_qty}</span>
+            </div>
+            <div class="form-group" style="margin:0;">
+              <label>Receive Qty (max ${i.quantity - i.received_qty})</label>
+              <input type="number" class="rcv-qty" data-item-id="${i.id}" min="0" max="${i.quantity - i.received_qty}" value="${i.quantity - i.received_qty}">
+            </div>
+          </div>
+        `).join('')}
+        <div style="margin-top:14px;text-align:right;">
+          <button class="btn btn-primary" onclick="submitBulkReceive(${po.id})">Confirm Bulk Receipt</button>
+        </div>
+      </div>` : ''}
+
+      ${bulkItems.length === 0 && serialItems.length > 0 ? `<p style="text-align:center;color:var(--text-muted);font-size:13px;margin-top:8px;">Click "Receive Unit" to scan each serialized item one at a time.</p>` : ''}
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+}
+
+// ── BULK RECEIVE (non-serialized) ───────────────────────────
+async function submitBulkReceive(poId) {
+  const inputs = document.querySelectorAll('.rcv-qty');
+  const items = [];
+  inputs.forEach(inp => {
+    const qty = parseInt(inp.value);
+    if (qty > 0) items.push({ poItemId: parseInt(inp.dataset.itemId), receivedQty: qty });
+  });
+  if (items.length === 0) return toast('Enter quantities to receive', 'error');
+  const r = await apiPost(API + '/purchase-orders/' + poId + '/receive', { items });
+  if (r.error) return toast(r.error, 'error');
+  toast(r.message);
+  document.querySelector('.modal-overlay')?.remove();
+  renderPOPage();
+}
+
+// ═══════════════════════════════════════════════════
+// SERIAL RECEIVE MODAL — One unit at a time
+// ═══════════════════════════════════════════════════
+function openSerialReceiveModal(poId, poItemId, productName, totalQty, receivedQty) {
+  const remaining = totalQty - receivedQty;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay active';
+  overlay.style.zIndex = '1100';
+  overlay.id = 'serialReceiveOverlay';
+  overlay.innerHTML = `<div class="modal" style="max-width:500px;">
+    <div class="modal-header">
+      <div><h2>Receive Serial Unit</h2><div style="font-size:12px;color:var(--text-muted);margin-top:4px;">${productName} \u2014 <span id="srRemaining">${remaining}</span> remaining</div></div>
+      <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">\u2715</button>
+    </div>
+    <div class="modal-body">
+      <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:14px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;">
+        <span style="font-size:13px;color:#2563eb;font-weight:600;">Unit <span id="srUnitNum">${receivedQty + 1}</span> of ${totalQty}</span>
+        <span style="font-size:12px;color:#64748b;">Received: <strong id="srReceivedCount">${receivedQty}</strong>/${totalQty}</span>
+      </div>
+
+      <div id="srRecentList" style="margin-bottom:16px;display:none;">
+        <h4 style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">RECENTLY RECEIVED</h4>
+        <div id="srRecentItems" style="max-height:120px;overflow-y:auto;"></div>
+      </div>
+
+      <div class="form-group">
+        <label>Serial Number *</label>
+        <input id="srSerial" placeholder="Enter or scan serial number" style="text-transform:uppercase;" autofocus>
+      </div>
+      <div class="form-group">
+        <label>MAC Address *</label>
+        <input id="srMac" placeholder="AA:BB:CC:DD:EE:FF" style="text-transform:uppercase;" maxlength="17" oninput="maskMacAddress(this)">
+      </div>
+
+      <div id="srError" style="display:none;padding:10px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;color:#dc2626;font-size:13px;margin-bottom:12px;"></div>
+      <div id="srSuccess" style="display:none;padding:10px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;color:#16a34a;font-size:13px;margin-bottom:12px;"></div>
+
+      <div class="form-actions">
+        <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Done</button>
+        <button class="btn btn-primary" id="srSubmitBtn" onclick="submitSerialReceive(${poId}, ${poItemId}, ${totalQty})">
+          Receive & Next
+        </button>
+      </div>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+  setTimeout(() => document.getElementById('srSerial')?.focus(), 200);
+}
+
+function maskMacAddress(el) {
+  let v = el.value.replace(/[^a-fA-F0-9]/g, '').toUpperCase();
+  let formatted = '';
+  for (let i = 0; i < v.length && i < 12; i++) {
+    if (i > 0 && i % 2 === 0) formatted += ':';
+    formatted += v[i];
+  }
+  el.value = formatted;
+}
+
+async function submitSerialReceive(poId, poItemId, totalQty) {
+  const serial = document.getElementById('srSerial').value.trim().toUpperCase();
+  const mac = document.getElementById('srMac').value.trim().toUpperCase();
+  const errDiv = document.getElementById('srError');
+  const sucDiv = document.getElementById('srSuccess');
+  const btn = document.getElementById('srSubmitBtn');
+
+  errDiv.style.display = 'none';
+  sucDiv.style.display = 'none';
+
+  if (!serial && !mac) {
+    errDiv.textContent = 'Enter at least a serial number or MAC address';
+    errDiv.style.display = 'block';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+
+  const r = await apiPost(API + '/purchase-orders/' + poId + '/receive-serial', {
+    poItemId, serialNumber: serial, macAddress: mac
+  });
+
+  btn.disabled = false;
+  btn.textContent = 'Receive & Next';
+
+  if (r.error) {
+    errDiv.textContent = r.error;
+    errDiv.style.display = 'block';
+    return;
+  }
+
+  // Show success
+  sucDiv.textContent = '\u2713 ' + (serial || mac) + ' received successfully';
+  sucDiv.style.display = 'block';
+
+  // Update counters
+  const newReceived = r.totalReceivedForItem;
+  const remaining = r.remaining;
+  document.getElementById('srRemaining').textContent = remaining;
+  document.getElementById('srUnitNum').textContent = newReceived + 1;
+  document.getElementById('srReceivedCount').textContent = newReceived;
+
+  // Add to recent list
+  const recentList = document.getElementById('srRecentList');
+  const recentItems = document.getElementById('srRecentItems');
+  recentList.style.display = 'block';
+  const entry = document.createElement('div');
+  entry.style.cssText = 'padding:6px 10px;background:#f0fdf4;border-radius:6px;margin-bottom:4px;font-size:12px;display:flex;justify-content:space-between;';
+  entry.innerHTML = `<span class="mono">${serial || '\u2014'}</span><span class="mono">${mac || '\u2014'}</span><span style="color:#10b981;">\u2713</span>`;
+  recentItems.insertBefore(entry, recentItems.firstChild);
+
+  // Clear inputs for next scan
+  document.getElementById('srSerial').value = '';
+  document.getElementById('srMac').value = '';
+  document.getElementById('srSerial').focus();
+
+  // If all received, update button
+  if (remaining <= 0) {
+    btn.textContent = 'All Units Received!';
+    btn.disabled = true;
+    btn.style.background = '#10b981';
+    sucDiv.textContent = '\u2713 All ' + totalQty + ' units received! This item is complete.';
+  }
+
+  // Hide success after 3s
+  setTimeout(() => { sucDiv.style.display = 'none'; }, 3000);
+}
+
+// ═══════════════════════════════════════════════════
+// CREATE PO MODAL (with fees)
+// ═══════════════════════════════════════════════════
+let poLineCount = 0;
+function openPOModal() {
+  poLineCount = 0;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay active';
+  overlay.innerHTML = `<div class="modal" style="max-width:750px;">
+    <div class="modal-header"><h2>Create Purchase Order</h2><button class="modal-close" onclick="this.closest('.modal-overlay').remove()">\u2715</button></div>
+    <div class="modal-body">
+      <div class="form-row">
+        <div class="form-group"><label>Vendor *</label><select id="poVendor">
+          <option value="">\u2014 Select Vendor \u2014</option>
+          ${state.vendors.filter(v => v.is_active !== false).map(v => '<option value="'+v.id+'">'+v.name+'</option>').join('')}
+        </select></div>
+        <div class="form-group"><label>Order Date</label><input id="poDate" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
+        <div class="form-group"><label>Expected Delivery</label><input id="poExpected" type="date"></div>
+      </div>
+
+      <h3 style="font-size:14px;margin:16px 0 10px;">Line Items</h3>
+      <div id="poLines"></div>
+      <button class="btn btn-sm btn-secondary mt8" onclick="addPOLine()">+ Add Item</button>
+
+      <h3 style="font-size:14px;margin:20px 0 10px;">Fees & Adjustments</h3>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+        <div class="form-group"><label>Shipping Fee</label><input id="poShipping" type="number" step="0.01" value="0" min="0" oninput="calcPOTotal()"></div>
+        <div class="form-group"><label>Handling Fee</label><input id="poHandling" type="number" step="0.01" value="0" min="0" oninput="calcPOTotal()"></div>
+        <div class="form-group"><label>Discount</label><input id="poDiscount" type="number" step="0.01" value="0" min="0" oninput="calcPOTotal()"></div>
+      </div>
+      <div id="poTotalDisplay" style="text-align:right;padding:12px 0;border-top:1px solid var(--border);margin-top:8px;">
+        <span style="color:var(--text-muted);font-size:13px;">Estimated Total:</span> <span id="poCalcTotal" style="font-size:20px;font-weight:800;font-family:'Space Grotesk',sans-serif;">&#8369;0</span>
+      </div>
+
+      <div class="form-group mt8"><label>Notes</label><textarea id="poNotes" rows="2"></textarea></div>
+      <div class="form-actions"><button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Cancel</button><button class="btn btn-primary" onclick="savePO()">Create PO</button></div>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+  addPOLine();
+}
+
+function addPOLine() {
+  poLineCount++;
+  const div = document.createElement('div');
+  div.className = 'po-line';
+  div.style.cssText = 'display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:8px;margin-bottom:8px;align-items:end;';
+  div.innerHTML = `
+    <div class="form-group" style="margin:0;"><label>Product</label><select class="po-product"><option value="">Select</option>${state.products.filter(p => p.is_active !== false).map(p => '<option value="'+p.id+'" data-price="'+p.unit_price+'">'+p.name+(p.sku ? ' ('+p.sku+')' : '')+(p.is_serialized ? ' [SERIAL]' : '')+'</option>').join('')}</select></div>
+    <div class="form-group" style="margin:0;"><label>Qty</label><input type="number" class="po-qty" value="1" min="1" oninput="calcPOTotal()"></div>
+    <div class="form-group" style="margin:0;"><label>Unit Price</label><input type="number" class="po-price" step="0.01" value="0" oninput="calcPOTotal()"></div>
+    <button class="btn btn-sm btn-danger" onclick="this.parentElement.remove();calcPOTotal();" style="margin-bottom:0;">\u2715</button>`;
+  div.querySelector('.po-product').onchange = function() {
+    const opt = this.selectedOptions[0];
+    if (opt?.dataset.price) { div.querySelector('.po-price').value = opt.dataset.price; calcPOTotal(); }
+  };
+  document.getElementById('poLines').appendChild(div);
+}
+
+function calcPOTotal() {
+  let subtotal = 0;
+  document.querySelectorAll('.po-line').forEach(l => {
+    const qty = parseFloat(l.querySelector('.po-qty')?.value) || 0;
+    const price = parseFloat(l.querySelector('.po-price')?.value) || 0;
+    subtotal += qty * price;
+  });
+  const ship = parseFloat(document.getElementById('poShipping')?.value) || 0;
+  const handle = parseFloat(document.getElementById('poHandling')?.value) || 0;
+  const disc = parseFloat(document.getElementById('poDiscount')?.value) || 0;
+  const total = subtotal + ship + handle - disc;
+  const el = document.getElementById('poCalcTotal');
+  if (el) el.textContent = '\u20B1' + total.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+}
+
+async function savePO() {
+  const vendorId = document.getElementById('poVendor').value;
+  if (!vendorId) return toast('Select a vendor', 'error');
+  const lines = document.querySelectorAll('.po-line');
+  const items = [];
+  lines.forEach(l => {
+    const pid = l.querySelector('.po-product').value;
+    const qty = l.querySelector('.po-qty').value;
+    const price = l.querySelector('.po-price').value;
+    if (pid) items.push({ productId: pid, quantity: qty, unitPrice: price });
+  });
+  if (items.length === 0) return toast('Add at least one item', 'error');
+  const r = await apiPost(API + '/purchase-orders', {
+    vendorId, items,
+    orderDate: document.getElementById('poDate').value,
+    expectedDate: document.getElementById('poExpected').value || null,
+    shippingFee: document.getElementById('poShipping').value,
+    handlingFee: document.getElementById('poHandling').value,
+    discount: document.getElementById('poDiscount').value,
+    notes: document.getElementById('poNotes').value,
+  });
+  if (r.error) return toast(r.error, 'error');
+  toast(r.message);
+  document.querySelector('.modal-overlay')?.remove();
+  renderPOPage();
+}
+
+// ═══════════════════════════════════════════════════
+// EDIT PO MODAL (draft/ordered only)
+// ═══════════════════════════════════════════════════
+async function openEditPOModal(poId) {
+  const r = await apiFetch(API + '/purchase-orders/' + poId);
+  if (r.error) return toast(r.error, 'error');
+  const po = r.purchaseOrder;
+
+  document.querySelector('.modal-overlay')?.remove();
+  poLineCount = 0;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay active';
+  overlay.innerHTML = `<div class="modal" style="max-width:750px;">
+    <div class="modal-header"><h2>Edit PO \u2014 ${po.po_number}</h2><button class="modal-close" onclick="this.closest('.modal-overlay').remove()">\u2715</button></div>
+    <div class="modal-body">
+      <div class="form-row">
+        <div class="form-group"><label>Vendor *</label><select id="poVendor">
+          <option value="">\u2014 Select Vendor \u2014</option>
+          ${state.vendors.filter(v => v.is_active !== false).map(v => '<option value="'+v.id+'"'+(v.id===po.vendor_id?' selected':'')+'>'+v.name+'</option>').join('')}
+        </select></div>
+        <div class="form-group"><label>Order Date</label><input id="poDate" type="date" value="${po.order_date ? po.order_date.slice(0,10) : ''}"></div>
+        <div class="form-group"><label>Expected Delivery</label><input id="poExpected" type="date" value="${po.expected_date ? po.expected_date.slice(0,10) : ''}"></div>
+      </div>
+
+      <h3 style="font-size:14px;margin:16px 0 10px;">Line Items</h3>
+      <div id="poLines">${po.items.map(i => {
+        poLineCount++;
+        return `<div class="po-line" style="display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:8px;margin-bottom:8px;align-items:end;">
+          <div class="form-group" style="margin:0;"><label>Product</label><select class="po-product"><option value="">Select</option>${state.products.filter(p => p.is_active !== false).map(p => '<option value="'+p.id+'"'+(p.id===i.product_id?' selected':'')+' data-price="'+p.unit_price+'">'+p.name+(p.sku ? ' ('+p.sku+')' : '')+(p.is_serialized ? ' [SERIAL]' : '')+'</option>').join('')}</select></div>
+          <div class="form-group" style="margin:0;"><label>Qty</label><input type="number" class="po-qty" value="${i.quantity}" min="1" oninput="calcPOTotal()"></div>
+          <div class="form-group" style="margin:0;"><label>Unit Price</label><input type="number" class="po-price" step="0.01" value="${Number(i.unit_price)}" oninput="calcPOTotal()"></div>
+          <button class="btn btn-sm btn-danger" onclick="this.parentElement.remove();calcPOTotal();" style="margin-bottom:0;">\u2715</button>
+        </div>`;
+      }).join('')}</div>
+      <button class="btn btn-sm btn-secondary mt8" onclick="addPOLine()">+ Add Item</button>
+
+      <h3 style="font-size:14px;margin:20px 0 10px;">Fees & Adjustments</h3>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+        <div class="form-group"><label>Shipping Fee</label><input id="poShipping" type="number" step="0.01" value="${Number(po.shipping_fee||0)}" min="0" oninput="calcPOTotal()"></div>
+        <div class="form-group"><label>Handling Fee</label><input id="poHandling" type="number" step="0.01" value="${Number(po.handling_fee||0)}" min="0" oninput="calcPOTotal()"></div>
+        <div class="form-group"><label>Discount</label><input id="poDiscount" type="number" step="0.01" value="${Number(po.discount||0)}" min="0" oninput="calcPOTotal()"></div>
+      </div>
+      <div id="poTotalDisplay" style="text-align:right;padding:12px 0;border-top:1px solid var(--border);margin-top:8px;">
+        <span style="color:var(--text-muted);font-size:13px;">Total:</span> <span id="poCalcTotal" style="font-size:20px;font-weight:800;font-family:'Space Grotesk',sans-serif;">&#8369;0</span>
+      </div>
+
+      <div class="form-group mt8"><label>Notes</label><textarea id="poNotes" rows="2">${po.notes || ''}</textarea></div>
+      <div class="form-actions">
+        <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveEditPO(${po.id})">Save Changes</button>
+      </div>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+
+  // Wire up product onchange for new lines
+  document.querySelectorAll('.po-product').forEach(sel => {
+    sel.onchange = function() {
+      const opt = this.selectedOptions[0];
+      const line = this.closest('.po-line');
+      if (opt?.dataset.price && line) { line.querySelector('.po-price').value = opt.dataset.price; calcPOTotal(); }
+    };
+  });
+  calcPOTotal();
+}
+
+async function saveEditPO(poId) {
+  const vendorId = document.getElementById('poVendor').value;
+  if (!vendorId) return toast('Select a vendor', 'error');
+  const lines = document.querySelectorAll('.po-line');
+  const items = [];
+  lines.forEach(l => {
+    const pid = l.querySelector('.po-product').value;
+    const qty = l.querySelector('.po-qty').value;
+    const price = l.querySelector('.po-price').value;
+    if (pid) items.push({ productId: pid, quantity: qty, unitPrice: price });
+  });
+  if (items.length === 0) return toast('Add at least one item', 'error');
+  const r = await apiPut(API + '/purchase-orders/' + poId, {
+    vendorId, items,
+    orderDate: document.getElementById('poDate').value,
+    expectedDate: document.getElementById('poExpected').value || null,
+    shippingFee: document.getElementById('poShipping').value,
+    handlingFee: document.getElementById('poHandling').value,
+    discount: document.getElementById('poDiscount').value,
+    notes: document.getElementById('poNotes').value,
+  });
+  if (r.error) return toast(r.error, 'error');
+  toast('Purchase order updated');
+  document.querySelector('.modal-overlay')?.remove();
+  renderPOPage();
+}
+
+// ── STOCK PAGE ──────────────────────────────────────────────
+async function renderStockPage() {
+  const c = document.getElementById('pageContent');
+  const r = await apiFetch(API + '/stock');
+  state.stock = r.stock || [];
+  if (!pg.stk) pgInit('stk', 8);
+
+  c.innerHTML = `
+    <div class="page-header">
+      <h1>Stock Levels</h1>
+      <button class="btn btn-primary" onclick="openAdjustModal()">± Adjust Stock</button>
+    </div>
+    <div class="card card-flush">
+      <div class="table-wrap" id="stkWrap"><table>
+        <thead><tr><th>Product</th><th>Category</th><th>Vendor</th><th>Quantity</th><th>Unit</th><th>Min Stock</th><th>Status</th><th>Last Updated</th></tr></thead>
+        <tbody id="stkTableBody"></tbody>
+      </table></div>
+      <div id="stkFooter"></div>
+    </div>`;
+  renderStkRows();
+}
+
+function renderStkRows() {
+  const list = state.stock;
+  const paged = pgSlice('stk', list);
+  const tbody = document.getElementById('stkTableBody');
+  if (!tbody) return;
+  tbody.innerHTML = paged.length === 0 ? '<tr><td colspan="8" style="text-align:center;padding:32px;color:var(--text-muted);">No stock records</td></tr>' :
+    paged.map(s => {
+      const low = s.product?.min_stock > 0 && s.quantity <= s.product.min_stock;
+      return `<tr>
+        <td><div class="text-bold">${s.product?.name || '—'}</div><div class="mono text-muted">${s.product?.sku || ''}</div></td>
+        <td>${s.product?.category?.name || '—'}</td>
+        <td>${s.product?.vendor?.name || '—'}</td>
+        <td style="font-size:18px;font-weight:800;font-family:'Space Grotesk',sans-serif;color:${low ? '#ef4444' : '#10b981'};">${s.quantity}</td>
+        <td>${s.product?.unit || 'pcs'}</td>
+        <td>${s.product?.min_stock || '—'}</td>
+        <td>${low ? '<span class="badge badge-red">Low Stock</span>' : '<span class="badge badge-green">OK</span>'}</td>
+        <td class="text-muted">${fmtDate(s.updated_at)}</td>
+      </tr>`;
+    }).join('');
+  document.getElementById('stkFooter').innerHTML = pgFooter('stk', list.length, 'renderStkRows');
+}
+
+function openAdjustModal() {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay active';
+  overlay.innerHTML = `<div class="modal" style="max-width:450px;">
+    <div class="modal-header"><h2>Adjust Stock</h2><button class="modal-close" onclick="this.closest('.modal-overlay').remove()">✕</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label>Product *</label><select id="adjProduct">
+        <option value="">Select</option>
+        ${state.stock.map(s => `<option value="${s.product_id}">${s.product?.name || 'ID:'+s.product_id} (current: ${s.quantity})</option>`).join('')}
+      </select></div>
+      <div class="form-group"><label>Adjustment Type</label><select id="adjType">
+        <option value="add">Add to stock (+)</option>
+        <option value="subtract">Subtract from stock (−)</option>
+        <option value="set">Set exact quantity</option>
+      </select></div>
+      <div class="form-group"><label>Quantity *</label><input id="adjQty" type="number" min="0" value="0"></div>
+      <div class="form-group"><label>Reason/Notes</label><input id="adjNotes" placeholder="e.g. Physical count adjustment"></div>
+      <div class="form-actions"><button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Cancel</button><button class="btn btn-primary" onclick="submitAdjust()">Adjust</button></div>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+}
+
+async function submitAdjust() {
+  const productId = document.getElementById('adjProduct').value;
+  const type = document.getElementById('adjType').value;
+  let quantity = parseInt(document.getElementById('adjQty').value);
+  if (!productId || isNaN(quantity)) return toast('Select product and enter quantity', 'error');
+  if (type === 'subtract') quantity = -Math.abs(quantity);
+  const r = await apiPost(API + '/stock/adjust', { productId, quantity, type: type === 'set' ? 'set' : undefined, notes: document.getElementById('adjNotes').value });
+  if (r.error) return toast(r.error, 'error');
+  toast(r.message);
+  document.querySelector('.modal-overlay')?.remove();
+  renderStockPage();
+}
+
+// ── TRANSACTIONS PAGE ───────────────────────────────────────
+async function renderTransactionsPage() {
+  const c = document.getElementById('pageContent');
+  const r = await apiFetch(API + '/transactions?limit=100');
+  state.transactions = r.transactions || [];
+  if (!pg.txn) pgInit('txn', 8);
+  window._txnFilter = '';
+
+  c.innerHTML = `
+    <div class="page-header"><h1>Inventory Transactions</h1></div>
+    <div class="filters" id="txnFilters">
+      <button class="filter-btn active" data-f="">All</button>
+      <button class="filter-btn" data-f="received">Received</button>
+      <button class="filter-btn" data-f="deployed">Deployed</button>
+      <button class="filter-btn" data-f="returned">Returned</button>
+      <button class="filter-btn" data-f="adjustment">Adjustment</button>
+    </div>
+    <div class="card card-flush">
+      <div class="table-wrap" id="txnWrap"><table>
+        <thead><tr><th>Date</th><th>Product</th><th>Type</th><th>Qty</th><th>Notes</th><th>By</th></tr></thead>
+        <tbody id="txnTableBody"></tbody>
+      </table></div>
+      <div id="txnFooter"></div>
+    </div>`;
+
+  document.querySelectorAll('#txnFilters .filter-btn').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('#txnFilters .filter-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      window._txnFilter = btn.dataset.f;
+      if (pg.txn) pg.txn.page = 1;
+      renderTxnRows();
+    };
+  });
+  renderTxnRows();
+}
+
+function renderTxnRows() {
+  let list = state.transactions;
+  if (window._txnFilter) list = list.filter(t => t.type === window._txnFilter);
+  const paged = pgSlice('txn', list);
+  document.getElementById('txnTableBody').innerHTML = paged.length === 0 ?
+    '<tr><td colspan="6" style="text-align:center;padding:32px;color:var(--text-muted);">No transactions</td></tr>' :
+    paged.map(t => `<tr>
+      <td class="text-muted">${fmtDate(t.created_at)}</td>
+      <td><div class="text-bold">${t.product?.name || '—'}</div><div class="mono text-muted">${t.product?.sku || ''}</div></td>
+      <td>${statusBadge(t.type)}</td>
+      <td style="font-weight:700;font-size:15px;color:${t.quantity > 0 ? '#10b981' : '#ef4444'};">${t.quantity > 0 ? '+' : ''}${t.quantity}</td>
+      <td class="text-muted" style="font-size:12px;">${t.notes || '—'}</td>
+      <td>${t.creator?.full_name || '—'}</td>
+    </tr>`).join('');
+  document.getElementById('txnFooter').innerHTML = pgFooter('txn', list.length, 'renderTxnRows');
+}
+
+// ── INIT ────────────────────────────────────────────────────
+async function init() {
+  renderNav();
+  const ok = await checkAuth();
+  if (!ok) return;
+  renderPage();
+}
+
+init();
+</script>
+</body>
+</html>

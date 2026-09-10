@@ -1,0 +1,1141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+// ── Secure Fetch Interceptor ─────────────────────────────
+(function(){
+  const _fetch = window.fetch;
+  window.fetch = function(url, opts) {
+    opts = opts || {};
+    const urlStr = typeof url === 'string' ? url : (url.url || '');
+    if (urlStr.startsWith('/api') || urlStr.includes('/api/')) {
+      opts.credentials = 'include';
+      const method = (opts.method || 'GET').toUpperCase();
+      if (['POST','PUT','DELETE','PATCH'].includes(method)) {
+        opts.headers = opts.headers || {};
+        if (!opts.headers['X-CSRF-Token'] && !opts.headers['x-csrf-token']) {
+          const m = document.cookie.match(/j2_csrf=([^;]+)/);
+          if (m) opts.headers['X-CSRF-Token'] = m[1];
+        }
+      }
+    }
+    return _fetch.call(this, url, opts);
+  };
+})();
+</script>
+
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Website — Netfactory CRM</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@700;800&display=swap" rel="stylesheet"/>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"/>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Inter',sans-serif;background:#f1f5f9;color:#0f172a;min-height:100vh;display:flex;}
+
+/* ── Sidebar ── */
+.sidebar{width:220px;background:#0f172a;color:#fff;display:flex;flex-direction:column;flex-shrink:0;min-height:100vh;}
+.sidebar-logo{padding:20px 16px;border-bottom:1px solid rgba(255,255,255,.08);display:flex;align-items:center;gap:10px;}
+.sidebar-logo .icon{width:36px;height:36px;background:linear-gradient(135deg,#3b82f6,#8b5cf6);border-radius:9px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;color:#fff;}
+.sidebar-logo .text h2{font-size:13px;font-weight:700;}
+.sidebar-logo .text span{font-size:10px;color:#64748b;letter-spacing:.5px;}
+.sidebar-nav{flex:1;padding:12px 8px;overflow-y:auto;}
+.nav-section{font-size:10px;font-weight:700;color:#475569;letter-spacing:.8px;padding:12px 8px 6px;text-transform:uppercase;}
+.nav-item{display:flex;align-items:center;gap:10px;padding:10px 10px;border-radius:10px;cursor:pointer;font-size:13px;font-weight:500;color:#94a3b8;margin-bottom:2px;transition:all .15s;text-decoration:none;}
+.nav-item:hover{background:rgba(255,255,255,.06);color:#e2e8f0;}
+.nav-item.active{background:linear-gradient(135deg,rgba(59,130,246,.2),rgba(139,92,246,.2));color:#fff;border:1px solid rgba(59,130,246,.3);}
+.nav-item .icon{font-size:16px;width:20px;text-align:center;flex-shrink:0;}
+.back-btn{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.08);font-size:12px;color:#64748b;cursor:pointer;text-decoration:none;transition:color .15s;}
+.back-btn:hover{color:#94a3b8;}
+
+/* ── Main ── */
+.main{flex:1;display:flex;flex-direction:column;min-width:0;}
+.topbar{height:58px;background:#fff;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;padding:0 28px;flex-shrink:0;}
+.topbar-title{font-size:18px;font-weight:800;font-family:'Space Grotesk',sans-serif;}
+.topbar-subtitle{font-size:12px;color:#94a3b8;margin-top:2px;}
+.topbar-actions{display:flex;gap:10px;align-items:center;}
+.content{flex:1;padding:24px;overflow-y:auto;}
+
+/* ── Buttons ── */
+.btn{display:inline-flex;align-items:center;gap:7px;padding:10px 18px;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;border:none;font-family:inherit;transition:all .15s;}
+.btn-primary{background:linear-gradient(135deg,#3b82f6,#8b5cf6);color:#fff;}
+.btn-primary:hover{opacity:.9;transform:translateY(-1px);}
+.btn-secondary{background:#f1f5f9;color:#475569;border:1px solid #e2e8f0;}
+.btn-secondary:hover{background:#e2e8f0;}
+.btn-danger{background:#fef2f2;color:#dc2626;border:1px solid #fecaca;}
+.btn-danger:hover{background:#fee2e2;}
+.btn-success{background:#f0fdf4;color:#16a34a;border:1px solid #bbf7d0;}
+.btn-success:hover{background:#dcfce7;}
+.btn-sm{padding:6px 14px;font-size:12px;}
+.btn:disabled{opacity:.5;cursor:not-allowed;transform:none;}
+
+/* ── Card ── */
+.card{background:#fff;border-radius:16px;border:1px solid #e2e8f0;box-shadow:0 1px 3px rgba(0,0,0,.05);padding:24px;margin-bottom:20px;}
+.card-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;}
+.card-title{font-size:15px;font-weight:700;}
+.card-subtitle{font-size:12px;color:#94a3b8;margin-top:3px;}
+
+/* ── Form ── */
+.form-group{margin-bottom:16px;}
+.form-group label{display:block;font-size:12px;font-weight:600;color:#475569;margin-bottom:6px;text-transform:uppercase;letter-spacing:.3px;}
+.form-group input,.form-group textarea,.form-group select{width:100%;padding:11px 14px;border:1.5px solid #e2e8f0;border-radius:10px;font-size:13px;font-family:inherit;color:#0f172a;background:#f8fafc;outline:none;transition:border-color .15s;}
+.form-group input:focus,.form-group textarea:focus,.form-group select:focus{border-color:#3b82f6;background:#fff;box-shadow:0 0 0 3px rgba(59,130,246,.1);}
+.form-group textarea{resize:vertical;min-height:90px;line-height:1.6;}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+.form-row-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;}
+.form-hint{font-size:11px;color:#94a3b8;margin-top:4px;}
+
+/* ── Section divider ── */
+.section-divider{display:flex;align-items:center;gap:12px;margin:24px 0 20px;}
+.section-divider span{font-size:11px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.6px;white-space:nowrap;}
+.section-divider::before,.section-divider::after{content:'';flex:1;height:1px;background:#e2e8f0;}
+
+/* ── Service cards grid ── */
+.services-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+.service-card{border:1.5px solid #e2e8f0;border-radius:12px;padding:16px;background:#f8fafc;}
+.service-card-header{display:flex;align-items:center;gap:10px;margin-bottom:12px;}
+.service-num{width:28px;height:28px;background:linear-gradient(135deg,#3b82f6,#8b5cf6);border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:#fff;flex-shrink:0;}
+
+/* ── FAQ list ── */
+.faq-list{display:flex;flex-direction:column;gap:10px;}
+.faq-item{border:1.5px solid #e2e8f0;border-radius:12px;background:#f8fafc;overflow:hidden;transition:border-color .15s;}
+.faq-item:hover{border-color:#3b82f6;}
+.faq-item-header{display:flex;align-items:center;gap:12px;padding:14px 16px;cursor:pointer;}
+.faq-drag{color:#94a3b8;cursor:grab;font-size:16px;flex-shrink:0;}
+.faq-question-text{flex:1;font-size:13px;font-weight:600;color:#0f172a;}
+.faq-status{padding:3px 8px;border-radius:6px;font-size:10px;font-weight:700;flex-shrink:0;}
+.faq-status.active{background:#dcfce7;color:#16a34a;}
+.faq-status.inactive{background:#f1f5f9;color:#64748b;}
+.faq-actions{display:flex;gap:6px;flex-shrink:0;}
+.faq-edit-area{padding:0 16px 16px;display:none;}
+.faq-edit-area.open{display:block;}
+
+/* ── Badge / Status ── */
+.badge{padding:4px 10px;border-radius:20px;font-size:11px;font-weight:700;}
+.badge-blue{background:#dbeafe;color:#1d4ed8;}
+.badge-green{background:#dcfce7;color:#15803d;}
+
+/* ── Toast ── */
+.toast-container{position:fixed;top:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:8px;}
+.toast{padding:13px 18px;border-radius:12px;font-size:13px;font-weight:600;color:#fff;box-shadow:0 8px 24px rgba(0,0,0,.15);animation:slideIn .25s ease;display:flex;align-items:center;gap:9px;min-width:260px;}
+.toast-success{background:#16a34a;}
+.toast-error{background:#dc2626;}
+@keyframes slideIn{from{opacity:0;transform:translateX(40px);}to{opacity:1;transform:translateX(0);}}
+
+/* ── Preview Link ── */
+.preview-bar{background:linear-gradient(135deg,#1e3a5f,#1e1b4b);border-radius:12px;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;}
+.preview-bar span{color:#93c5fd;font-size:13px;}
+.preview-bar a{color:#fff;font-size:12px;font-weight:600;background:rgba(255,255,255,.15);padding:6px 14px;border-radius:8px;text-decoration:none;transition:background .15s;}
+.preview-bar a:hover{background:rgba(255,255,255,.25);}
+
+/* ── Loading ── */
+.loading{display:flex;align-items:center;justify-content:center;padding:60px;gap:12px;color:#94a3b8;font-size:14px;}
+.spinner{width:24px;height:24px;border:3px solid #e2e8f0;border-top-color:#3b82f6;border-radius:50%;animation:spin .7s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg);}}
+
+/* ── Modal ── */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);backdrop-filter:blur(4px);z-index:500;display:flex;align-items:center;justify-content:center;padding:16px;opacity:0;pointer-events:none;transition:opacity .2s;}
+.modal-overlay.active{opacity:1;pointer-events:auto;}
+.modal{background:#fff;border-radius:20px;max-width:560px;width:100%;max-height:90vh;overflow-y:auto;box-shadow:0 30px 60px rgba(0,0,0,.25);transform:translateY(16px);transition:transform .2s;}
+.modal-overlay.active .modal{transform:translateY(0);}
+.modal-header{padding:20px 24px;border-bottom:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center;}
+.modal-header h3{font-size:16px;font-weight:700;}
+.modal-close{cursor:pointer;font-size:20px;color:#94a3b8;background:none;border:none;line-height:1;}
+.modal-body{padding:24px;}
+.modal-footer{padding:16px 24px;border-top:1px solid #e2e8f0;display:flex;gap:10px;justify-content:flex-end;}
+</style>
+</head>
+<body>
+
+<!-- Sidebar -->
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <div class="icon">NF</div>
+    <div class="text"><h2>Netfactory</h2><span>WEBSITE CMS</span></div>
+  </div>
+  <nav class="sidebar-nav">
+    <div class="nav-section">Content</div>
+    <div class="nav-item active" onclick="showTab('home')" id="nav-home">
+      <span class="icon"><i class="fas fa-home"></i></span><span>Home / Hero</span>
+    </div>
+    <div class="nav-item" onclick="showTab('about')" id="nav-about">
+      <span class="icon"><i class="fas fa-info-circle"></i></span><span>About</span>
+    </div>
+    <div class="nav-item" onclick="showTab('services')" id="nav-services">
+      <span class="icon"><i class="fas fa-bolt"></i></span><span>Services</span>
+    </div>
+    <div class="nav-item" onclick="showTab('faq')" id="nav-faq">
+      <span class="icon"><i class="fas fa-circle-question"></i></span><span>FAQ</span>
+    </div>
+    <div class="nav-section">Marketing</div>
+    <div class="nav-item" onclick="showTab('promotions')" id="nav-promotions">
+      <span class="icon"><i class="fas fa-tags"></i></span><span>Promotions</span>
+    </div>
+    <div class="nav-item" onclick="showTab('careers')" id="nav-careers">
+      <span class="icon"><i class="fas fa-briefcase"></i></span><span>Careers</span>
+    </div>
+    <div class="nav-section">Links</div>
+    <div class="nav-item" onclick="showTab('social')" id="nav-social">
+      <span class="icon"><i class="fas fa-share-nodes"></i></span><span>Social Links</span>
+    </div>
+  </nav>
+</aside>
+
+<!-- Main -->
+<div class="main">
+  <header class="topbar">
+    <div>
+      <div class="topbar-title">Website Content Manager</div>
+      <div class="topbar-subtitle">Changes go live immediately on netfactory.com.ph</div>
+    </div>
+    <div class="topbar-actions">
+      <a href="https://netfactory.com.ph" target="_blank" class="btn btn-secondary btn-sm"><i class="fas fa-globe"></i> Preview Site</a>
+      <button class="btn btn-primary" id="globalSaveBtn" onclick="saveCurrentTab()"><i class="fas fa-save"></i> Save Changes</button>
+      <a href="/crm/" style="display:flex;align-items:center;gap:6px;color:#64748b;text-decoration:none;font-size:13px;font-weight:600;padding:6px 14px;border-radius:8px;border:1px solid #e2e8f0;transition:all .2s;white-space:nowrap;" onmouseover="this.style.borderColor='#3b82f6';this.style.color='#3b82f6'" onmouseout="this.style.borderColor='#e2e8f0';this.style.color='#64748b'"><i class="fas fa-arrow-left"></i> Back to CRM</a>
+    </div>
+  </header>
+
+  <div class="content" id="mainContent">
+    <div class="loading"><div class="spinner"></div> Loading content...</div>
+  </div>
+</div>
+
+<!-- FAQ Modal -->
+<div class="modal-overlay" id="faqModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="faqModalTitle">Add FAQ</h3>
+      <button class="modal-close" onclick="closeFaqModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="faqModalId"/>
+      <div class="form-group">
+        <label>Question</label>
+        <input type="text" id="faqModalQuestion" placeholder="e.g. How long does installation take?"/>
+      </div>
+      <div class="form-group">
+        <label>Answer</label>
+        <textarea id="faqModalAnswer" style="min-height:120px" placeholder="Provide a clear, helpful answer..."></textarea>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Sort Order</label>
+          <input type="number" id="faqModalOrder" value="0" min="0"/>
+        </div>
+        <div class="form-group">
+          <label>Status</label>
+          <select id="faqModalActive">
+            <option value="true">Active (visible)</option>
+            <option value="false">Inactive (hidden)</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeFaqModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveFaqModal()"><i class="fas fa-save"></i> Save FAQ</button>
+    </div>
+  </div>
+</div>
+
+<!-- Promotion Modal -->
+<div class="modal-overlay" id="promoModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="promoModalTitle">Add Promotion</h3>
+      <button class="modal-close" onclick="closePromoModal()">&#10005;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="promoId"/>
+      <div class="form-group">
+        <label>Title *</label>
+        <input type="text" id="promoTitle" placeholder="e.g. 50% Off First Month"/>
+      </div>
+      <div class="form-group">
+        <label>Description</label>
+        <textarea id="promoDesc" style="min-height:80px" placeholder="Describe the promotion details..."></textarea>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Badge Text</label>
+          <input type="text" id="promoBadge" placeholder="e.g. Limited Time" maxlength="50"/>
+        </div>
+        <div class="form-group">
+          <label>Status</label>
+          <select id="promoActive">
+            <option value="true">Active</option>
+            <option value="false">Inactive</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>CTA Button Text</label>
+          <input type="text" id="promoCta" placeholder="e.g. Subscribe Now"/>
+        </div>
+        <div class="form-group">
+          <label>CTA Link</label>
+          <input type="text" id="promoLink" placeholder="e.g. #plans or /portal"/>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Start Date</label>
+          <input type="date" id="promoStart"/>
+        </div>
+        <div class="form-group">
+          <label>End Date</label>
+          <input type="date" id="promoEnd"/>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closePromoModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="savePromoModal()"><i class="fas fa-save"></i> Save Promotion</button>
+    </div>
+  </div>
+</div>
+
+<!-- Career Modal -->
+<div class="modal-overlay" id="careerModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="careerModalTitle">Add Job Posting</h3>
+      <button class="modal-close" onclick="closeCareerModal()">&#10005;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="careerId"/>
+      <div class="form-group">
+        <label>Job Title *</label>
+        <input type="text" id="careerTitle" placeholder="e.g. Field Technician"/>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Department</label>
+          <input type="text" id="careerDept" placeholder="e.g. Operations"/>
+        </div>
+        <div class="form-group">
+          <label>Employment Type</label>
+          <select id="careerType">
+            <option value="Full-time">Full-time</option>
+            <option value="Part-time">Part-time</option>
+            <option value="Contract">Contract</option>
+            <option value="Internship">Internship</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Location</label>
+          <input type="text" id="careerLocation" value="Balanga City, Bataan"/>
+        </div>
+        <div class="form-group">
+          <label>Status</label>
+          <select id="careerActive">
+            <option value="true">Active</option>
+            <option value="false">Inactive</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Description</label>
+        <textarea id="careerDesc" style="min-height:80px" placeholder="Describe the role and responsibilities..."></textarea>
+      </div>
+      <div class="form-group">
+        <label>Requirements</label>
+        <textarea id="careerReqs" style="min-height:80px" placeholder="List qualifications and requirements..."></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeCareerModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveCareerModal()"><i class="fas fa-save"></i> Save Job Posting</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+// ============================================================
+// State
+// ============================================================
+const API = '/api';
+const token = localStorage.getItem('j2_admin_token');
+const headers = { 'Content-Type':'application/json', 'Authorization':'Bearer '+token };
+
+let currentTab = 'home';
+let content = {};       // website settings key/value
+let faqs = [];          // FAQ items
+let promotions = [];    // Promotions list
+let careers = [];       // Careers list
+let toggles = {};       // System toggles
+
+// ============================================================
+// Bootstrap
+// ============================================================
+async function init() {
+  await loadContent();
+  var startTab = new URLSearchParams(window.location.search).get('tab') || 'home';
+  showTab(startTab);
+}
+
+async function loadContent() {
+  try {
+    const [contentRes, faqsRes, promosRes, careersRes, togglesRes] = await Promise.all([
+      fetch(`${API}/admin/website/content`, {headers}).then(r=>r.json()),
+      fetch(`${API}/admin/website/faqs`,    {headers}).then(r=>r.json()),
+      fetch(`${API}/admin/promotions`,      {headers}).then(r=>r.json()),
+      fetch(`${API}/admin/careers`,         {headers}).then(r=>r.json()),
+      fetch(`${API}/admin/system/toggles`,  {headers}).then(r=>r.json()),
+    ]);
+    content    = contentRes.content    || {};
+    faqs       = faqsRes.faqs          || [];
+    promotions = promosRes.promotions  || [];
+    careers    = careersRes.careers     || [];
+    toggles    = togglesRes.toggles    || {};
+  } catch(e) {
+    toast('Failed to load content', 'error');
+  }
+}
+
+// ============================================================
+// Tab Navigation
+// ============================================================
+function showTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+  document.getElementById('nav-'+tab)?.classList.add('active');
+
+  const renders = {
+    home:       renderHomeTab,
+    about:      renderAboutTab,
+    services:   renderServicesTab,
+    faq:        renderFaqTab,
+    social:     renderSocialTab,
+    promotions: renderPromotionsTab,
+    careers:    renderCareersTab,
+  };
+  (renders[tab] || renderHomeTab)();
+}
+
+function saveCurrentTab() {
+  const saves = {
+    home:       saveHomeTab,
+    about:      saveAboutTab,
+    services:   saveServicesTab,
+    faq:        () => toast('Use the individual FAQ save buttons', 'error'),
+    social:     saveSocialTab,
+    promotions: () => toast('Use the individual promotion actions', 'error'),
+    careers:    () => toast('Use the individual career actions', 'error'),
+  };
+  (saves[currentTab] || saveHomeTab)();
+}
+
+// ============================================================
+// Home / Hero Tab
+// ============================================================
+function renderHomeTab() {
+  const c = document.getElementById('mainContent');
+  c.innerHTML = `
+  <div class="preview-bar">
+    <span><i class="fas fa-pen-to-square"></i> Editing: <strong>Home / Hero Section</strong></span>
+    <a href="https://netfactory.com.ph/#home" target="_blank">View on Site ↗</a>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div><div class="card-title">Hero Section</div><div class="card-subtitle">The first thing visitors see</div></div>
+    </div>
+    <div class="form-group">
+      <label>Hero Badge Text</label>
+      <input type="text" id="f_hero_badge" value="${esc(content.website_hero_badge)}" placeholder="e.g. Now Serving Balanga City, Bataan"/>
+      <div class="form-hint">Small pill badge shown above the headline</div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Headline Line 1</label>
+        <input type="text" id="f_hero_h1" value="${esc(content.website_hero_headline1)}" placeholder="e.g. Fast. Reliable."/>
+      </div>
+      <div class="form-group">
+        <label>Headline Line 2</label>
+        <input type="text" id="f_hero_h2" value="${esc(content.website_hero_headline2)}" placeholder="e.g. Finally Here."/>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Sub Text / Description</label>
+      <textarea id="f_hero_sub">${esc(content.website_hero_subtext)}</textarea>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Primary Button Label</label>
+        <input type="text" id="f_hero_cta1" value="${esc(content.website_hero_cta_primary)}" placeholder="Apply Now →"/>
+      </div>
+      <div class="form-group">
+        <label>Secondary Button Label</label>
+        <input type="text" id="f_hero_cta2" value="${esc(content.website_hero_cta_secondary)}" placeholder="View Plans"/>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div><div class="card-title">Stats Bar</div><div class="card-subtitle">Displayed below the hero. Active subscribers and barangays are pulled live from the database.</div></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Network Uptime %</label>
+        <input type="text" id="f_stats_uptime" value="${esc(content.website_stats_uptime)}" placeholder="99.6"/>
+        <div class="form-hint">e.g. 99.6 → displays as "99.6% Uptime"</div>
+      </div>
+      <div class="form-group">
+        <label>Max Speed (Mbps)</label>
+        <input type="text" id="f_stats_speed" value="${esc(content.website_stats_max_speed)}" placeholder="500"/>
+        <div class="form-hint">e.g. 500 → displays as "500 Mbps Max Speed"</div>
+      </div>
+    </div>
+    <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:10px;padding:14px 16px;font-size:12px;color:#0369a1;">
+      <i class="fas fa-circle-info"></i> <strong>Active Subscribers</strong> and <strong>Barangays Covered</strong> counts are always live from the CRM database and cannot be manually edited here.
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div><div class="card-title">Bottom CTA Section</div><div class="card-subtitle">The final call-to-action before the footer</div></div>
+    </div>
+    <div class="form-group">
+      <label>CTA Headline</label>
+      <input type="text" id="f_cta_h" value="${esc(content.website_cta_headline)}" placeholder="Stop Waiting. Start Streaming."/>
+    </div>
+    <div class="form-group">
+      <label>CTA Sub Text</label>
+      <textarea id="f_cta_sub">${esc(content.website_cta_subtext)}</textarea>
+    </div>
+  </div>`;
+}
+
+async function saveHomeTab() {
+  const btn = document.getElementById('globalSaveBtn');
+  btn.disabled = true; btn.textContent = 'Saving...';
+  try {
+    await saveSettings({
+      website_hero_badge:         val('f_hero_badge'),
+      website_hero_headline1:     val('f_hero_h1'),
+      website_hero_headline2:     val('f_hero_h2'),
+      website_hero_subtext:       val('f_hero_sub'),
+      website_hero_cta_primary:   val('f_hero_cta1'),
+      website_hero_cta_secondary: val('f_hero_cta2'),
+      website_stats_uptime:       val('f_stats_uptime'),
+      website_stats_max_speed:    val('f_stats_speed'),
+      website_cta_headline:       val('f_cta_h'),
+      website_cta_subtext:        val('f_cta_sub'),
+    });
+    toast('Hero & Home content saved!', 'success');
+  } catch(e) { toast('Save failed', 'error'); }
+  btn.disabled = false; btn.innerHTML = '<i class="fas fa-save"></i> Save Changes';
+}
+
+// ============================================================
+// About Tab
+// ============================================================
+function renderAboutTab() {
+  const c = document.getElementById('mainContent');
+  c.innerHTML = `
+  <div class="preview-bar">
+    <span><i class="fas fa-pen-to-square"></i> Editing: <strong>About Section</strong></span>
+    <a href="https://netfactory.com.ph/#about" target="_blank">View on Site ↗</a>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div><div class="card-title">About Section Header</div></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Headline Line 1</label>
+        <input type="text" id="f_about_h1" value="${esc(content.website_about_headline1)}" placeholder="Built in Bataan."/>
+      </div>
+      <div class="form-group">
+        <label>Headline Line 2</label>
+        <input type="text" id="f_about_h2" value="${esc(content.website_about_headline2)}" placeholder="Built for Bataan."/>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Main Paragraph</label>
+      <textarea id="f_about_p">${esc(content.website_about_paragraph)}</textarea>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div><div class="card-title">Our Mission</div></div>
+    </div>
+    <div class="form-group">
+      <textarea id="f_mission" style="min-height:110px">${esc(content.website_mission_text)}</textarea>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div><div class="card-title">Our Vision</div></div>
+    </div>
+    <div class="form-group">
+      <textarea id="f_vision" style="min-height:110px">${esc(content.website_vision_text)}</textarea>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div><div class="card-title">Our Promise</div></div>
+    </div>
+    <div class="form-group">
+      <textarea id="f_promise" style="min-height:110px">${esc(content.website_promise_text)}</textarea>
+    </div>
+  </div>`;
+}
+
+async function saveAboutTab() {
+  const btn = document.getElementById('globalSaveBtn');
+  btn.disabled = true; btn.textContent = 'Saving...';
+  try {
+    await saveSettings({
+      website_about_headline1: val('f_about_h1'),
+      website_about_headline2: val('f_about_h2'),
+      website_about_paragraph: val('f_about_p'),
+      website_mission_text:    val('f_mission'),
+      website_vision_text:     val('f_vision'),
+      website_promise_text:    val('f_promise'),
+    });
+    toast('About section saved!', 'success');
+  } catch(e) { toast('Save failed', 'error'); }
+  btn.disabled = false; btn.innerHTML = '<i class="fas fa-save"></i> Save Changes';
+}
+
+// ============================================================
+// Services Tab
+// ============================================================
+function renderServicesTab() {
+  const c = document.getElementById('mainContent');
+  const cards = [1,2,3,4,5,6].map(n => `
+    <div class="service-card">
+      <div class="service-card-header">
+        <div class="service-num">0${n}</div>
+        <strong style="font-size:13px">Service ${n}</strong>
+      </div>
+      <div class="form-group" style="margin-bottom:10px">
+        <label>Icon (FA class, e.g. fas fa-home)</label>
+        <input type="text" id="f_s${n}_icon" value="${esc(content[`website_service${n}_icon`])}" placeholder="fas fa-home" style="font-size:13px"/>
+      </div>
+      <div class="form-group" style="margin-bottom:10px">
+        <label>Title</label>
+        <input type="text" id="f_s${n}_title" value="${esc(content[`website_service${n}_title`])}" placeholder="Service title"/>
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label>Description</label>
+        <textarea id="f_s${n}_desc" style="min-height:80px">${esc(content[`website_service${n}_desc`])}</textarea>
+      </div>
+    </div>
+  `).join('');
+
+  c.innerHTML = `
+  <div class="preview-bar">
+    <span><i class="fas fa-pen-to-square"></i> Editing: <strong>Services Section</strong></span>
+    <a href="https://netfactory.com.ph/#services" target="_blank">View on Site ↗</a>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div><div class="card-title">Section Header</div></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Headline Line 1</label>
+        <input type="text" id="f_srv_h1" value="${esc(content.website_services_headline1)}" placeholder="Everything You Need."/>
+      </div>
+      <div class="form-group">
+        <label>Headline Line 2</label>
+        <input type="text" id="f_srv_h2" value="${esc(content.website_services_headline2)}" placeholder="Nothing You Don't."/>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Sub Text</label>
+      <input type="text" id="f_srv_sub" value="${esc(content.website_services_subtext)}"/>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div><div class="card-title">Service Cards</div><div class="card-subtitle">6 service cards displayed on the site</div></div>
+    </div>
+    <div class="services-grid">${cards}</div>
+  </div>`;
+}
+
+async function saveServicesTab() {
+  const btn = document.getElementById('globalSaveBtn');
+  btn.disabled = true; btn.textContent = 'Saving...';
+  try {
+    const data = {
+      website_services_headline1: val('f_srv_h1'),
+      website_services_headline2: val('f_srv_h2'),
+      website_services_subtext:   val('f_srv_sub'),
+    };
+    [1,2,3,4,5,6].forEach(n => {
+      data[`website_service${n}_icon`]  = val(`f_s${n}_icon`);
+      data[`website_service${n}_title`] = val(`f_s${n}_title`);
+      data[`website_service${n}_desc`]  = val(`f_s${n}_desc`);
+    });
+    await saveSettings(data);
+    toast('Services section saved!', 'success');
+  } catch(e) { toast('Save failed', 'error'); }
+  btn.disabled = false; btn.innerHTML = '<i class="fas fa-save"></i> Save Changes';
+}
+
+// ============================================================
+// FAQ Tab
+// ============================================================
+function renderFaqTab() {
+  const c = document.getElementById('mainContent');
+  const faqItems = faqs.map(f => `
+    <div class="faq-item" id="faq-row-${f.id}">
+      <div class="faq-item-header">
+        <span class="faq-drag" title="Drag to reorder">⠿</span>
+        <span class="faq-question-text">${esc(f.question)}</span>
+        <span class="faq-status ${f.is_active ? 'active' : 'inactive'}">${f.is_active ? 'Active' : 'Hidden'}</span>
+        <div class="faq-actions">
+          <button class="btn btn-secondary btn-sm" onclick="editFaq(${f.id})"><i class="fas fa-pen"></i> Edit</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteFaq(${f.id})"><i class="fas fa-trash"></i></button>
+        </div>
+      </div>
+      <div style="padding:0 16px 14px;font-size:12px;color:#64748b;border-top:1px solid #f1f5f9;padding-top:10px;margin-top:0">${esc(f.answer)}</div>
+    </div>
+  `).join('') || '<div style="text-align:center;padding:40px;color:#94a3b8;font-size:13px">No FAQs yet. Add your first one!</div>';
+
+  c.innerHTML = `
+  <div class="preview-bar">
+    <span><i class="fas fa-pen-to-square"></i> Editing: <strong>FAQ Section</strong> — ${faqs.length} item${faqs.length===1?'':'s'}</span>
+    <a href="https://netfactory.com.ph/#faq" target="_blank">View on Site ↗</a>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div><div class="card-title">Frequently Asked Questions</div><div class="card-subtitle">Manage questions shown on the public website</div></div>
+      <button class="btn btn-primary btn-sm" onclick="openAddFaq()">+ Add FAQ</button>
+    </div>
+    <div class="faq-list">${faqItems}</div>
+  </div>`;
+}
+
+function openAddFaq() {
+  document.getElementById('faqModalTitle').textContent = 'Add FAQ';
+  document.getElementById('faqModalId').value = '';
+  document.getElementById('faqModalQuestion').value = '';
+  document.getElementById('faqModalAnswer').value = '';
+  document.getElementById('faqModalOrder').value = faqs.length + 1;
+  document.getElementById('faqModalActive').value = 'true';
+  document.getElementById('faqModal').classList.add('active');
+}
+
+function editFaq(id) {
+  const f = faqs.find(x => x.id === id);
+  if (!f) return;
+  document.getElementById('faqModalTitle').textContent = 'Edit FAQ';
+  document.getElementById('faqModalId').value = f.id;
+  document.getElementById('faqModalQuestion').value = f.question;
+  document.getElementById('faqModalAnswer').value = f.answer;
+  document.getElementById('faqModalOrder').value = f.sort_order;
+  document.getElementById('faqModalActive').value = String(f.is_active);
+  document.getElementById('faqModal').classList.add('active');
+}
+
+function closeFaqModal() {
+  document.getElementById('faqModal').classList.remove('active');
+}
+
+async function saveFaqModal() {
+  const id       = document.getElementById('faqModalId').value;
+  const question = document.getElementById('faqModalQuestion').value.trim();
+  const answer   = document.getElementById('faqModalAnswer').value.trim();
+  const sort_order = parseInt(document.getElementById('faqModalOrder').value) || 0;
+  const is_active  = document.getElementById('faqModalActive').value === 'true';
+
+  if (!question || !answer) { toast('Question and answer are required', 'error'); return; }
+
+  try {
+    if (id) {
+      await fetch(`${API}/admin/website/faqs/${id}`, {
+        method: 'PUT', headers,
+        body: JSON.stringify({ question, answer, sort_order, is_active })
+      });
+      toast('FAQ updated!', 'success');
+    } else {
+      await fetch(`${API}/admin/website/faqs`, {
+        method: 'POST', headers,
+        body: JSON.stringify({ question, answer, sort_order, is_active })
+      });
+      toast('FAQ added!', 'success');
+    }
+    closeFaqModal();
+    await loadContent();
+    renderFaqTab();
+  } catch(e) { toast('Save failed', 'error'); }
+}
+
+async function deleteFaq(id) {
+  const f = faqs.find(x => x.id === id);
+  if (!confirm(`Delete FAQ:\n"${f?.question}"?\n\nThis cannot be undone.`)) return;
+  try {
+    await fetch(`${API}/admin/website/faqs/${id}`, { method: 'DELETE', headers });
+    toast('FAQ deleted', 'success');
+    await loadContent();
+    renderFaqTab();
+  } catch(e) { toast('Delete failed', 'error'); }
+}
+
+// ============================================================
+// Social Links Tab
+// ============================================================
+function renderSocialTab() {
+  const c = document.getElementById('mainContent');
+  c.innerHTML = `
+  <div class="preview-bar">
+    <span><i class="fas fa-pen-to-square"></i> Editing: <strong>Social Links</strong></span>
+    <a href="https://netfactory.com.ph/#contact" target="_blank">View on Site ↗</a>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div><div class="card-title">Social Media Links</div><div class="card-subtitle">Shown in the Contact section</div></div>
+    </div>
+    <div class="form-group">
+      <label>Facebook Page URL</label>
+      <input type="url" id="f_fb" value="${esc(content.website_social_facebook)}" placeholder="https://facebook.com/netfactory"/>
+    </div>
+    <div class="form-group">
+      <label>Messenger URL</label>
+      <input type="url" id="f_msg" value="${esc(content.website_social_messenger)}" placeholder="https://m.me/netfactory"/>
+    </div>
+    <div class="form-group">
+      <label>Viber Community URL</label>
+      <input type="url" id="f_viber" value="${esc(content.website_social_viber)}" placeholder="https://viber.com/..."/>
+    </div>
+    <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:12px 16px;font-size:12px;color:#15803d;margin-top:8px;">
+      <i class="fas fa-circle-info"></i> Phone, email, address, and business hours come from <strong>Operations → Settings → Company</strong> in the CRM.
+    </div>
+  </div>`;
+}
+
+async function saveSocialTab() {
+  const btn = document.getElementById('globalSaveBtn');
+  btn.disabled = true; btn.textContent = 'Saving...';
+  try {
+    await saveSettings({
+      website_social_facebook:  val('f_fb'),
+      website_social_messenger: val('f_msg'),
+      website_social_viber:     val('f_viber'),
+    });
+    toast('Social links saved!', 'success');
+  } catch(e) { toast('Save failed', 'error'); }
+  btn.disabled = false; btn.innerHTML = '<i class="fas fa-save"></i> Save Changes';
+}
+
+// ============================================================
+// Promotions Tab
+// ============================================================
+function renderPromotionsTab() {
+  const c = document.getElementById('mainContent');
+  const promoEnabled = !!toggles.promotions_enabled;
+  const notifyEnabled = !!toggles.promotions_notify_subscribers;
+
+  const rows = promotions.map(p => {
+    const now = new Date().toISOString().split('T')[0];
+    const inRange = (!p.start_date || p.start_date <= now) && (!p.end_date || p.end_date >= now);
+    const statusClass = p.is_active && inRange ? 'active' : 'inactive';
+    const statusText = p.is_active ? (inRange ? 'Active' : 'Scheduled') : 'Inactive';
+    return `<tr>
+      <td style="font-weight:600">${esc(p.title)}</td>
+      <td>${esc(p.badge_text || '—')}</td>
+      <td>${p.start_date || '—'}</td>
+      <td>${p.end_date || '—'}</td>
+      <td><span class="faq-status ${statusClass}">${statusText}</span></td>
+      <td>
+        <button class="btn btn-secondary btn-sm" onclick="editPromo(${p.id})"><i class="fas fa-pen"></i></button>
+        <button class="btn btn-danger btn-sm" onclick="deletePromo(${p.id})"><i class="fas fa-trash"></i></button>
+      </td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="6" style="text-align:center;padding:30px;color:#94a3b8;">No promotions yet. Create your first one!</td></tr>';
+
+  c.innerHTML = `
+  <div class="preview-bar">
+    <span><i class="fas fa-tags"></i> Managing: <strong>Promotions</strong> — ${promotions.length} item${promotions.length===1?'':'s'}</span>
+    <a href="https://netfactory.com.ph" target="_blank">View on Site <i class="fas fa-arrow-up-right-from-square"></i></a>
+  </div>
+
+  <div class="card" style="margin-bottom:16px;">
+    <div class="card-header">
+      <div><div class="card-title">Display Settings</div></div>
+    </div>
+    <div style="display:flex;gap:32px;align-items:center;flex-wrap:wrap;">
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;font-weight:600;">
+        <input type="checkbox" id="tgl_promos_enabled" ${promoEnabled?'checked':''} onchange="setToggle('promotions_enabled',this.checked)" style="width:18px;height:18px;accent-color:#3b82f6;"/>
+        Show Promotions on Website
+      </label>
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;font-weight:600;">
+        <input type="checkbox" id="tgl_promos_notify" ${notifyEnabled?'checked':''} onchange="setToggle('promotions_notify_subscribers',this.checked)" style="width:18px;height:18px;accent-color:#8b5cf6;"/>
+        Notify Subscribers on New Promo
+      </label>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div><div class="card-title">Promotions</div><div class="card-subtitle">Special offers shown on the website hero section</div></div>
+      <button class="btn btn-primary btn-sm" onclick="openAddPromo()"><i class="fas fa-plus"></i> Add Promotion</button>
+    </div>
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+      <thead><tr style="background:#f8fafc;text-align:left;"><th style="padding:10px 12px;">Title</th><th style="padding:10px 12px;">Badge</th><th style="padding:10px 12px;">Start</th><th style="padding:10px 12px;">End</th><th style="padding:10px 12px;">Status</th><th style="padding:10px 12px;width:100px;">Actions</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>`;
+}
+
+function openAddPromo() {
+  document.getElementById('promoModalTitle').textContent = 'Add Promotion';
+  document.getElementById('promoId').value = '';
+  document.getElementById('promoTitle').value = '';
+  document.getElementById('promoDesc').value = '';
+  document.getElementById('promoBadge').value = '';
+  document.getElementById('promoCta').value = 'Learn More';
+  document.getElementById('promoLink').value = '#plans';
+  document.getElementById('promoActive').value = 'true';
+  document.getElementById('promoStart').value = '';
+  document.getElementById('promoEnd').value = '';
+  document.getElementById('promoModal').classList.add('active');
+}
+
+function editPromo(id) {
+  const p = promotions.find(x => x.id === id);
+  if (!p) return;
+  document.getElementById('promoModalTitle').textContent = 'Edit Promotion';
+  document.getElementById('promoId').value = p.id;
+  document.getElementById('promoTitle').value = p.title || '';
+  document.getElementById('promoDesc').value = p.description || '';
+  document.getElementById('promoBadge').value = p.badge_text || '';
+  document.getElementById('promoCta').value = p.cta_text || '';
+  document.getElementById('promoLink').value = p.cta_link || '';
+  document.getElementById('promoActive').value = String(!!p.is_active);
+  document.getElementById('promoStart').value = p.start_date ? p.start_date.split('T')[0] : '';
+  document.getElementById('promoEnd').value = p.end_date ? p.end_date.split('T')[0] : '';
+  document.getElementById('promoModal').classList.add('active');
+}
+
+function closePromoModal() { document.getElementById('promoModal').classList.remove('active'); }
+
+async function savePromoModal() {
+  const id = document.getElementById('promoId').value;
+  const data = {
+    title:       val('promoTitle'),
+    description: val('promoDesc'),
+    badge_text:  val('promoBadge'),
+    cta_text:    val('promoCta'),
+    cta_link:    val('promoLink'),
+    is_active:   document.getElementById('promoActive').value === 'true',
+    start_date:  val('promoStart') || null,
+    end_date:    val('promoEnd') || null,
+  };
+  if (!data.title) { toast('Title is required', 'error'); return; }
+  try {
+    if (id) {
+      await fetch(`${API}/admin/promotions/${id}`, { method: 'PUT', headers, body: JSON.stringify(data) });
+      toast('Promotion updated!', 'success');
+    } else {
+      await fetch(`${API}/admin/promotions`, { method: 'POST', headers, body: JSON.stringify(data) });
+      toast('Promotion created!', 'success');
+    }
+    closePromoModal();
+    await loadContent();
+    renderPromotionsTab();
+  } catch(e) { toast('Save failed', 'error'); }
+}
+
+async function deletePromo(id) {
+  const p = promotions.find(x => x.id === id);
+  if (!confirm(`Delete promotion:\n"${p?.title}"?\n\nThis cannot be undone.`)) return;
+  try {
+    await fetch(`${API}/admin/promotions/${id}`, { method: 'DELETE', headers });
+    toast('Promotion deleted', 'success');
+    await loadContent();
+    renderPromotionsTab();
+  } catch(e) { toast('Delete failed', 'error'); }
+}
+
+// ============================================================
+// Careers Tab
+// ============================================================
+function renderCareersTab() {
+  const c = document.getElementById('mainContent');
+  const careersEnabled = !!toggles.careers_enabled;
+
+  const rows = careers.map(j => {
+    const statusClass = j.is_active ? 'active' : 'inactive';
+    return `<tr>
+      <td style="font-weight:600">${esc(j.title)}</td>
+      <td>${esc(j.department || '—')}</td>
+      <td>${esc(j.type || '—')}</td>
+      <td>${esc(j.location || '—')}</td>
+      <td><span class="faq-status ${statusClass}">${j.is_active ? 'Active' : 'Inactive'}</span></td>
+      <td>
+        <button class="btn btn-secondary btn-sm" onclick="editCareer(${j.id})"><i class="fas fa-pen"></i></button>
+        <button class="btn btn-danger btn-sm" onclick="deleteCareer(${j.id})"><i class="fas fa-trash"></i></button>
+      </td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="6" style="text-align:center;padding:30px;color:#94a3b8;">No job postings yet. Create your first one!</td></tr>';
+
+  c.innerHTML = `
+  <div class="preview-bar">
+    <span><i class="fas fa-briefcase"></i> Managing: <strong>Careers</strong> — ${careers.length} posting${careers.length===1?'':'s'}</span>
+    <a href="https://netfactory.com.ph" target="_blank">View on Site <i class="fas fa-arrow-up-right-from-square"></i></a>
+  </div>
+
+  <div class="card" style="margin-bottom:16px;">
+    <div class="card-header">
+      <div><div class="card-title">Display Settings</div></div>
+    </div>
+    <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;font-weight:600;">
+      <input type="checkbox" id="tgl_careers_enabled" ${careersEnabled?'checked':''} onchange="setToggle('careers_enabled',this.checked)" style="width:18px;height:18px;accent-color:#10b981;"/>
+      Show Careers on Website
+    </label>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div><div class="card-title">Job Postings</div><div class="card-subtitle">Career opportunities shown on the website hero section</div></div>
+      <button class="btn btn-primary btn-sm" onclick="openAddCareer()"><i class="fas fa-plus"></i> Add Job Posting</button>
+    </div>
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+      <thead><tr style="background:#f8fafc;text-align:left;"><th style="padding:10px 12px;">Title</th><th style="padding:10px 12px;">Department</th><th style="padding:10px 12px;">Type</th><th style="padding:10px 12px;">Location</th><th style="padding:10px 12px;">Status</th><th style="padding:10px 12px;width:100px;">Actions</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>`;
+}
+
+function openAddCareer() {
+  document.getElementById('careerModalTitle').textContent = 'Add Job Posting';
+  document.getElementById('careerId').value = '';
+  document.getElementById('careerTitle').value = '';
+  document.getElementById('careerDept').value = '';
+  document.getElementById('careerType').value = 'Full-time';
+  document.getElementById('careerLocation').value = 'Balanga City, Bataan';
+  document.getElementById('careerActive').value = 'true';
+  document.getElementById('careerDesc').value = '';
+  document.getElementById('careerReqs').value = '';
+  document.getElementById('careerModal').classList.add('active');
+}
+
+function editCareer(id) {
+  const j = careers.find(x => x.id === id);
+  if (!j) return;
+  document.getElementById('careerModalTitle').textContent = 'Edit Job Posting';
+  document.getElementById('careerId').value = j.id;
+  document.getElementById('careerTitle').value = j.title || '';
+  document.getElementById('careerDept').value = j.department || '';
+  document.getElementById('careerType').value = j.type || 'Full-time';
+  document.getElementById('careerLocation').value = j.location || '';
+  document.getElementById('careerActive').value = String(!!j.is_active);
+  document.getElementById('careerDesc').value = j.description || '';
+  document.getElementById('careerReqs').value = j.requirements || '';
+  document.getElementById('careerModal').classList.add('active');
+}
+
+function closeCareerModal() { document.getElementById('careerModal').classList.remove('active'); }
+
+async function saveCareerModal() {
+  const id = document.getElementById('careerId').value;
+  const data = {
+    title:        val('careerTitle'),
+    department:   val('careerDept'),
+    type:         document.getElementById('careerType').value,
+    location:     val('careerLocation'),
+    is_active:    document.getElementById('careerActive').value === 'true',
+    description:  val('careerDesc'),
+    requirements: val('careerReqs'),
+  };
+  if (!data.title) { toast('Job title is required', 'error'); return; }
+  try {
+    if (id) {
+      await fetch(`${API}/admin/careers/${id}`, { method: 'PUT', headers, body: JSON.stringify(data) });
+      toast('Job posting updated!', 'success');
+    } else {
+      await fetch(`${API}/admin/careers`, { method: 'POST', headers, body: JSON.stringify(data) });
+      toast('Job posting created!', 'success');
+    }
+    closeCareerModal();
+    await loadContent();
+    renderCareersTab();
+  } catch(e) { toast('Save failed', 'error'); }
+}
+
+async function deleteCareer(id) {
+  const j = careers.find(x => x.id === id);
+  if (!confirm(`Delete job posting:\n"${j?.title}"?\n\nThis cannot be undone.`)) return;
+  try {
+    await fetch(`${API}/admin/careers/${id}`, { method: 'DELETE', headers });
+    toast('Job posting deleted', 'success');
+    await loadContent();
+    renderCareersTab();
+  } catch(e) { toast('Delete failed', 'error'); }
+}
+
+// Toggle helper for promotions/careers display settings
+async function setToggle(key, value) {
+  try {
+    const res = await fetch(`${API}/admin/system/toggles`, {
+      method: 'PUT', headers,
+      body: JSON.stringify({ key, value })
+    });
+    if (!res.ok) throw new Error();
+    toggles[key] = value;
+    toast(`${key.replace(/_/g,' ')} ${value ? 'enabled' : 'disabled'}`, 'success');
+  } catch(e) { toast('Failed to update toggle', 'error'); }
+}
+
+// ============================================================
+// Helpers
+// ============================================================
+async function saveSettings(data) {
+  // Update local cache
+  Object.entries(data).forEach(([k,v]) => { content[k] = v; });
+  const res = await fetch(`${API}/admin/website/content`, {
+    method: 'PUT', headers,
+    body: JSON.stringify(data)
+  });
+  if (!res.ok) throw new Error('Save failed');
+}
+
+function val(id) {
+  return document.getElementById(id)?.value ?? '';
+}
+
+function esc(str) {
+  return String(str || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function toast(msg, type='success') {
+  const tc = document.getElementById('toastContainer');
+  const t = document.createElement('div');
+  t.className = `toast toast-${type}`;
+  t.innerHTML = (type==='success' ? '<i class="fas fa-circle-check"></i>' : '<i class="fas fa-circle-xmark"></i>') + ' ' + msg;
+  tc.appendChild(t);
+  setTimeout(() => t.remove(), 3500);
+}
+
+// ── Auth Guard ───────────────────────────────────────────────
+if (!token) { window.location.href = '/crm/'; }
+else { init(); }
+
+
+// ============================================================
+</script>
+</body>
+</html>

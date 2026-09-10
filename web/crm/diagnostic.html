@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+// ── Secure Fetch Interceptor ─────────────────────────────
+(function(){
+  const _fetch = window.fetch;
+  window.fetch = function(url, opts) {
+    opts = opts || {};
+    const urlStr = typeof url === 'string' ? url : (url.url || '');
+    if (urlStr.startsWith('/api') || urlStr.includes('/api/')) {
+      opts.credentials = 'include';
+      const method = (opts.method || 'GET').toUpperCase();
+      if (['POST','PUT','DELETE','PATCH'].includes(method)) {
+        opts.headers = opts.headers || {};
+        if (!opts.headers['X-CSRF-Token'] && !opts.headers['x-csrf-token']) {
+          const m = document.cookie.match(/j2_csrf=([^;]+)/);
+          if (m) opts.headers['X-CSRF-Token'] = m[1];
+        }
+      }
+    }
+    return _fetch.call(this, url, opts);
+  };
+})();
+</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>System Diagnostic — Netfactory CRM</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Segoe UI', system-ui, sans-serif; background: #f8fafc; padding: 20px; }
+.container { max-width: 1200px; margin: 0 auto; }
+h1 { font-size: 28px; font-weight: 800; color: #1e293b; margin-bottom: 24px; }
+.section { background: white; border-radius: 12px; padding: 24px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+.section h2 { font-size: 18px; font-weight: 700; color: #334155; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+.status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.status-card { padding: 12px 16px; background: #f1f5f9; border-radius: 8px; border-left: 4px solid #94a3b8; }
+.status-card.ok { border-left-color: #10b981; background: #f0fdf4; }
+.status-card.error { border-left-color: #ef4444; background: #fef2f2; }
+.status-label { font-size: 12px; color: #64748b; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+.status-value { font-size: 16px; font-weight: 700; color: #1e293b; margin-top: 4px; }
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; padding: 12px; background: #f1f5f9; font-size: 12px; color: #64748b; font-weight: 600; text-transform: uppercase; }
+td { padding: 12px; border-bottom: 1px solid #e2e8f0; font-size: 14px; color: #334155; }
+.badge { display: inline-block; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+.badge.success { background: #d1fae5; color: #065f46; }
+.badge.danger { background: #fee2e2; color: #991b1b; }
+.badge.warning { background: #fef3c7; color: #92400e; }
+.btn { background: #3b82f6; color: white; border: none; padding: 10px 20px; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 14px; }
+.btn:hover { background: #2563eb; }
+.loading { text-align: center; padding: 40px; color: #64748b; }
+pre { background: #1e293b; color: #e2e8f0; padding: 16px; border-radius: 8px; overflow-x: auto; font-size: 13px; line-height: 1.6; }
+.timestamp { font-size: 12px; color: #94a3b8; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🔬 System Diagnostic</h1>
+  
+  <div class="section">
+    <h2>📊 Real-Time Status</h2>
+    <div class="status-grid" id="statusGrid">
+      <div class="loading">Loading diagnostic data...</div>
+    </div>
+    <button class="btn" onclick="runDiagnostic()">🔄 Refresh Diagnostic</button>
+    <div class="timestamp" id="timestamp"></div>
+  </div>
+
+  <div class="section">
+    <h2>👥 Alert Recipients</h2>
+    <table id="recipientsTable">
+      <thead>
+        <tr>
+          <th>Username</th>
+          <th>Email</th>
+          <th>Phone</th>
+          <th>Email Alerts</th>
+          <th>SMS Alerts</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody id="recipientsBody">
+        <tr><td colspan="6" style="text-align:center;padding:40px;color:#94a3b8;">Loading...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section">
+    <h2>🖥️ Monitor Last Run</h2>
+    <pre id="monitorLogs">Loading monitor logs...</pre>
+  </div>
+</div>
+
+<script>
+async function runDiagnostic() {
+  const token = localStorage.getItem('j2_admin_token');
+  if (!token) {
+    window.location.href = '/crm/';
+    return;
+  }
+
+  // Update timestamp
+  document.getElementById('timestamp').textContent = 'Last updated: ' + new Date().toLocaleString();
+
+  try {
+    // Fetch API health
+    const healthRes = await fetch('/api/health');
+    const health = await healthRes.json();
+
+    // Fetch staff/recipients
+    const staffRes = await fetch('/api/admin/staff', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    const staffData = await staffRes.json();
+
+    // Display status grid
+    const statusHtml = `
+      <div class="status-card ${health.status === 'ok' ? 'ok' : 'error'}">
+        <div class="status-label">API Status</div>
+        <div class="status-value">${health.status === 'ok' ? '✅ Online' : '❌ Offline'}</div>
+      </div>
+      <div class="status-card ok">
+        <div class="status-label">Database</div>
+        <div class="status-value">${health.services?.database || 'N/A'}</div>
+      </div>
+      <div class="status-card ok">
+        <div class="status-label">DB Latency</div>
+        <div class="status-value">${health.services?.dbLatency || 'N/A'}</div>
+      </div>
+      <div class="status-card ok">
+        <div class="status-label">Uptime</div>
+        <div class="status-value">${Math.round(health.uptime / 60)} min</div>
+      </div>
+      <div class="status-card ok">
+        <div class="status-label">Email Service</div>
+        <div class="status-value">${health.services?.email === 'configured' ? '✅ Ready' : '❌ Error'}</div>
+      </div>
+      <div class="status-card ok">
+        <div class="status-label">SMS Service</div>
+        <div class="status-value">${health.services?.sms === 'configured' ? '✅ Ready' : '❌ Error'}</div>
+      </div>
+    `;
+    document.getElementById('statusGrid').innerHTML = statusHtml;
+
+    // Display recipients table
+    const staff = staffData.staff || [];
+    const recipientsHtml = staff.map(s => `
+      <tr>
+        <td style="font-weight:600;">${s.username}</td>
+        <td>${s.email || '—'}</td>
+        <td>${s.phone || '—'}</td>
+        <td><span class="badge ${s.receive_email_alerts ? 'success' : 'danger'}">${s.receive_email_alerts ? '✅ Enabled' : '❌ Disabled'}</span></td>
+        <td><span class="badge ${s.receive_sms_alerts ? 'success' : 'danger'}">${s.receive_sms_alerts ? '✅ Enabled' : '❌ Disabled'}</span></td>
+        <td><span class="badge ${s.is_active ? 'success' : 'danger'}">${s.is_active ? 'Active' : 'Inactive'}</span></td>
+      </tr>
+    `).join('');
+    document.getElementById('recipientsBody').innerHTML = recipientsHtml;
+
+    // Count recipients
+    const emailCount = staff.filter(s => s.receive_email_alerts && s.is_active && s.email).length;
+    const smsCount = staff.filter(s => s.receive_sms_alerts && s.is_active && s.phone).length;
+    
+    document.getElementById('monitorLogs').textContent = 
+      `📬 Current Alert Recipients: ${emailCount} email(s), ${smsCount} SMS\n\n` +
+      `Monitor runs every 3 minutes via PM2 cron.\n` +
+      `Monitors 13 services: RADIUS SSH, FreeRADIUS, MariaDB, CPU, RAM, Disk (RADIUS),\n` +
+      `CRM API, PostgreSQL, Nginx, CPU, RAM, Disk (CRM), Internet connectivity.\n\n` +
+      `Last diagnostic run: ${new Date().toLocaleString()}`;
+
+  } catch (err) {
+    console.error('Diagnostic error:', err);
+    document.getElementById('statusGrid').innerHTML = '<div style="color:#ef4444;padding:20px;">Error loading diagnostic data</div>';
+  }
+}
+
+// Check auth on load
+const token = localStorage.getItem('j2_admin_token');
+if (!token) {
+  window.location.href = '/crm/';
+} else {
+  runDiagnostic();
+  // Auto-refresh every 30 seconds
+  setInterval(runDiagnostic, 30000);
+}
+</script>
+</body>
+</html>

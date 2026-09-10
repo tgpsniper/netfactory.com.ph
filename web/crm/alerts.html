@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+// ── Secure Fetch Interceptor ─────────────────────────────
+(function(){
+  const _fetch = window.fetch;
+  window.fetch = function(url, opts) {
+    opts = opts || {};
+    const urlStr = typeof url === 'string' ? url : (url.url || '');
+    if (urlStr.startsWith('/api') || urlStr.includes('/api/')) {
+      opts.credentials = 'include';
+      const method = (opts.method || 'GET').toUpperCase();
+      if (['POST','PUT','DELETE','PATCH'].includes(method)) {
+        opts.headers = opts.headers || {};
+        if (!opts.headers['X-CSRF-Token'] && !opts.headers['x-csrf-token']) {
+          const m = document.cookie.match(/j2_csrf=([^;]+)/);
+          if (m) opts.headers['X-CSRF-Token'] = m[1];
+        }
+      }
+    }
+    return _fetch.call(this, url, opts);
+  };
+})();
+</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>System Alerts — Netfactory CRM</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23dc2626'/><text x='50%25' y='55%25' dominant-baseline='middle' text-anchor='middle' fill='white' font-size='14' font-weight='800' font-family='sans-serif'>NF</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Plus Jakarta Sans',system-ui,sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh}
+  .wrap{max-width:1200px;margin:0 auto;padding:24px}
+
+  /* Banner */
+  .banner{background:linear-gradient(135deg,#450a0a 0%,#7f1d1d 50%,#991b1b 100%);border-radius:16px;padding:28px 32px;margin-bottom:24px;position:relative;overflow:hidden}
+  .banner::before{content:'';position:absolute;top:-40px;right:-40px;width:160px;height:160px;border-radius:50%;background:rgba(239,68,68,.15)}
+  .banner h1{font-size:22px;font-weight:800;margin-bottom:6px;display:flex;align-items:center;gap:10px;position:relative}
+  .banner p{color:rgba(255,255,255,.6);font-size:13px;position:relative}
+  .banner .meta{display:flex;gap:16px;margin-top:14px;flex-wrap:wrap;position:relative}
+  .banner .meta span{font-size:12px;color:rgba(255,255,255,.5);display:flex;align-items:center;gap:5px}
+
+  /* Summary Cards */
+  .summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin-bottom:24px}
+  .scard{background:#1e293b;border-radius:14px;padding:20px;border:1px solid #334155;transition:all .3s}
+  .scard .icon{width:42px;height:42px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px;margin-bottom:12px}
+  .scard .val{font-size:28px;font-weight:800;margin-bottom:4px}
+  .scard .lbl{font-size:12px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:1px}
+
+  /* Status Grid */
+  .section-title{font-size:16px;font-weight:700;margin-bottom:14px;display:flex;align-items:center;gap:8px}
+  .grid-3{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin-bottom:28px}
+  .check-card{background:#1e293b;border-radius:12px;padding:16px;border:1px solid #334155;display:flex;align-items:center;gap:14px;transition:all .3s}
+  .check-card.ok{border-color:#166534}
+  .check-card.fail{border-color:#dc2626;background:#1c1917}
+  .check-card .dot{width:12px;height:12px;border-radius:50%;flex-shrink:0}
+  .check-card.ok .dot{background:#22c55e;box-shadow:0 0 8px rgba(34,197,94,.4)}
+  .check-card.fail .dot{background:#ef4444;box-shadow:0 0 8px rgba(239,68,68,.4);animation:pulse 1.5s infinite}
+  .check-card .info{flex:1;min-width:0}
+  .check-card .name{font-size:13px;font-weight:700;margin-bottom:3px}
+  .check-card .detail{font-size:11px;color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .check-card .ts{font-size:10px;color:#475569}
+
+  /* Alert History Table */
+  .alert-table{width:100%;border-collapse:collapse;margin-bottom:28px}
+  .alert-table th{background:#1e293b;padding:10px 14px;text-align:left;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:1px;border-bottom:2px solid #334155}
+  .alert-table td{padding:10px 14px;border-bottom:1px solid #1e293b;font-size:13px}
+  .alert-table tr:hover td{background:rgba(255,255,255,.02)}
+  .badge{padding:3px 10px;border-radius:6px;font-size:11px;font-weight:700;white-space:nowrap}
+  .badge.critical{background:#fef2f2;color:#dc2626}
+  .badge.warning{background:#fffbeb;color:#d97706}
+  .badge.info{background:#f0fdf4;color:#16a34a}
+  .badge.error{background:#fef2f2;color:#dc2626}
+
+  /* Auto-refresh */
+  .refresh-bar{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:10px}
+  .refresh-bar .countdown{font-size:12px;color:#64748b;display:flex;align-items:center;gap:6px}
+  .refresh-bar .actions{display:flex;gap:8px}
+  .btn{padding:8px 16px;border-radius:8px;border:1px solid #334155;background:#1e293b;color:#e2e8f0;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;transition:all .2s;text-decoration:none;display:inline-block}
+  .btn:hover{border-color:#60a5fa;color:#60a5fa}
+  .btn.primary{background:#dc2626;border-color:#dc2626;color:#fff}
+  .btn.primary:hover{background:#b91c1c}
+
+  /* Loading & Empty */
+  .loading{text-align:center;padding:60px;color:#64748b;font-size:14px}
+  .spinner{display:inline-block;width:20px;height:20px;border:2px solid #334155;border-top-color:#ef4444;border-radius:50%;animation:spin .6s linear infinite;margin-right:8px;vertical-align:middle}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+
+  .empty{text-align:center;padding:48px;color:#475569;font-size:13px}
+  .empty .icon{font-size:40px;margin-bottom:12px;opacity:.5}
+
+  /* Auth error */
+  .auth-error{background:#450a0a;border:1px solid #7f1d1d;border-radius:12px;padding:32px;text-align:center;max-width:500px;margin:80px auto}
+  .auth-error .icon{font-size:48px;margin-bottom:16px}
+  .auth-error h2{font-size:20px;font-weight:700;margin-bottom:8px}
+  .auth-error p{color:#94a3b8;font-size:14px;margin-bottom:20px}
+</style>
+</head>
+<body>
+<div class="wrap" id="app">
+  <div class="loading"><span class="spinner"></span> Loading monitor status...</div>
+</div>
+<script>
+const API = window.location.origin + '/api';
+const TOKEN = localStorage.getItem('j2_admin_token');
+const REFRESH_INTERVAL = 30; // seconds
+const RADIUS_IP = '10.0.98.4';
+let countdown = REFRESH_INTERVAL;
+let timer = null;
+
+const $ = id => document.getElementById(id);
+
+// Check authentication on load
+if (!TOKEN) {
+  $('app').innerHTML = `
+    <div class="auth-error">
+      <div class="icon">🔐</div>
+      <h2>Authentication Required</h2>
+      <p>You need to be logged in to the CRM to view system alerts.</p>
+      <a href="/crm/" class="btn primary">Return to CRM Dashboard</a>
+    </div>
+  `;
+  throw new Error('Not authenticated');
+}
+
+async function fetchJSON(url) {
+  const res = await fetch(url, { headers: { 'Authorization': `Bearer ${TOKEN}` }});
+  if (!res.ok) {
+    if (res.status === 401) {
+      $('app').innerHTML = `
+        <div class="auth-error">
+          <div class="icon">⚠️</div>
+          <h2>Session Expired</h2>
+          <p>Your session has expired. Please log in again.</p>
+          <a href="/crm/" class="btn primary">Return to CRM Dashboard</a>
+        </div>
+      `;
+      throw new Error('Session expired');
+    }
+    throw new Error(`HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+function timeAgo(ts) {
+  if (!ts) return '—';
+  const diff = Date.now() - new Date(ts).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
+function formatDate(ts) {
+  if (!ts) return '—';
+  return new Date(ts).toLocaleString('en-PH', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+async function loadData() {
+  try {
+    const [stateRes, notifsRes] = await Promise.all([
+      fetchJSON(`${API}/admin/monitor/state`),
+      fetchJSON(`${API}/admin/notifications?type=system&limit=50`)
+    ]);
+
+    const state = stateRes.state || {};
+    const notifs = notifsRes.notifications || notifsRes || [];
+
+    render(state, notifs);
+  } catch (err) {
+    console.error('Load error:', err);
+    try {
+      const stateRes = await fetchJSON(`${API}/admin/monitor/state`);
+      render(stateRes.state || {}, []);
+    } catch {
+      $('app').innerHTML = `
+        <div class="banner">
+          <h1>🔔 System Alerts</h1>
+          <p>Health monitoring dashboard</p>
+        </div>
+        <div class="empty">
+          <div class="icon">📡</div>
+          <div>Monitor not yet running. Deploy the health monitor service first.</div>
+          <div style="margin-top:12px;font-size:12px;color:#475569">
+            <code style="background:#1e293b;padding:4px 10px;border-radius:6px">pm2 start monitor.config.js</code>
+          </div>
+        </div>
+      `;
+    }
+  }
+}
+
+function render(state, notifs) {
+  const checks = Object.entries(state).map(([key, val]) => ({
+    key,
+    name: key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()).replace('Crm', 'CRM').replace('Freeradius', 'RADIUS').replace('Mariadb', 'Database').replace('Postgresql', 'Database'),
+    ...val
+  }));
+
+  const okCount = checks.filter(c => c.ok).length;
+  const failCount = checks.filter(c => !c.ok).length;
+  const totalCount = checks.length;
+  const lastCheck = checks.length > 0 ? checks[0].timestamp : null;
+
+  const alertNotifs = Array.isArray(notifs)
+    ? notifs.filter(n => n.type === 'error' || n.type === 'warning' || (n.title && n.title.includes('Alert')) || (n.title && n.title.includes('Recovery')))
+    : [];
+
+  const overallStatus = failCount === 0 ? 'healthy' : failCount >= 3 ? 'critical' : 'degraded';
+  const statusEmoji = { healthy: '✅', degraded: '⚠️', critical: '🚨' }[overallStatus];
+  const statusText = { healthy: 'All Systems Operational', degraded: 'Some Services Degraded', critical: 'Critical Issues Detected' }[overallStatus];
+
+  $('app').innerHTML = `
+    <div class="banner" style="background:linear-gradient(135deg,${overallStatus === 'healthy' ? '#052e16,#166534' : overallStatus === 'degraded' ? '#451a03,#92400e' : '#450a0a,#991b1b'})">
+      <h1>${statusEmoji} System Alerts & Health</h1>
+      <p>${statusText}</p>
+      <div class="meta">
+        <span>🕐 Last check: ${lastCheck ? timeAgo(lastCheck) : 'Never'}</span>
+        <span>📡 Monitor interval: 3 minutes</span>
+        <span>🔔 Alerts: CRM + Email + SMS</span>
+      </div>
+    </div>
+
+    <div class="summary">
+      <div class="scard">
+        <div class="icon" style="background:${failCount === 0 ? '#052e16' : '#450a0a'};color:${failCount === 0 ? '#22c55e' : '#ef4444'}">
+          ${failCount === 0 ? '✅' : '🚨'}
+        </div>
+        <div class="val" style="color:${failCount === 0 ? '#22c55e' : '#ef4444'}">${failCount === 0 ? 'OK' : failCount}</div>
+        <div class="lbl">${failCount === 0 ? 'All Clear' : 'Active Issues'}</div>
+      </div>
+      <div class="scard">
+        <div class="icon" style="background:#1e3a5f;color:#60a5fa">📊</div>
+        <div class="val">${okCount}/${totalCount}</div>
+        <div class="lbl">Checks Passing</div>
+      </div>
+      <div class="scard">
+        <div class="icon" style="background:#1a2e05;color:#84cc16">📶</div>
+        <div class="val">${checks.find(c => c.key === 'internet')?.ok ? 'UP' : 'DOWN'}</div>
+        <div class="lbl">Internet</div>
+      </div>
+      <div class="scard">
+        <div class="icon" style="background:#2e1065;color:#a78bfa">📋</div>
+        <div class="val">${alertNotifs.length}</div>
+        <div class="lbl">Recent Alerts</div>
+      </div>
+    </div>
+
+    <div class="refresh-bar">
+      <div class="countdown">⏱️ Auto-refresh in <strong id="cd">${countdown}s</strong></div>
+      <div class="actions">
+        <button class="btn" onclick="loadData()">🔄 Refresh Now</button>
+        <a href="/crm/" class="btn">← Back to CRM</a>
+      </div>
+    </div>
+
+    <div class="section-title">📶 RADIUS Server (${RADIUS_IP})</div>
+    <div class="grid-3">
+      ${renderCheckCards(checks, ['radius_ssh', 'freeradius', 'mariadb', 'radius_cpu', 'radius_ram', 'radius_disk'])}
+    </div>
+
+    <div class="section-title">🖥️ CRM Server (172.31.73.134)</div>
+    <div class="grid-3">
+      ${renderCheckCards(checks, ['crm_api_(j2-api)', 'postgresql', 'nginx', 'crm_cpu', 'crm_ram', 'crm_disk'])}
+    </div>
+
+    <div class="section-title">🌐 Connectivity</div>
+    <div class="grid-3">
+      ${renderCheckCards(checks, ['internet'])}
+    </div>
+
+    <div class="section-title">📜 Alert History</div>
+    ${alertNotifs.length > 0 ? `
+      <table class="alert-table">
+        <thead><tr><th>Time</th><th>Type</th><th>Alert</th><th>Message</th></tr></thead>
+        <tbody>
+          ${alertNotifs.slice(0, 30).map(n => `
+            <tr>
+              <td style="white-space:nowrap;color:#64748b">${formatDate(n.created_at)}</td>
+              <td><span class="badge ${n.type}">${n.type === 'error' ? '🚨 Critical' : n.type === 'warning' ? '⚠️ Warning' : '✅ Info'}</span></td>
+              <td style="font-weight:600">${n.title || '—'}</td>
+              <td style="color:#94a3b8;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${n.message || '—'}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    ` : `
+      <div class="empty">
+        <div class="icon">🎉</div>
+        <div>No alerts recorded yet. The monitor will create alerts when services go down or recover.</div>
+      </div>
+    `}
+  `;
+
+  startCountdown();
+}
+
+function renderCheckCards(checks, keys) {
+  const nameMap = { 'radius_ssh': 'RADIUS SSH', 'freeradius': 'RADIUS', 'mariadb': 'Database', 'radius_cpu': 'RADIUS CPU', 'radius_ram': 'RADIUS RAM', 'radius_disk': 'RADIUS SSD DRIVE', 'crm_api_(j2-api)': 'CRM API', 'crm_cpu': 'CRM CPU', 'crm_ram': 'CRM RAM', 'crm_disk': 'CRM SSD DRIVE', 'postgresql': 'Database', 'nginx': 'NGINX', 'internet': 'Internet' };
+  return keys.map(key => {
+    const check = checks.find(c => c.key === key || c.key === key.replace(/[()]/g, '').replace(/-/g, '_'));
+    if (!check) return `
+      <div class="check-card" style="opacity:.5">
+        <div class="dot" style="background:#475569"></div>
+        <div class="info">
+          <div class="name">${nameMap[key] || key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</div>
+          <div class="detail">No data yet</div>
+        </div>
+      </div>
+    `;
+    return `
+      <div class="check-card ${check.ok ? 'ok' : 'fail'}">
+        <div class="dot"></div>
+        <div class="info">
+          <div class="name">${nameMap[key] || check.name}</div>
+          <div class="detail">${check.detail || '—'}</div>
+          <div class="ts">${check.timestamp ? timeAgo(check.timestamp) : ''}</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function startCountdown() {
+  if (timer) clearInterval(timer);
+  countdown = REFRESH_INTERVAL;
+  timer = setInterval(() => {
+    countdown--;
+    const cdEl = $('cd');
+    if (cdEl) cdEl.textContent = countdown + 's';
+    if (countdown <= 0) {
+      clearInterval(timer);
+      loadData();
+    }
+  }, 1000);
+}
+
+// Boot
+loadData();
+</script>
+</body>
+</html>

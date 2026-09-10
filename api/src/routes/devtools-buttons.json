@@ -1,0 +1,76 @@
+{
+  "buttons": [
+    {
+      "label": "API Health",
+      "command": "curl -s http://localhost:3001/api/health | python3 -m json.tool",
+      "color": "#00e676",
+      "icon": "🩺",
+      "description": "Check API status, DB connectivity, and which services are configured. Read-only.",
+      "group": "Diagnostics",
+      "id": "nf-health-01"
+    },
+    {
+      "label": "API Logs",
+      "command": "pm2 logs isp-api --lines 40 --nostream",
+      "color": "#40c4ff",
+      "icon": "📜",
+      "description": "Show the last 40 lines of the API log (pm2 process 'isp-api'). Read-only.",
+      "group": "Diagnostics",
+      "id": "nf-logs-01"
+    },
+    {
+      "label": "Restart API",
+      "command": "pm2 restart isp-api --update-env\nsleep 2\npm2 logs isp-api --lines 20 --nostream",
+      "color": "#40c4ff",
+      "icon": "🔄",
+      "description": "Restart the Node API and show recent logs.",
+      "group": "Maintenance",
+      "id": "nf-restart-01"
+    },
+    {
+      "label": "Routes Finder",
+      "command": "find /home/ashraf/Node.js_API/j2-api/src -name \"*.js\" -not -path \"*/node_modules/*\" 2>/dev/null",
+      "color": "#00e676",
+      "icon": "🔎",
+      "description": "List all API source JS files. Read-only.",
+      "group": "Diagnostics",
+      "id": "nf-routes-01"
+    },
+    {
+      "label": "DB Table Count",
+      "command": "cd /home/ashraf/Node.js_API/j2-api && . scripts/dbenv.sh && psql -t -c \"SELECT count(*) AS public_tables FROM information_schema.tables WHERE table_schema='public';\"",
+      "color": "#00e676",
+      "icon": "🗄️",
+      "description": "Count public tables in the ispdb database, using the API's own credentials (no sudo). Read-only.",
+      "group": "Diagnostics",
+      "id": "nf-dbcount-01"
+    },
+    {
+      "label": "Backup Database",
+      "command": "cd /home/ashraf/Node.js_API/j2-api && . scripts/dbenv.sh && mkdir -p ~/backups/db && pg_dump | gzip > ~/backups/db/ispdb_$(date +%F_%H%M).sql.gz && ls -lh ~/backups/db/ | tail -3",
+      "color": "#40c4ff",
+      "icon": "💾",
+      "description": "Dump the ispdb database to a timestamped gzip file under ~/backups/db/.",
+      "group": "Maintenance",
+      "id": "nf-dbbackup-01"
+    },
+    {
+      "label": "Unlock All Locked Users",
+      "command": "cd /home/ashraf/Node.js_API/j2-api && . scripts/dbenv.sh && psql -c \"UPDATE subscriber_auth SET failed_attempts=0, locked_until=NULL WHERE locked_until IS NOT NULL;\"",
+      "color": "#ffab40",
+      "icon": "🔓",
+      "description": "Clear failed-login lockouts for any currently-locked portal accounts. Non-destructive.",
+      "group": "Maintenance",
+      "id": "nf-unlock-01"
+    },
+    {
+      "label": "Clear My Session (browser)",
+      "command": "document.cookie = 'j2_admin_token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';\ndocument.cookie = 'j2_csrf=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';\nlocalStorage.removeItem('j2_admin_token');\nlocalStorage.removeItem('j2_admin_user');",
+      "color": "#00e676",
+      "icon": "🧹",
+      "description": "Clear admin auth cookies/localStorage in your own browser (client-side only).",
+      "group": "General",
+      "id": "nf-clearsession-01"
+    }
+  ]
+}

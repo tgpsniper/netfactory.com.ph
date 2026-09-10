@@ -1,0 +1,16 @@
+# Catch-all for requests whose Host matches no other vhost — scanners hitting the
+# bare IP, stale hostnames, junk. Without this, nginx falls back to whichever
+# vhost loaded first, which was acs-netfactory: every internet scan was being
+# handed the GenieACS admin login page (see acs-access.log).
+#
+# 444 closes the connection with no response at all, which is the cheapest thing
+# to give a scanner. Named vhosts are unaffected — including the ACME challenge,
+# which always arrives addressed to a real hostname.
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+
+    access_log /var/log/nginx/catchall-access.log;
+    return 444;
+}

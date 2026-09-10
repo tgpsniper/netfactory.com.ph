@@ -1,0 +1,2526 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+// ── Secure Fetch Interceptor ─────────────────────────────
+// Automatically adds credentials + CSRF to all /api/ requests
+(function(){
+  const _fetch = window.fetch;
+  window.fetch = function(url, opts) {
+    opts = opts || {};
+    const urlStr = typeof url === 'string' ? url : (url.url || '');
+    if (urlStr.startsWith('/api') || urlStr.includes('/api/')) {
+      opts.credentials = 'include';
+      const method = (opts.method || 'GET').toUpperCase();
+      if (['POST','PUT','DELETE','PATCH'].includes(method)) {
+        opts.headers = opts.headers || {};
+        if (!opts.headers['X-CSRF-Token'] && !opts.headers['x-csrf-token']) {
+          const m = document.cookie.match(/j2_csrf=([^;]+)/);
+          if (m) opts.headers['X-CSRF-Token'] = m[1];
+        }
+      }
+    }
+    return _fetch.call(this, url, opts);
+  };
+})();
+</script>
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OLT Manager — Netfactory CRM</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%233b82f6'/><text x='50%25' y='55%25' dominant-baseline='middle' text-anchor='middle' fill='white' font-size='14' font-weight='800' font-family='sans-serif'>NF</text></svg>">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; overflow: hidden; }
+  #root { height: 100vh; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #3b82f6; border-radius: 8px; }
+  ::-webkit-scrollbar-thumb:hover { background: #60a5fa; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text-jsx-source" id="jsx-source">
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+// ── Auth check ──────────────────────────────────────────────
+(function(){
+  const tok = document.cookie.split(';').map(c=>c.trim()).find(c=>c.startsWith('j2_admin_token='))?.split('=')[1] || localStorage.getItem('j2_admin_token');
+  if (!tok) window.location.href = '/crm/';
+})();
+
+// ── Theme ───────────────────────────────────────────────────
+const t = {
+  bg: '#1e293b', bgCard: '#253347', text: '#e2e8f0', textSec: '#94a3b8', textMuted: '#64748b',
+  border: '#334155', accent: '#60a5fa', accentDk: '#3b82f6',
+  shadow: '0 1px 3px rgba(0,0,0,.15)', shadowLg: '0 10px 30px rgba(0,0,0,.2)',
+  input: '#1e293b', inputBorder: '#334155', success: '#34d399', warning: '#fbbf24',
+  danger: '#f87171', info: '#22d3ee', sidebar: '#111827',
+};
+
+const API = '/api/admin/olt';
+
+// ============================================================
+//  SHARED COMPONENTS
+// ============================================================
+
+const Icon = ({ name, style = {} }) => {
+  if (!name) return null;
+  if (name.startsWith('fa-')) return <i className={"fas " + name} style={style}></i>;
+  if (name.startsWith('far ')) return <i className={name} style={style}></i>;
+  if (name.startsWith('fas ')) return <i className={name} style={style}></i>;
+  if (name.startsWith('fab ')) return <i className={name} style={style}></i>;
+  return <i className={"fas " + name} style={style}></i>;
+};
+
+const Card = ({ children, style = {} }) => (
+  <div style={{ background: t.bgCard, borderRadius: 16, border: `1px solid ${t.border}`, boxShadow: t.shadow, padding: 24, transition: 'all .3s', ...style }}>{children}</div>
+);
+
+const Badge = ({ color, label }) => (
+  <span style={{ display:'inline-flex', alignItems:'center', gap:5, padding:'4px 12px', borderRadius:20, fontSize:11, fontWeight:600, background:`${color}18`, color, textTransform:'capitalize' }}>
+    <span style={{ width:6, height:6, borderRadius:'50%', background:color }} />{label}
+  </span>
+);
+
+const Btn = ({ children, primary, danger, success, small, disabled, onClick, style = {} }) => (
+  <button onClick={onClick} disabled={disabled} style={{
+    padding: small ? '6px 14px' : '10px 20px', borderRadius: 10,
+    background: danger ? t.danger : success ? t.success : primary ? `linear-gradient(135deg,${t.accent},${t.accentDk})` : t.bgCard,
+    color: primary || danger || success ? '#fff' : t.textSec,
+    border: primary || danger || success ? 'none' : `1px solid ${t.border}`,
+    fontSize: small ? 12 : 13, fontWeight: 600, cursor: disabled ? 'not-allowed' : 'pointer',
+    transition: 'all .3s', fontFamily: 'inherit', opacity: disabled ? 0.5 : 1,
+    display: 'inline-flex', alignItems: 'center', gap: 6, ...style,
+  }}>{children}</button>
+);
+
+const StatCard = ({ icon, label, value, sub, color }) => (
+  <Card style={{ display:'flex', gap:16, alignItems:'center' }}>
+    <div style={{ width:52, height:52, borderRadius:14, background:`${color}15`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:24, color }}><Icon name={icon} /></div>
+    <div style={{ flex:1 }}>
+      <div style={{ fontSize:12, color:t.textMuted, fontWeight:500, marginBottom:2 }}>{label}</div>
+      <div style={{ fontSize:24, fontWeight:800, color:t.text }}>{value}</div>
+      {sub && <div style={{ fontSize:11, color:t.textMuted, marginTop:2 }}>{sub}</div>}
+    </div>
+  </Card>
+);
+
+const TableHead = ({ children, style: s = {} }) => (
+  <th style={{ padding:'12px 16px', textAlign:'left', fontSize:11, fontWeight:700, color:t.textMuted, textTransform:'uppercase', letterSpacing:.5, borderBottom:`2px solid ${t.border}`, background:t.bgCard, whiteSpace:'nowrap', ...s }}>{children}</th>
+);
+
+const TableCell = ({ children, style = {} }) => (
+  <td style={{ padding:'14px 16px', fontSize:13, color:t.textSec, borderBottom:`1px solid ${t.border}`, ...style }}>{children}</td>
+);
+
+const InputField = ({ label, value, onChange, placeholder, type = 'text', options, disabled, style = {} }) => (
+  <div style={{ marginBottom:14, ...style }}>
+    {label && <label style={{ fontSize:12, fontWeight:600, color:t.textSec, marginBottom:6, display:'block' }}>{label}</label>}
+    {options ? (
+      <select value={value} onChange={e => onChange(e.target.value)} disabled={disabled} style={{ width:'100%', padding:'12px 14px', border:`1px solid ${t.inputBorder}`, borderRadius:10, fontSize:13, background:t.input, color:t.text, fontFamily:'inherit', outline:'none' }}>
+        {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+    ) : (
+      <input type={type} value={value} onChange={e => onChange(type === 'number' ? e.target.value : e.target.value)} placeholder={placeholder} disabled={disabled}
+        style={{ width:'100%', padding:'12px 14px', border:`1px solid ${t.inputBorder}`, borderRadius:10, fontSize:13, background:t.input, color:t.text, fontFamily:'inherit', outline:'none' }} />
+    )}
+  </div>
+);
+
+const Modal = ({ title, onClose, children, wide }) => (
+  <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.6)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:20 }} onClick={onClose}>
+    <div onClick={e => e.stopPropagation()} style={{ background:t.bgCard, borderRadius:16, border:`1px solid ${t.border}`, boxShadow:t.shadowLg, width: wide ? 900 : 560, maxWidth:'95vw', maxHeight:'90vh', display:'flex', flexDirection:'column' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'20px 24px', borderBottom:`1px solid ${t.border}` }}>
+        <h3 style={{ fontSize:16, fontWeight:700, color:t.text }}>{title}</h3>
+        <button onClick={onClose} style={{ background:'none', border:'none', color:t.textMuted, cursor:'pointer', fontSize:18, padding:4 }}><Icon name="fa-times" /></button>
+      </div>
+      <div style={{ padding:24, overflow:'auto', flex:1 }}>{children}</div>
+    </div>
+  </div>
+);
+
+const Tabs = ({ tabs, active, onChange }) => (
+  <div style={{ display:'flex', gap:0, borderBottom:`2px solid ${t.border}`, background:t.bgCard, paddingLeft:16, overflow:'auto' }}>
+    {tabs.map(tab => (
+      <button key={tab.id} onClick={() => onChange(tab.id)} style={{
+        padding:'14px 20px', fontSize:13, fontWeight:600, cursor:'pointer', fontFamily:'inherit',
+        background:'none', border:'none', borderBottom: active === tab.id ? `2px solid ${t.accent}` : '2px solid transparent',
+        color: active === tab.id ? t.accent : t.textMuted, marginBottom:-2, transition:'all .2s',
+        display:'flex', alignItems:'center', gap:8, whiteSpace:'nowrap',
+      }}>
+        <Icon name={tab.icon} style={{ fontSize:14 }} /> {tab.label}
+      </button>
+    ))}
+  </div>
+);
+
+const SignalMeter = ({ value, label, unit = 'dBm' }) => {
+  if (value == null || value === '' || isNaN(value)) return <span style={{ color:t.textMuted, fontSize:12 }}>N/A</span>;
+  const num = parseFloat(value);
+  let color = t.success;
+  if (num < -28) color = t.danger;
+  else if (num < -25) color = t.warning;
+  const pct = Math.max(0, Math.min(100, ((num + 40) / 30) * 100));
+  return (
+    <div style={{ display:'flex', alignItems:'center', gap:8, minWidth:120 }}>
+      <div style={{ flex:1, height:8, borderRadius:4, background:t.border, overflow:'hidden', minWidth:60 }}>
+        <div style={{ width:`${pct}%`, height:'100%', borderRadius:4, background:color, transition:'width .5s' }} />
+      </div>
+      <span style={{ fontSize:12, fontWeight:600, color, minWidth:56, textAlign:'right' }}>{num.toFixed(2)} {unit}</span>
+    </div>
+  );
+};
+
+const RxPowerBadge = ({ value }) => {
+  if (value == null || value === '' || isNaN(value)) return <span style={{ color:t.textMuted, fontSize:12 }}>N/A</span>;
+  const num = parseFloat(value);
+  let color = t.success;
+  let label = 'Good';
+  if (num < -28) { color = t.danger; label = 'Critical'; }
+  else if (num < -25) { color = t.warning; label = 'Warning'; }
+  return (
+    <span style={{ display:'inline-flex', alignItems:'center', gap:4, fontSize:12, fontWeight:600, color }}>
+      <span style={{ width:6, height:6, borderRadius:'50%', background:color }} />
+      {num.toFixed(2)} dBm
+    </span>
+  );
+};
+
+const StatusBadge = ({ status }) => {
+  if (!status) return <Badge color={t.textMuted} label="unknown" />;
+  const s = status.toLowerCase();
+  if (s === 'online' || s === 'active') return <Badge color={t.success} label={status} />;
+  if (s === 'offline' || s === 'inactive') return <Badge color={t.danger} label={status} />;
+  if (s === 'dormant' || s === 'standby') return <Badge color={t.warning} label={status} />;
+  return <Badge color={t.info} label={status} />;
+};
+
+const EmptyState = ({ icon, title, sub }) => (
+  <div style={{ textAlign:'center', padding:'60px 20px' }}>
+    <div style={{ fontSize:48, color:t.textMuted, marginBottom:16 }}><Icon name={icon || 'fa-inbox'} /></div>
+    <div style={{ fontSize:16, fontWeight:600, color:t.text, marginBottom:8 }}>{title}</div>
+    {sub && <div style={{ fontSize:13, color:t.textMuted }}>{sub}</div>}
+  </div>
+);
+
+const LoadingSpinner = ({ text }) => (
+  <div style={{ textAlign:'center', padding:'60px 20px' }}>
+    <div style={{ fontSize:32, color:t.accent, marginBottom:16 }}><Icon name="fa-spinner fa-spin" /></div>
+    <div style={{ fontSize:14, color:t.textMuted }}>{text || 'Loading...'}</div>
+  </div>
+);
+
+const Toast = ({ message, type, onClose }) => {
+  useEffect(() => { const tm = setTimeout(onClose, 4000); return () => clearTimeout(tm); }, []);
+  const bg = type === 'success' ? t.success : type === 'error' ? t.danger : t.warning;
+  return (
+    <div style={{ position:'fixed', top:20, right:20, zIndex:2000, background:bg, color:'#fff', padding:'14px 24px', borderRadius:12, fontSize:13, fontWeight:600, boxShadow:t.shadowLg, display:'flex', alignItems:'center', gap:10, maxWidth:400 }}>
+      <Icon name={type === 'success' ? 'fa-check-circle' : type === 'error' ? 'fa-exclamation-circle' : 'fa-info-circle'} />
+      {message}
+      <button onClick={onClose} style={{ background:'none', border:'none', color:'#fff', cursor:'pointer', marginLeft:8 }}><Icon name="fa-times" /></button>
+    </div>
+  );
+};
+
+const ConfirmDialog = ({ title, message, onConfirm, onCancel }) => (
+  <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.6)', zIndex:2000, display:'flex', alignItems:'center', justifyContent:'center', padding:20 }}>
+    <Card style={{ width:440, maxWidth:'95vw', textAlign:'center', padding:32 }}>
+      <div style={{ fontSize:48, color:t.warning, marginBottom:16 }}><Icon name="fa-exclamation-triangle" /></div>
+      <h3 style={{ fontSize:18, fontWeight:700, color:t.text, marginBottom:12 }}>{title}</h3>
+      <p style={{ fontSize:13, color:t.textSec, marginBottom:24 }}>{message}</p>
+      <div style={{ display:'flex', gap:12, justifyContent:'center' }}>
+        <Btn onClick={onCancel}><Icon name="fa-times" /> Cancel</Btn>
+        <Btn danger onClick={onConfirm}><Icon name="fa-check" /> Confirm</Btn>
+      </div>
+    </Card>
+  </div>
+);
+
+
+// ============================================================
+//  OVERVIEW TAB
+// ============================================================
+
+const OverviewTab = ({ deviceId }) => {
+  const [sysInfo, setSysInfo] = useState(null);
+  const [ports, setPorts] = useState([]);
+  const [tempData, setTempData] = useState(null);
+  const [fanData, setFanData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [lastRefresh, setLastRefresh] = useState(null);
+
+  const loadData = useCallback(async () => {
+    if (!deviceId) return;
+    try {
+      setLoading(true);
+      setError(null);
+      const [sysRes, portsRes, tempRes, fanRes] = await Promise.all([
+        fetch(`${API}/devices/${deviceId}/system`),
+        fetch(`${API}/devices/${deviceId}/pon-ports`),
+        fetch(`${API}/devices/${deviceId}/system/temperature`).catch(() => null),
+        fetch(`${API}/devices/${deviceId}/system/fans`).catch(() => null),
+      ]);
+      const sysData = await sysRes.json();
+      const portsData = await portsRes.json();
+      if (sysRes.ok) setSysInfo(sysData);
+      else setError(sysData.error || 'Failed to load system info');
+      if (portsRes.ok) setPorts(portsData.ports || []);
+      if (tempRes && tempRes.ok) { const td = await tempRes.json(); setTempData(td); }
+      if (fanRes && fanRes.ok) { const fd = await fanRes.json(); setFanData(fd); }
+      setLastRefresh(new Date());
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [deviceId]);
+
+  useEffect(() => { loadData(); }, [loadData]);
+
+  useEffect(() => {
+    if (!deviceId) return;
+    const iv = setInterval(loadData, 30000);
+    return () => clearInterval(iv);
+  }, [deviceId, loadData]);
+
+  if (!deviceId) return <EmptyState icon="fa-server" title="No Device Selected" sub="Select an OLT device from the dropdown above" />;
+  if (loading && !sysInfo) return <LoadingSpinner text="Loading system overview..." />;
+  if (error && !sysInfo) return <EmptyState icon="fa-exclamation-triangle" title="Error" sub={error} />;
+
+  const totalOnus = ports.reduce((s, p) => s + (p.onuCount || 0), 0);
+  const totalOnline = ports.reduce((s, p) => s + (p.onlineCount || 0), 0);
+  const totalOffline = ports.reduce((s, p) => s + (p.offlineCount || 0), 0);
+  const onlinePct = totalOnus > 0 ? ((totalOnline / totalOnus) * 100).toFixed(1) : 0;
+  const temperature = tempData?.temperature ?? sysInfo?.temperature ?? null;
+
+  return (
+    <div style={{ padding:24 }}>
+      {/* Header with auto-refresh indicator */}
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:24 }}>
+        <div>
+          <h2 style={{ fontSize:20, fontWeight:700, color:t.text }}>System Overview</h2>
+          {lastRefresh && (
+            <div style={{ fontSize:11, color:t.textMuted, marginTop:4 }}>
+              <Icon name="fa-clock" style={{ marginRight:4, fontSize:10 }} />
+              Last refreshed: {lastRefresh.toLocaleTimeString()} (auto-refresh every 30s)
+            </div>
+          )}
+        </div>
+        <Btn small onClick={loadData}><Icon name="fa-sync-alt" /> Refresh</Btn>
+      </div>
+
+      {/* System info cards */}
+      <h3 style={{ fontSize:14, fontWeight:700, color:t.text, marginBottom:12 }}>
+        <Icon name="fa-info-circle" style={{ marginRight:8, color:t.accent }} />
+        System Information
+      </h3>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))', gap:16, marginBottom:32 }}>
+        <StatCard icon="fa-server" label="System Name" value={sysInfo?.sysName || 'N/A'} color={t.accent} />
+        <Card style={{ display:'flex', gap:16, alignItems:'center' }}>
+          <div style={{ width:52, height:52, borderRadius:14, background:`${t.info}15`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:24, color:t.info }}><Icon name="fa-file-alt" /></div>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ fontSize:12, color:t.textMuted, fontWeight:500, marginBottom:2 }}>Description</div>
+            <div style={{ fontSize:13, fontWeight:600, color:t.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={sysInfo?.sysDescr || ''}>
+              {sysInfo?.sysDescr ? sysInfo.sysDescr.substring(0, 50) : 'N/A'}
+            </div>
+          </div>
+        </Card>
+        <StatCard icon="fa-microchip" label="Model" value={sysInfo?.model || 'N/A'} color={t.accentDk} />
+        <StatCard icon="fa-code-branch" label="Firmware" value={sysInfo?.firmware || sysInfo?.sysDescr?.match(/V[\d.]+/)?.[0] || 'N/A'} color={t.success} />
+        <StatCard icon="fa-clock" label="Uptime" value={sysInfo?.uptime || 'N/A'} color={t.warning} />
+        <Card style={{ display:'flex', gap:16, alignItems:'center' }}>
+          <div style={{ width:52, height:52, borderRadius:14, background:`${temperature != null && temperature > 60 ? t.danger : t.success}15`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:24, color: temperature != null && temperature > 60 ? t.danger : t.success }}><Icon name="fa-thermometer-half" /></div>
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:12, color:t.textMuted, fontWeight:500, marginBottom:2 }}>Temperature</div>
+            <div style={{ fontSize:24, fontWeight:800, color: temperature != null && temperature > 60 ? t.danger : t.text }}>{temperature != null ? `${temperature}°C` : 'N/A'}</div>
+            {temperature != null && (
+              <div style={{ marginTop:4, height:4, borderRadius:2, background:t.border, overflow:'hidden', width:'100%' }}>
+                <div style={{ width:`${Math.min(100, (temperature / 80) * 100)}%`, height:'100%', borderRadius:2, background: temperature > 70 ? t.danger : temperature > 55 ? t.warning : t.success, transition:'width .5s' }} />
+              </div>
+            )}
+          </div>
+        </Card>
+      </div>
+
+      {/* Fan status if available */}
+      {fanData && fanData.fans && fanData.fans.length > 0 && (
+        <div style={{ marginBottom:32 }}>
+          <h3 style={{ fontSize:14, fontWeight:700, color:t.text, marginBottom:12 }}>
+            <Icon name="fa-fan" style={{ marginRight:8, color:t.info }} />
+            Fan Status
+          </h3>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))', gap:12 }}>
+            {fanData.fans.map(fan => (
+              <Card key={fan.index} style={{ padding:14, display:'flex', alignItems:'center', gap:12 }}>
+                <div style={{ width:36, height:36, borderRadius:10, background:`${fan.statusText === 'running' ? t.success : t.danger}15`, display:'flex', alignItems:'center', justifyContent:'center' }}>
+                  <Icon name="fa-fan" style={{ color: fan.statusText === 'running' ? t.success : t.danger, fontSize:16 }} />
+                </div>
+                <div>
+                  <div style={{ fontSize:12, color:t.textMuted }}>Fan {fan.index}</div>
+                  <div style={{ fontSize:13, fontWeight:700, color: fan.statusText === 'running' ? t.success : t.danger, textTransform:'capitalize' }}>{fan.statusText}</div>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ONU summary with percentage ring */}
+      <h3 style={{ fontSize:14, fontWeight:700, color:t.text, marginBottom:12 }}>
+        <Icon name="fa-cube" style={{ marginRight:8, color:t.accent }} />
+        ONU Summary
+      </h3>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))', gap:16, marginBottom:32 }}>
+        <StatCard icon="fa-network-wired" label="Total ONUs" value={totalOnus} sub={`${ports.length} PON ports`} color={t.accent} />
+        <StatCard icon="fa-check-circle" label="Online" value={totalOnline} sub={`${onlinePct}% of total`} color={t.success} />
+        <StatCard icon="fa-times-circle" label="Offline" value={totalOffline} sub={totalOffline > 0 ? 'Needs attention' : 'All good'} color={t.danger} />
+        <Card style={{ display:'flex', gap:16, alignItems:'center' }}>
+          <div style={{ position:'relative', width:52, height:52 }}>
+            <svg width="52" height="52" viewBox="0 0 52 52">
+              <circle cx="26" cy="26" r="22" fill="none" stroke={t.border} strokeWidth="4" />
+              <circle cx="26" cy="26" r="22" fill="none" stroke={t.success} strokeWidth="4"
+                strokeDasharray={`${(onlinePct / 100) * 138.2} 138.2`}
+                strokeLinecap="round" transform="rotate(-90 26 26)" />
+            </svg>
+            <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', fontSize:11, fontWeight:800, color:t.text }}>{onlinePct}%</div>
+          </div>
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:12, color:t.textMuted, fontWeight:500, marginBottom:2 }}>Availability</div>
+            <div style={{ fontSize:18, fontWeight:800, color:t.text }}>{onlinePct}%</div>
+            <div style={{ fontSize:11, color:t.textMuted, marginTop:2 }}>Online ratio</div>
+          </div>
+        </Card>
+      </div>
+
+      {/* PON port grid */}
+      <h3 style={{ fontSize:14, fontWeight:700, color:t.text, marginBottom:12 }}>
+        <Icon name="fa-ethernet" style={{ marginRight:8, color:t.info }} />
+        PON Port Summary
+      </h3>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))', gap:16 }}>
+        {ports.map(port => {
+          const portNum = port.port || port.ponPort;
+          const onuCount = port.onuCount || 0;
+          const onlineCount = port.onlineCount || 0;
+          const offlineCount = port.offlineCount || 0;
+          const portOnlinePct = onuCount > 0 ? ((onlineCount / onuCount) * 100).toFixed(0) : 0;
+          return (
+            <Card key={portNum} style={{ padding:16, transition:'transform .2s, box-shadow .2s' }}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
+                <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                  <div style={{ width:32, height:32, borderRadius:8, background:`${t.accent}15`, display:'flex', alignItems:'center', justifyContent:'center', color:t.accent, fontSize:14 }}>
+                    <Icon name="fa-ethernet" />
+                  </div>
+                  <span style={{ fontSize:14, fontWeight:700, color:t.text }}>Port {portNum}</span>
+                </div>
+                <span style={{ fontSize:22, fontWeight:800, color:t.accent }}>{onuCount}</span>
+              </div>
+              <div style={{ display:'flex', gap:16, marginBottom:10 }}>
+                <div style={{ display:'flex', alignItems:'center', gap:4 }}>
+                  <span style={{ width:8, height:8, borderRadius:'50%', background:t.success }} />
+                  <span style={{ fontSize:12, color:t.success, fontWeight:600 }}>{onlineCount} online</span>
+                </div>
+                <div style={{ display:'flex', alignItems:'center', gap:4 }}>
+                  <span style={{ width:8, height:8, borderRadius:'50%', background:t.danger }} />
+                  <span style={{ fontSize:12, color:t.danger, fontWeight:600 }}>{offlineCount} offline</span>
+                </div>
+              </div>
+              {/* Capacity bar */}
+              <div style={{ height:6, borderRadius:3, background:t.border, overflow:'hidden' }}>
+                <div style={{ width:`${Math.min(100, (onlineCount / Math.max(1, onuCount)) * 100)}%`, height:'100%', background: onlineCount === onuCount && onuCount > 0 ? t.success : offlineCount > 0 ? t.warning : t.success, borderRadius:3, transition:'width .5s' }} />
+              </div>
+              <div style={{ fontSize:10, color:t.textMuted, marginTop:6, textAlign:'right' }}>{portOnlinePct}% online</div>
+            </Card>
+          );
+        })}
+        {ports.length === 0 && (
+          <div style={{ gridColumn:'1/-1' }}>
+            <EmptyState icon="fa-ethernet" title="No PON ports found" sub="Make sure the device is reachable via SNMP" />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+
+// ============================================================
+//  PON PORTS TAB
+// ============================================================
+
+const PonPortsTab = ({ deviceId }) => {
+  const [ports, setPorts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [expandedPort, setExpandedPort] = useState(null);
+  const [portOnus, setPortOnus] = useState([]);
+  const [loadingOnus, setLoadingOnus] = useState(false);
+
+  const loadPorts = useCallback(async () => {
+    if (!deviceId) return;
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/devices/${deviceId}/pon-ports`);
+      const data = await res.json();
+      if (res.ok) setPorts(data.ports || []);
+    } catch (err) { console.error(err); }
+    finally { setLoading(false); }
+  }, [deviceId]);
+
+  useEffect(() => { loadPorts(); }, [loadPorts]);
+
+  const loadPortOnus = useCallback(async (portNum) => {
+    if (!deviceId) return;
+    setLoadingOnus(true);
+    try {
+      const res = await fetch(`${API}/devices/${deviceId}/pon-ports/${portNum}/optical`);
+      const data = await res.json();
+      if (res.ok) setPortOnus(data.onus || []);
+      else setPortOnus([]);
+    } catch (err) { console.error(err); setPortOnus([]); }
+    finally { setLoadingOnus(false); }
+  }, [deviceId]);
+
+  const togglePort = (portNum) => {
+    if (expandedPort === portNum) { setExpandedPort(null); setPortOnus([]); }
+    else { setExpandedPort(portNum); loadPortOnus(portNum); }
+  };
+
+  if (!deviceId) return <EmptyState icon="fa-server" title="No Device Selected" sub="Select an OLT device from the dropdown above" />;
+  if (loading) return <LoadingSpinner text="Loading PON ports..." />;
+
+  const totalPortOnus = ports.reduce((s, p) => s + (p.onuCount || 0), 0);
+  const totalPortOnline = ports.reduce((s, p) => s + (p.onlineCount || 0), 0);
+  const totalPortOffline = ports.reduce((s, p) => s + (p.offlineCount || 0), 0);
+  const busyPort = ports.reduce((max, p) => (p.onuCount || 0) > (max?.onuCount || 0) ? p : max, ports[0]);
+
+  return (
+    <div style={{ padding:24 }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
+        <div>
+          <h2 style={{ fontSize:20, fontWeight:700, color:t.text }}>PON Ports</h2>
+          <div style={{ fontSize:12, color:t.textMuted, marginTop:4 }}>Click any port to expand and view its ONUs with optical levels</div>
+        </div>
+        <Btn small onClick={loadPorts}><Icon name="fa-sync-alt" /> Refresh</Btn>
+      </div>
+
+      {/* Port summary stats */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(170px,1fr))', gap:12, marginBottom:20 }}>
+        <Card style={{ padding:14, display:'flex', alignItems:'center', gap:10 }}>
+          <div style={{ width:36, height:36, borderRadius:10, background:`${t.accent}15`, display:'flex', alignItems:'center', justifyContent:'center', color:t.accent }}><Icon name="fa-ethernet" /></div>
+          <div>
+            <div style={{ fontSize:11, color:t.textMuted }}>Total Ports</div>
+            <div style={{ fontSize:18, fontWeight:800, color:t.text }}>{ports.length}</div>
+          </div>
+        </Card>
+        <Card style={{ padding:14, display:'flex', alignItems:'center', gap:10 }}>
+          <div style={{ width:36, height:36, borderRadius:10, background:`${t.success}15`, display:'flex', alignItems:'center', justifyContent:'center', color:t.success }}><Icon name="fa-cube" /></div>
+          <div>
+            <div style={{ fontSize:11, color:t.textMuted }}>Total ONUs</div>
+            <div style={{ fontSize:18, fontWeight:800, color:t.text }}>{totalPortOnus}</div>
+          </div>
+        </Card>
+        <Card style={{ padding:14, display:'flex', alignItems:'center', gap:10 }}>
+          <div style={{ width:36, height:36, borderRadius:10, background:`${t.success}15`, display:'flex', alignItems:'center', justifyContent:'center', color:t.success }}><Icon name="fa-check-circle" /></div>
+          <div>
+            <div style={{ fontSize:11, color:t.textMuted }}>Online</div>
+            <div style={{ fontSize:18, fontWeight:800, color:t.success }}>{totalPortOnline}</div>
+          </div>
+        </Card>
+        <Card style={{ padding:14, display:'flex', alignItems:'center', gap:10 }}>
+          <div style={{ width:36, height:36, borderRadius:10, background:`${t.danger}15`, display:'flex', alignItems:'center', justifyContent:'center', color:t.danger }}><Icon name="fa-times-circle" /></div>
+          <div>
+            <div style={{ fontSize:11, color:t.textMuted }}>Offline</div>
+            <div style={{ fontSize:18, fontWeight:800, color:t.danger }}>{totalPortOffline}</div>
+          </div>
+        </Card>
+        {busyPort && (
+          <Card style={{ padding:14, display:'flex', alignItems:'center', gap:10 }}>
+            <div style={{ width:36, height:36, borderRadius:10, background:`${t.warning}15`, display:'flex', alignItems:'center', justifyContent:'center', color:t.warning }}><Icon name="fa-chart-bar" /></div>
+            <div>
+              <div style={{ fontSize:11, color:t.textMuted }}>Busiest Port</div>
+              <div style={{ fontSize:14, fontWeight:800, color:t.text }}>Port {busyPort.port || busyPort.ponPort} ({busyPort.onuCount || 0})</div>
+            </div>
+          </Card>
+        )}
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))', gap:16 }}>
+        {ports.map(port => {
+          const portNum = port.port || port.ponPort;
+          const isExpanded = expandedPort === portNum;
+          return (
+            <Card key={portNum} style={{ padding:0, overflow:'hidden', gridColumn: isExpanded ? '1 / -1' : 'auto' }}>
+              <div onClick={() => togglePort(portNum)} style={{ padding:20, cursor:'pointer', display:'flex', justifyContent:'space-between', alignItems:'center', transition:'background .2s' }}>
+                <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+                  <div style={{ width:44, height:44, borderRadius:12, background:`${t.accent}15`, display:'flex', alignItems:'center', justifyContent:'center', color:t.accent, fontSize:18 }}>
+                    <Icon name="fa-ethernet" />
+                  </div>
+                  <div>
+                    <div style={{ fontSize:15, fontWeight:700, color:t.text }}>PON Port {portNum}</div>
+                    <div style={{ fontSize:12, color:t.textMuted, marginTop:2 }}>{port.onuCount || 0} ONUs total</div>
+                  </div>
+                </div>
+                <div style={{ display:'flex', alignItems:'center', gap:16 }}>
+                  <div style={{ textAlign:'center' }}>
+                    <div style={{ fontSize:18, fontWeight:800, color:t.success }}>{port.onlineCount || 0}</div>
+                    <div style={{ fontSize:10, color:t.textMuted }}>Online</div>
+                  </div>
+                  <div style={{ textAlign:'center' }}>
+                    <div style={{ fontSize:18, fontWeight:800, color:t.danger }}>{port.offlineCount || 0}</div>
+                    <div style={{ fontSize:10, color:t.textMuted }}>Offline</div>
+                  </div>
+                  <Icon name={isExpanded ? 'fa-chevron-up' : 'fa-chevron-down'} style={{ color:t.textMuted, fontSize:14 }} />
+                </div>
+              </div>
+
+              {isExpanded && (
+                <div style={{ borderTop:`1px solid ${t.border}`, padding:16 }}>
+                  {loadingOnus ? <LoadingSpinner text="Loading ONUs with optical levels..." /> : portOnus.length === 0 ? (
+                    <EmptyState icon="fa-cube" title="No ONUs on this port" sub="This PON port has no registered ONUs" />
+                  ) : (
+                    <div>
+                      {/* Port summary bar */}
+                      <div style={{ display:'flex', gap:16, marginBottom:16, padding:12, background:t.bg, borderRadius:10 }}>
+                        <div style={{ fontSize:12, color:t.textSec }}>
+                          <strong style={{ color:t.text }}>{portOnus.length}</strong> ONUs total
+                        </div>
+                        <div style={{ fontSize:12, color:t.success }}>
+                          <Icon name="fa-check-circle" style={{ marginRight:4, fontSize:10 }} />
+                          {portOnus.filter(o => o.status && o.status.toLowerCase() === 'online').length} online
+                        </div>
+                        <div style={{ fontSize:12, color:t.danger }}>
+                          <Icon name="fa-times-circle" style={{ marginRight:4, fontSize:10 }} />
+                          {portOnus.filter(o => o.status && o.status.toLowerCase() === 'offline').length} offline
+                        </div>
+                        <div style={{ fontSize:12, color:t.warning }}>
+                          <Icon name="fa-exclamation-triangle" style={{ marginRight:4, fontSize:10 }} />
+                          {portOnus.filter(o => o.rxPower != null && parseFloat(o.rxPower) < -28).length} critical signal
+                        </div>
+                      </div>
+                      <div style={{ overflow:'auto' }}>
+                        <table style={{ width:'100%', borderCollapse:'collapse' }}>
+                          <thead><tr>
+                            <TableHead>ONU ID</TableHead>
+                            <TableHead>Serial</TableHead>
+                            <TableHead>Description</TableHead>
+                            <TableHead>Status</TableHead>
+                            <TableHead>Rx Power</TableHead>
+                            <TableHead>Tx Power</TableHead>
+                            <TableHead>Distance</TableHead>
+                            <TableHead>Signal</TableHead>
+                          </tr></thead>
+                          <tbody>
+                            {portOnus.map(onu => (
+                              <tr key={onu.onuId} style={{ transition:'background .15s' }}
+                                onMouseEnter={e => e.currentTarget.style.background = `${t.accent}08`}
+                                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                                <TableCell><span style={{ fontWeight:700, color:t.text }}>{onu.onuId}</span></TableCell>
+                                <TableCell><span style={{ fontFamily:'monospace', fontSize:12, color:t.accent }}>{onu.serial || 'N/A'}</span></TableCell>
+                                <TableCell>{onu.description || '-'}</TableCell>
+                                <TableCell><StatusBadge status={onu.status} /></TableCell>
+                                <TableCell><RxPowerBadge value={onu.rxPower} /></TableCell>
+                                <TableCell>{onu.txPower != null ? `${parseFloat(onu.txPower).toFixed(2)} dBm` : <span style={{color:t.textMuted}}>N/A</span>}</TableCell>
+                                <TableCell>{onu.distance != null ? <span>{onu.distance} m <span style={{color:t.textMuted, fontSize:10}}>({(onu.distance/1000).toFixed(2)}km)</span></span> : <span style={{color:t.textMuted}}>N/A</span>}</TableCell>
+                                <TableCell><SignalMeter value={onu.rxPower} /></TableCell>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </Card>
+          );
+        })}
+      </div>
+      {ports.length === 0 && <EmptyState icon="fa-ethernet" title="No PON ports found" />}
+    </div>
+  );
+};
+
+
+// ============================================================
+//  ONUs TAB
+// ============================================================
+
+const OnusTab = ({ deviceId, showToast }) => {
+  const [onus, setOnus] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [detailOnu, setDetailOnu] = useState(null);
+  const [detailData, setDetailData] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [confirm, setConfirm] = useState(null);
+  const [sortField, setSortField] = useState('ponPort');
+  const [sortDir, setSortDir] = useState('asc');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
+
+  const loadOnus = useCallback(async () => {
+    if (!deviceId) return;
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/devices/${deviceId}/onus`);
+      const data = await res.json();
+      if (res.ok) setOnus(data.onus || []);
+    } catch (err) { console.error(err); }
+    finally { setLoading(false); }
+  }, [deviceId]);
+
+  useEffect(() => { loadOnus(); }, [loadOnus]);
+  useEffect(() => { setPage(1); }, [search, statusFilter]);
+
+  const handleSort = (field) => {
+    if (sortField === field) setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
+    else { setSortField(field); setSortDir('asc'); }
+  };
+
+  const SortHeader = ({ field, children }) => (
+    <TableHead style={{ cursor:'pointer', userSelect:'none' }}>
+      <span onClick={() => handleSort(field)} style={{ display:'inline-flex', alignItems:'center', gap:4 }}>
+        {children}
+        {sortField === field && <Icon name={sortDir === 'asc' ? 'fa-sort-up' : 'fa-sort-down'} style={{ fontSize:10, color:t.accent }} />}
+        {sortField !== field && <Icon name="fa-sort" style={{ fontSize:10, color:t.textMuted, opacity:0.4 }} />}
+      </span>
+    </TableHead>
+  );
+
+  const filtered = useMemo(() => {
+    let list = onus;
+    // Status filter
+    if (statusFilter !== 'all') {
+      list = list.filter(o => {
+        const s = (o.status || '').toLowerCase();
+        if (statusFilter === 'online') return s === 'online' || s === 'active';
+        if (statusFilter === 'offline') return s === 'offline' || s === 'inactive';
+        if (statusFilter === 'critical') return o.rxPower != null && parseFloat(o.rxPower) < -28;
+        return true;
+      });
+    }
+    // Search filter
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      list = list.filter(o =>
+        (o.serial && o.serial.toLowerCase().includes(q)) ||
+        (o.description && o.description.toLowerCase().includes(q)) ||
+        (o.mac && o.mac.toLowerCase().includes(q)) ||
+        String(o.ponPort).includes(q) ||
+        String(o.onuId).includes(q)
+      );
+    }
+    // Sort
+    list = [...list].sort((a, b) => {
+      let va = a[sortField], vb = b[sortField];
+      if (sortField === 'rxPower' || sortField === 'txPower' || sortField === 'distance') {
+        va = va != null ? parseFloat(va) : -999;
+        vb = vb != null ? parseFloat(vb) : -999;
+      }
+      if (typeof va === 'string') va = va.toLowerCase();
+      if (typeof vb === 'string') vb = vb.toLowerCase();
+      if (va < vb) return sortDir === 'asc' ? -1 : 1;
+      if (va > vb) return sortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+    return list;
+  }, [onus, search, statusFilter, sortField, sortDir]);
+
+  const totalPages = Math.ceil(filtered.length / pageSize);
+  const paged = filtered.slice((page - 1) * pageSize, page * pageSize);
+  const onlineCount = onus.filter(o => (o.status||'').toLowerCase() === 'online').length;
+  const offlineCount = onus.filter(o => (o.status||'').toLowerCase() === 'offline').length;
+  const criticalCount = onus.filter(o => o.rxPower != null && parseFloat(o.rxPower) < -28).length;
+
+  const showDetail = async (onu) => {
+    setDetailOnu(onu);
+    setDetailLoading(true);
+    try {
+      const res = await fetch(`${API}/devices/${deviceId}/onus/${onu.ponPort}/${onu.onuId}`);
+      const data = await res.json();
+      if (res.ok) setDetailData(data);
+      else setDetailData({ error: data.error });
+    } catch (err) { setDetailData({ error: err.message }); }
+    finally { setDetailLoading(false); }
+  };
+
+  const rebootOnu = async (onu) => {
+    try {
+      const res = await fetch(`${API}/devices/${deviceId}/onus/${onu.ponPort}/${onu.onuId}/reboot`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+      const data = await res.json();
+      if (res.ok) showToast('ONU reboot command sent', 'success');
+      else showToast(data.error || 'Reboot failed', 'error');
+    } catch (err) { showToast(err.message, 'error'); }
+  };
+
+  const deregisterOnu = async (onu) => {
+    try {
+      const res = await fetch(`${API}/devices/${deviceId}/onus/${onu.ponPort}/${onu.onuId}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (res.ok) { showToast('ONU deregistered', 'success'); loadOnus(); }
+      else showToast(data.error || 'Deregister failed', 'error');
+    } catch (err) { showToast(err.message, 'error'); }
+  };
+
+  if (!deviceId) return <EmptyState icon="fa-server" title="No Device Selected" sub="Select an OLT device from the dropdown above" />;
+  if (loading && onus.length === 0) return <LoadingSpinner text="Loading ONUs..." />;
+
+  return (
+    <div style={{ padding:24 }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16, flexWrap:'wrap', gap:12 }}>
+        <h2 style={{ fontSize:20, fontWeight:700, color:t.text }}>All ONUs</h2>
+        <div style={{ display:'flex', gap:12, alignItems:'center' }}>
+          <div style={{ position:'relative' }}>
+            <Icon name="fa-search" style={{ position:'absolute', left:12, top:'50%', transform:'translateY(-50%)', color:t.textMuted, fontSize:13 }} />
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search serial, description, MAC..."
+              style={{ padding:'10px 14px 10px 36px', border:`1px solid ${t.inputBorder}`, borderRadius:10, fontSize:13, background:t.input, color:t.text, fontFamily:'inherit', outline:'none', width:280 }} />
+          </div>
+          <Btn small onClick={loadOnus}><Icon name="fa-sync-alt" /> Refresh</Btn>
+        </div>
+      </div>
+
+      {/* Quick stats bar */}
+      <div style={{ display:'flex', gap:12, marginBottom:16, flexWrap:'wrap' }}>
+        {[
+          { label:'All', value:'all', count:onus.length, color:t.accent },
+          { label:'Online', value:'online', count:onlineCount, color:t.success },
+          { label:'Offline', value:'offline', count:offlineCount, color:t.danger },
+          { label:'Critical Signal', value:'critical', count:criticalCount, color:t.warning },
+        ].map(f => (
+          <button key={f.value} onClick={() => setStatusFilter(f.value)} style={{
+            padding:'8px 16px', borderRadius:20, fontSize:12, fontWeight:600, cursor:'pointer',
+            background: statusFilter === f.value ? `${f.color}20` : t.bgCard,
+            color: statusFilter === f.value ? f.color : t.textMuted,
+            border: statusFilter === f.value ? `1px solid ${f.color}40` : `1px solid ${t.border}`,
+            fontFamily:'inherit', transition:'all .2s', display:'flex', alignItems:'center', gap:6,
+          }}>
+            <span style={{ width:6, height:6, borderRadius:'50%', background:f.color }} />
+            {f.label} ({f.count})
+          </button>
+        ))}
+      </div>
+
+      <Card style={{ padding:0, overflow:'hidden' }}>
+        <div style={{ overflow:'auto', maxHeight:'calc(100vh - 340px)' }}>
+          <table style={{ width:'100%', borderCollapse:'collapse' }}>
+            <thead><tr>
+              <SortHeader field="ponPort">PON Port</SortHeader>
+              <SortHeader field="onuId">ONU ID</SortHeader>
+              <SortHeader field="serial">Serial</SortHeader>
+              <TableHead>MAC</TableHead>
+              <SortHeader field="description">Description</SortHeader>
+              <SortHeader field="status">Status</SortHeader>
+              <SortHeader field="rxPower">Rx Power</SortHeader>
+              <SortHeader field="txPower">Tx Power</SortHeader>
+              <SortHeader field="distance">Distance</SortHeader>
+              <TableHead>Actions</TableHead>
+            </tr></thead>
+            <tbody>
+              {paged.map(onu => (
+                <tr key={`${onu.ponPort}-${onu.onuId}`} style={{ cursor:'pointer', transition:'background .2s' }}
+                  onMouseEnter={e => e.currentTarget.style.background = `${t.accent}08`}
+                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                  <TableCell><span style={{ fontWeight:600, color:t.accent }}>{onu.ponPort}</span></TableCell>
+                  <TableCell><span style={{ fontWeight:700, color:t.text }}>{onu.onuId}</span></TableCell>
+                  <TableCell><span style={{ fontFamily:'monospace', fontSize:12 }}>{onu.serial || 'N/A'}</span></TableCell>
+                  <TableCell><span style={{ fontFamily:'monospace', fontSize:11 }}>{onu.mac || 'N/A'}</span></TableCell>
+                  <TableCell>{onu.description || '-'}</TableCell>
+                  <TableCell><StatusBadge status={onu.status} /></TableCell>
+                  <TableCell><RxPowerBadge value={onu.rxPower} /></TableCell>
+                  <TableCell>{onu.txPower != null ? `${parseFloat(onu.txPower).toFixed(2)} dBm` : <span style={{color:t.textMuted}}>N/A</span>}</TableCell>
+                  <TableCell>{onu.distance != null ? <span>{onu.distance} m <span style={{color:t.textMuted, fontSize:10}}>({(onu.distance/1000).toFixed(2)}km)</span></span> : <span style={{color:t.textMuted}}>N/A</span>}</TableCell>
+                  <TableCell>
+                    <div style={{ display:'flex', gap:6 }}>
+                      <Btn small onClick={(e) => { e.stopPropagation(); showDetail(onu); }} style={{ padding:'4px 10px' }}>
+                        <Icon name="fa-eye" style={{ fontSize:11 }} /> Detail
+                      </Btn>
+                      <Btn small onClick={(e) => { e.stopPropagation(); setConfirm({ type:'reboot', onu }); }} style={{ padding:'4px 10px', color:t.warning }} title="Reboot ONU">
+                        <Icon name="fa-redo" style={{ fontSize:11 }} />
+                      </Btn>
+                      <Btn small onClick={(e) => { e.stopPropagation(); setConfirm({ type:'deregister', onu }); }} style={{ padding:'4px 10px', color:t.danger }} title="Deregister ONU">
+                        <Icon name="fa-trash" style={{ fontSize:11 }} />
+                      </Btn>
+                    </div>
+                  </TableCell>
+                </tr>
+              ))}
+              {filtered.length === 0 && (
+                <tr><td colSpan={10} style={{ padding:40, textAlign:'center', color:t.textMuted }}>
+                  {search || statusFilter !== 'all' ? 'No ONUs matching filter criteria' : 'No ONUs found on this device'}
+                </td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      {/* Pagination and count */}
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginTop:12 }}>
+        <div style={{ fontSize:12, color:t.textMuted }}>
+          Showing {paged.length} of {filtered.length} ONUs
+          {filtered.length !== onus.length && <span> (filtered from {onus.length} total)</span>}
+        </div>
+        {totalPages > 1 && (
+          <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+            <Btn small disabled={page <= 1} onClick={() => setPage(1)} style={{ padding:'4px 10px' }}>
+              <Icon name="fa-angle-double-left" style={{ fontSize:11 }} />
+            </Btn>
+            <Btn small disabled={page <= 1} onClick={() => setPage(p => Math.max(1, p-1))} style={{ padding:'4px 10px' }}>
+              <Icon name="fa-angle-left" style={{ fontSize:11 }} />
+            </Btn>
+            <span style={{ fontSize:12, color:t.textSec, padding:'0 8px' }}>
+              Page {page} of {totalPages}
+            </span>
+            <Btn small disabled={page >= totalPages} onClick={() => setPage(p => Math.min(totalPages, p+1))} style={{ padding:'4px 10px' }}>
+              <Icon name="fa-angle-right" style={{ fontSize:11 }} />
+            </Btn>
+            <Btn small disabled={page >= totalPages} onClick={() => setPage(totalPages)} style={{ padding:'4px 10px' }}>
+              <Icon name="fa-angle-double-right" style={{ fontSize:11 }} />
+            </Btn>
+          </div>
+        )}
+      </div>
+
+      {/* Detail modal */}
+      {detailOnu && (
+        <Modal title={`ONU Detail - Port ${detailOnu.ponPort} / ONU ${detailOnu.onuId}`} onClose={() => { setDetailOnu(null); setDetailData(null); }} wide>
+          {detailLoading ? <LoadingSpinner text="Loading ONU details..." /> : detailData?.error ? (
+            <EmptyState icon="fa-exclamation-triangle" title="Error" sub={detailData.error} />
+          ) : detailData ? (
+            <div>
+              {/* Header banner */}
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:16, background:t.bg, borderRadius:12, marginBottom:20 }}>
+                <div style={{ display:'flex', alignItems:'center', gap:16 }}>
+                  <div style={{ width:48, height:48, borderRadius:12, background:`${t.accent}15`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:20, color:t.accent }}>
+                    <Icon name="fa-cube" />
+                  </div>
+                  <div>
+                    <div style={{ fontSize:16, fontWeight:700, color:t.text }}>
+                      {detailData.serial || detailOnu.serial || 'Unknown ONU'}
+                    </div>
+                    <div style={{ fontSize:12, color:t.textMuted, marginTop:2 }}>
+                      PON Port {detailOnu.ponPort} / ONU ID {detailOnu.onuId}
+                    </div>
+                  </div>
+                </div>
+                <StatusBadge status={detailData.status || detailOnu.status} />
+              </div>
+
+              {/* Info grid */}
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:16, marginBottom:24 }}>
+                <div style={{ padding:12, background:t.bg, borderRadius:10 }}>
+                  <div style={{ fontSize:11, color:t.textMuted, marginBottom:4 }}>Serial Number</div>
+                  <div style={{ fontSize:14, fontWeight:600, color:t.text, fontFamily:'monospace' }}>{detailData.serial || detailOnu.serial || 'N/A'}</div>
+                </div>
+                <div style={{ padding:12, background:t.bg, borderRadius:10 }}>
+                  <div style={{ fontSize:11, color:t.textMuted, marginBottom:4 }}>MAC Address</div>
+                  <div style={{ fontSize:14, color:t.text, fontFamily:'monospace' }}>{detailData.mac || detailOnu.mac || 'N/A'}</div>
+                </div>
+                <div style={{ padding:12, background:t.bg, borderRadius:10 }}>
+                  <div style={{ fontSize:11, color:t.textMuted, marginBottom:4 }}>Description</div>
+                  <div style={{ fontSize:14, color:t.text }}>{detailData.description || detailOnu.description || '-'}</div>
+                </div>
+                <div style={{ padding:12, background:t.bg, borderRadius:10 }}>
+                  <div style={{ fontSize:11, color:t.textMuted, marginBottom:4 }}>Model / Type</div>
+                  <div style={{ fontSize:14, color:t.text }}>{detailData.model || detailData.type || 'N/A'}</div>
+                </div>
+                <div style={{ padding:12, background:t.bg, borderRadius:10 }}>
+                  <div style={{ fontSize:11, color:t.textMuted, marginBottom:4 }}>Firmware</div>
+                  <div style={{ fontSize:14, color:t.text }}>{detailData.firmware || 'N/A'}</div>
+                </div>
+                <div style={{ padding:12, background:t.bg, borderRadius:10 }}>
+                  <div style={{ fontSize:11, color:t.textMuted, marginBottom:4 }}>Last Status Change</div>
+                  <div style={{ fontSize:14, color:t.text }}>{detailData.lastChange || detailData.lastSeen || 'N/A'}</div>
+                </div>
+              </div>
+
+              <h4 style={{ fontSize:14, fontWeight:700, color:t.text, marginBottom:16 }}>
+                <Icon name="fa-signal" style={{ marginRight:8, color:t.accent }} />
+                Optical Levels
+              </h4>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:16, marginBottom:24 }}>
+                <Card style={{ padding:16 }}>
+                  <div style={{ fontSize:11, color:t.textMuted, marginBottom:8, textAlign:'center' }}>Rx Power (ONU)</div>
+                  <div style={{ textAlign:'center', marginBottom:8 }}><RxPowerBadge value={detailData.rxPower} /></div>
+                  <SignalMeter value={detailData.rxPower} />
+                  <div style={{ fontSize:10, color:t.textMuted, textAlign:'center', marginTop:6 }}>
+                    {detailData.rxPower != null ? (parseFloat(detailData.rxPower) > -25 ? 'Signal quality: Excellent' : parseFloat(detailData.rxPower) > -28 ? 'Signal quality: Marginal' : 'Signal quality: Poor') : ''}
+                  </div>
+                </Card>
+                <Card style={{ padding:16 }}>
+                  <div style={{ fontSize:11, color:t.textMuted, marginBottom:8, textAlign:'center' }}>Tx Power (ONU)</div>
+                  <div style={{ fontSize:20, fontWeight:700, color:t.text, textAlign:'center', marginBottom:4 }}>
+                    {detailData.txPower != null ? `${parseFloat(detailData.txPower).toFixed(2)} dBm` : 'N/A'}
+                  </div>
+                  {detailData.txPower != null && (
+                    <div style={{ height:6, borderRadius:3, background:t.border, overflow:'hidden' }}>
+                      <div style={{ width:`${Math.max(5, Math.min(100, ((parseFloat(detailData.txPower) + 10) / 15) * 100))}%`, height:'100%', borderRadius:3, background:t.info, transition:'width .5s' }} />
+                    </div>
+                  )}
+                </Card>
+                <Card style={{ padding:16 }}>
+                  <div style={{ fontSize:11, color:t.textMuted, marginBottom:8, textAlign:'center' }}>Distance</div>
+                  <div style={{ fontSize:20, fontWeight:700, color:t.text, textAlign:'center', marginBottom:4 }}>
+                    {detailData.distance != null ? `${detailData.distance} m` : 'N/A'}
+                  </div>
+                  {detailData.distance != null && (
+                    <div style={{ fontSize:12, color:t.textSec, textAlign:'center' }}>
+                      <Icon name="fa-ruler-horizontal" style={{ marginRight:4, color:t.accent }} />
+                      {(detailData.distance / 1000).toFixed(2)} km
+                    </div>
+                  )}
+                </Card>
+              </div>
+
+              {/* Threshold reference bar */}
+              <h4 style={{ fontSize:14, fontWeight:700, color:t.text, marginBottom:12 }}>
+                <Icon name="fa-ruler-combined" style={{ marginRight:8, color:t.warning }} />
+                Rx Power Threshold Reference
+              </h4>
+              <div style={{ display:'flex', alignItems:'center', gap:0, height:28, borderRadius:6, overflow:'hidden', marginBottom:12 }}>
+                <div style={{ flex:1, background:`${t.danger}30`, height:'100%', display:'flex', alignItems:'center', justifyContent:'center', fontSize:10, fontWeight:600, color:t.danger }}>Critical &lt; -28</div>
+                <div style={{ flex:1, background:`${t.warning}30`, height:'100%', display:'flex', alignItems:'center', justifyContent:'center', fontSize:10, fontWeight:600, color:t.warning }}>Warning -28 to -25</div>
+                <div style={{ flex:2, background:`${t.success}30`, height:'100%', display:'flex', alignItems:'center', justifyContent:'center', fontSize:10, fontWeight:600, color:t.success }}>Good &gt; -25 dBm</div>
+              </div>
+              {detailData.rxPower != null && (() => {
+                const rx = parseFloat(detailData.rxPower);
+                const col = rx > -25 ? t.success : rx > -28 ? t.warning : t.danger;
+                const lbl = rx > -25 ? 'Good' : rx > -28 ? 'Warning' : 'Critical';
+                return (
+                  <div style={{ display:'flex', alignItems:'center', gap:10, padding:10, background:t.bg, borderRadius:8 }}>
+                    <Icon name="fa-arrow-right" style={{ color:col }} />
+                    <span style={{ fontSize:13, color:t.text }}>Current: <strong style={{ color:col }}>{rx.toFixed(2)} dBm</strong></span>
+                    <Badge color={col} label={lbl} />
+                  </div>
+                );
+              })()}
+
+              {/* Action buttons */}
+              <div style={{ display:'flex', gap:12, marginTop:24, paddingTop:16, borderTop:`1px solid ${t.border}` }}>
+                <Btn small onClick={() => { setConfirm({ type:'reboot', onu:detailOnu }); }} style={{ color:t.warning }}>
+                  <Icon name="fa-redo" /> Reboot ONU
+                </Btn>
+                <Btn small onClick={() => { setConfirm({ type:'deregister', onu:detailOnu }); }} style={{ color:t.danger }}>
+                  <Icon name="fa-trash" /> Deregister ONU
+                </Btn>
+              </div>
+            </div>
+          ) : null}
+        </Modal>
+      )}
+
+      {/* Confirm dialog */}
+      {confirm && (
+        <ConfirmDialog
+          title={confirm.type === 'reboot' ? 'Reboot ONU?' : 'Deregister ONU?'}
+          message={confirm.type === 'reboot'
+            ? `Are you sure you want to reboot ONU ${confirm.onu.onuId} on port ${confirm.onu.ponPort}? The subscriber will experience a brief disconnection.`
+            : `Are you sure you want to deregister ONU ${confirm.onu.onuId} on port ${confirm.onu.ponPort}? This will remove the ONU from the OLT configuration.`}
+          onConfirm={() => {
+            if (confirm.type === 'reboot') rebootOnu(confirm.onu);
+            else deregisterOnu(confirm.onu);
+            setConfirm(null);
+          }}
+          onCancel={() => setConfirm(null)}
+        />
+      )}
+    </div>
+  );
+};
+
+
+// ============================================================
+//  ONU REGISTRATION TAB
+// ============================================================
+
+const RegistrationTab = ({ deviceId, device, showToast }) => {
+  const [form, setForm] = useState({ ponPort:'1', onuId:'', serial:'', lineProfile:'', serviceProfile:'', description:'', svlan:'', cvlan:'' });
+  const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const ponCount = device?.pon_port_count || 8;
+  const ponOptions = Array.from({ length:ponCount }, (_, i) => ({ value: String(i+1), label: `PON Port ${i+1}` }));
+
+  const handleSubmit = async () => {
+    if (!form.onuId) { showToast('ONU ID is required', 'error'); return; }
+    setSubmitting(true);
+    setResult(null);
+    try {
+      const body = {
+        ponPort: parseInt(form.ponPort, 10),
+        onuId: parseInt(form.onuId, 10),
+        serial: form.serial || null,
+        profileName: form.lineProfile || null,
+        description: form.description || null,
+        svlan: form.svlan ? parseInt(form.svlan, 10) : null,
+        cvlan: form.cvlan ? parseInt(form.cvlan, 10) : null,
+      };
+      const res = await fetch(`${API}/devices/${deviceId}/onus/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setResult({ success:true, data });
+        showToast('ONU registered successfully', 'success');
+        setForm({ ponPort:'1', onuId:'', serial:'', lineProfile:'', serviceProfile:'', description:'', svlan:'', cvlan:'' });
+      } else {
+        setResult({ success:false, error: data.error || 'Registration failed' });
+        showToast(data.error || 'Registration failed', 'error');
+      }
+    } catch (err) {
+      setResult({ success:false, error: err.message });
+      showToast(err.message, 'error');
+    } finally { setSubmitting(false); }
+  };
+
+  if (!deviceId) return <EmptyState icon="fa-server" title="No Device Selected" sub="Select an OLT device from the dropdown above" />;
+
+  return (
+    <div style={{ padding:24 }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:24 }}>
+        <div>
+          <h2 style={{ fontSize:20, fontWeight:700, color:t.text }}>ONU Registration</h2>
+          <div style={{ fontSize:12, color:t.textMuted, marginTop:4 }}>Register a new ONU on the selected OLT device</div>
+        </div>
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:24, maxWidth:900 }}>
+        <Card>
+          <h3 style={{ fontSize:14, fontWeight:700, color:t.text, marginBottom:6 }}>
+            <Icon name="fa-plus-circle" style={{ marginRight:8, color:t.accent }} /> Register New ONU
+          </h3>
+          <div style={{ fontSize:11, color:t.textMuted, marginBottom:16 }}>Fields marked with * are required</div>
+
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+            <InputField label="PON Port *" value={form.ponPort} onChange={v => setForm({...form, ponPort:v})} options={ponOptions} />
+            <InputField label="ONU ID *" value={form.onuId} onChange={v => setForm({...form, onuId:v})} placeholder="e.g. 1" type="number" />
+          </div>
+          <InputField label="Serial Number" value={form.serial} onChange={v => setForm({...form, serial:v})} placeholder="e.g. VSOL12345678" />
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+            <InputField label="Line Profile" value={form.lineProfile} onChange={v => setForm({...form, lineProfile:v})} placeholder="e.g. default-line" />
+            <InputField label="Service Profile" value={form.serviceProfile} onChange={v => setForm({...form, serviceProfile:v})} placeholder="e.g. default-srv" />
+          </div>
+          <InputField label="Description" value={form.description} onChange={v => setForm({...form, description:v})} placeholder="e.g. Unit 101 - John Doe" />
+
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+            <InputField label="SVLAN (optional)" value={form.svlan} onChange={v => setForm({...form, svlan:v})} placeholder="e.g. 100" type="number" />
+            <InputField label="CVLAN (optional)" value={form.cvlan} onChange={v => setForm({...form, cvlan:v})} placeholder="e.g. 200" type="number" />
+          </div>
+
+          <div style={{ marginTop:12, display:'flex', gap:12 }}>
+            <Btn primary onClick={handleSubmit} disabled={submitting}>
+              {submitting ? <><Icon name="fa-spinner fa-spin" /> Registering...</> : <><Icon name="fa-plus" /> Register ONU</>}
+            </Btn>
+            <Btn onClick={() => setForm({ ponPort:'1', onuId:'', serial:'', lineProfile:'', serviceProfile:'', description:'', svlan:'', cvlan:'' })}>
+              <Icon name="fa-undo" /> Reset
+            </Btn>
+          </div>
+        </Card>
+
+        <div>
+          {/* Result display */}
+          {result && (
+            <Card style={{ marginBottom:16, borderColor: result.success ? t.success : t.danger }}>
+              <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:12 }}>
+                <Icon name={result.success ? 'fa-check-circle' : 'fa-times-circle'} style={{ fontSize:24, color: result.success ? t.success : t.danger }} />
+                <h3 style={{ fontSize:15, fontWeight:700, color: result.success ? t.success : t.danger }}>
+                  {result.success ? 'Registration Successful' : 'Registration Failed'}
+                </h3>
+              </div>
+              {result.success ? (
+                <div style={{ fontSize:13, color:t.textSec }}>
+                  <p>ONU has been registered on the OLT device.</p>
+                  {result.data && (
+                    <pre style={{ marginTop:12, padding:12, background:t.bg, borderRadius:8, fontSize:11, color:t.textSec, overflow:'auto', maxHeight:200 }}>
+                      {JSON.stringify(result.data, null, 2)}
+                    </pre>
+                  )}
+                </div>
+              ) : (
+                <div style={{ fontSize:13, color:t.danger }}>{result.error}</div>
+              )}
+            </Card>
+          )}
+
+          {/* Quick reference */}
+          <Card style={{ marginBottom:16 }}>
+            <h3 style={{ fontSize:14, fontWeight:700, color:t.text, marginBottom:16 }}>
+              <Icon name="fa-info-circle" style={{ marginRight:8, color:t.info }} /> Quick Reference
+            </h3>
+            <div style={{ fontSize:12, color:t.textSec, lineHeight:1.8 }}>
+              <p><strong style={{ color:t.text }}>PON Port:</strong> The physical PON port on the OLT (1-{ponCount})</p>
+              <p><strong style={{ color:t.text }}>ONU ID:</strong> Unique ID for the ONU on the port (1-128 typically)</p>
+              <p><strong style={{ color:t.text }}>Serial:</strong> The ONU serial number printed on the device</p>
+              <p><strong style={{ color:t.text }}>Line Profile:</strong> Line profile for bandwidth and VLAN config</p>
+              <p><strong style={{ color:t.text }}>Service Profile:</strong> Service profile for port and service config</p>
+              <p><strong style={{ color:t.text }}>SVLAN/CVLAN:</strong> Optional VLAN tagging configuration</p>
+            </div>
+          </Card>
+
+          {/* Registration tips */}
+          <Card style={{ borderColor:`${t.warning}40` }}>
+            <h3 style={{ fontSize:14, fontWeight:700, color:t.warning, marginBottom:12 }}>
+              <Icon name="fa-lightbulb" style={{ marginRight:8 }} /> Tips
+            </h3>
+            <ul style={{ fontSize:12, color:t.textSec, lineHeight:2, paddingLeft:16 }}>
+              <li>Ensure the ONU is physically connected to the correct PON port before registration</li>
+              <li>The serial number can be found on the sticker of the ONU device</li>
+              <li>If you do not specify a profile, the OLT will use the default profiles</li>
+              <li>SVLAN/CVLAN are only needed for specific VLAN translation configurations</li>
+              <li>After registration, verify the ONU appears in the ONUs tab with 'online' status</li>
+              <li>If registration fails, ensure no other ONU is using the same ID on the same port</li>
+            </ul>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+
+// ============================================================
+//  MAPPINGS TAB
+// ============================================================
+
+const MappingsTab = ({ deviceId, showToast }) => {
+  const [mappings, setMappings] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [editMapping, setEditMapping] = useState(null);
+  const [subscribers, setSubscribers] = useState([]);
+  const [form, setForm] = useState({ ponPort:'', onuId:'', serialNumber:'', macAddress:'', subscriberId:'', description:'' });
+  const [submitting, setSubmitting] = useState(false);
+  const [discovering, setDiscovering] = useState(false);
+  const [discoverResult, setDiscoverResult] = useState(null);
+
+  const loadMappings = useCallback(async () => {
+    if (!deviceId) return;
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/devices/${deviceId}/onu-mappings`);
+      const data = await res.json();
+      if (res.ok) setMappings(data.mappings || []);
+    } catch (err) { console.error(err); }
+    finally { setLoading(false); }
+  }, [deviceId]);
+
+  useEffect(() => { loadMappings(); }, [loadMappings]);
+
+  const loadSubscribers = async () => {
+    try {
+      const res = await fetch('/api/admin/subscribers?limit=5000');
+      const data = await res.json();
+      if (res.ok) setSubscribers(data.subscribers || data.data || []);
+    } catch (err) { console.error(err); }
+  };
+
+  const openAddModal = () => {
+    setForm({ ponPort:'', onuId:'', serialNumber:'', macAddress:'', subscriberId:'', description:'' });
+    setEditMapping(null);
+    loadSubscribers();
+    setShowAddModal(true);
+  };
+
+  const openEditModal = (m) => {
+    setForm({
+      ponPort: String(m.pon_port || ''),
+      onuId: String(m.onu_id || ''),
+      serialNumber: m.serial_number || '',
+      macAddress: m.mac_address || '',
+      subscriberId: m.subscriber_id ? String(m.subscriber_id) : '',
+      description: m.description || '',
+    });
+    setEditMapping(m);
+    loadSubscribers();
+    setShowAddModal(true);
+  };
+
+  const handleSave = async () => {
+    if (!form.ponPort || !form.onuId) { showToast('PON Port and ONU ID are required', 'error'); return; }
+    setSubmitting(true);
+    try {
+      const body = {
+        ponPort: parseInt(form.ponPort, 10),
+        onuId: parseInt(form.onuId, 10),
+        serialNumber: form.serialNumber || null,
+        macAddress: form.macAddress || null,
+        subscriberId: form.subscriberId ? parseInt(form.subscriberId, 10) : null,
+        description: form.description || null,
+      };
+
+      let res;
+      if (editMapping) {
+        res = await fetch(`${API}/devices/${deviceId}/onu-mappings/${editMapping.id}`, {
+          method: 'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body),
+        });
+      } else {
+        res = await fetch(`${API}/devices/${deviceId}/onu-mappings`, {
+          method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body),
+        });
+      }
+
+      const data = await res.json();
+      if (res.ok) {
+        showToast(editMapping ? 'Mapping updated' : 'Mapping created', 'success');
+        setShowAddModal(false);
+        loadMappings();
+      } else {
+        showToast(data.error || 'Save failed', 'error');
+      }
+    } catch (err) { showToast(err.message, 'error'); }
+    finally { setSubmitting(false); }
+  };
+
+  const deleteMapping = async (id) => {
+    try {
+      const res = await fetch(`${API}/devices/${deviceId}/onu-mappings/${id}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (res.ok) { showToast('Mapping deleted', 'success'); loadMappings(); }
+      else showToast(data.error || 'Delete failed', 'error');
+    } catch (err) { showToast(err.message, 'error'); }
+  };
+
+  const autoDiscover = async () => {
+    setDiscovering(true);
+    setDiscoverResult(null);
+    try {
+      const res = await fetch(`${API}/devices/${deviceId}/onu-mappings/auto-discover`, {
+        method: 'POST', headers:{'Content-Type':'application/json'},
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setDiscoverResult(data);
+        showToast(`Auto-discover: ${data.created || 0} created, ${data.skipped || 0} skipped`, 'success');
+        loadMappings();
+      } else {
+        showToast(data.error || 'Auto-discover failed', 'error');
+      }
+    } catch (err) { showToast(err.message, 'error'); }
+    finally { setDiscovering(false); }
+  };
+
+  const subOptions = [{ value:'', label:'-- No subscriber --' }, ...subscribers.map(s => ({
+    value: String(s.id), label: `${s.first_name} ${s.last_name} (${s.account_number || s.id})`
+  }))];
+
+  if (!deviceId) return <EmptyState icon="fa-server" title="No Device Selected" sub="Select an OLT device from the dropdown above" />;
+  if (loading) return <LoadingSpinner text="Loading mappings..." />;
+
+  return (
+    <div style={{ padding:24 }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20, flexWrap:'wrap', gap:12 }}>
+        <h2 style={{ fontSize:20, fontWeight:700, color:t.text }}>ONU-Subscriber Mappings</h2>
+        <div style={{ display:'flex', gap:12 }}>
+          <Btn small onClick={autoDiscover} disabled={discovering}>
+            {discovering ? <><Icon name="fa-spinner fa-spin" /> Discovering...</> : <><Icon name="fa-magic" /> Auto-Discover</>}
+          </Btn>
+          <Btn small primary onClick={openAddModal}><Icon name="fa-plus" /> Add Mapping</Btn>
+          <Btn small onClick={loadMappings}><Icon name="fa-sync-alt" /> Refresh</Btn>
+        </div>
+      </div>
+
+      {/* Discover result */}
+      {discoverResult && (
+        <Card style={{ marginBottom:20, padding:16, borderColor:t.success }}>
+          <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:8 }}>
+            <Icon name="fa-check-circle" style={{ color:t.success, fontSize:20 }} />
+            <span style={{ fontSize:14, fontWeight:700, color:t.text }}>Auto-Discovery Complete</span>
+          </div>
+          <div style={{ display:'flex', gap:24, fontSize:13, color:t.textSec }}>
+            <span>Discovered: <strong style={{ color:t.text }}>{discoverResult.discovered}</strong></span>
+            <span>Created: <strong style={{ color:t.success }}>{discoverResult.created}</strong></span>
+            <span>Skipped: <strong style={{ color:t.warning }}>{discoverResult.skipped}</strong></span>
+          </div>
+        </Card>
+      )}
+
+      {/* Mapping statistics */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))', gap:12, marginBottom:20 }}>
+        <Card style={{ padding:14, display:'flex', alignItems:'center', gap:10 }}>
+          <div style={{ width:36, height:36, borderRadius:10, background:`${t.accent}15`, display:'flex', alignItems:'center', justifyContent:'center', color:t.accent }}><Icon name="fa-link" /></div>
+          <div>
+            <div style={{ fontSize:11, color:t.textMuted }}>Total</div>
+            <div style={{ fontSize:18, fontWeight:800, color:t.text }}>{mappings.length}</div>
+          </div>
+        </Card>
+        <Card style={{ padding:14, display:'flex', alignItems:'center', gap:10 }}>
+          <div style={{ width:36, height:36, borderRadius:10, background:`${t.success}15`, display:'flex', alignItems:'center', justifyContent:'center', color:t.success }}><Icon name="fa-user-check" /></div>
+          <div>
+            <div style={{ fontSize:11, color:t.textMuted }}>With Subscriber</div>
+            <div style={{ fontSize:18, fontWeight:800, color:t.success }}>{mappings.filter(m => m.subscriber).length}</div>
+          </div>
+        </Card>
+        <Card style={{ padding:14, display:'flex', alignItems:'center', gap:10 }}>
+          <div style={{ width:36, height:36, borderRadius:10, background:`${t.warning}15`, display:'flex', alignItems:'center', justifyContent:'center', color:t.warning }}><Icon name="fa-user-slash" /></div>
+          <div>
+            <div style={{ fontSize:11, color:t.textMuted }}>Unmapped</div>
+            <div style={{ fontSize:18, fontWeight:800, color:t.warning }}>{mappings.filter(m => !m.subscriber).length}</div>
+          </div>
+        </Card>
+        <Card style={{ padding:14, display:'flex', alignItems:'center', gap:10 }}>
+          <div style={{ width:36, height:36, borderRadius:10, background:`${t.info}15`, display:'flex', alignItems:'center', justifyContent:'center', color:t.info }}><Icon name="fa-check-circle" /></div>
+          <div>
+            <div style={{ fontSize:11, color:t.textMuted }}>Online</div>
+            <div style={{ fontSize:18, fontWeight:800, color:t.info }}>{mappings.filter(m => (m.status||'').toLowerCase() === 'online').length}</div>
+          </div>
+        </Card>
+      </div>
+
+      <Card style={{ padding:0, overflow:'hidden' }}>
+        <div style={{ overflow:'auto', maxHeight:'calc(100vh - 400px)' }}>
+          <table style={{ width:'100%', borderCollapse:'collapse' }}>
+            <thead><tr>
+              <TableHead>PON Port</TableHead>
+              <TableHead>ONU ID</TableHead>
+              <TableHead>Serial</TableHead>
+              <TableHead>MAC</TableHead>
+              <TableHead>Subscriber</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Description</TableHead>
+              <TableHead>Last Updated</TableHead>
+              <TableHead>Actions</TableHead>
+            </tr></thead>
+            <tbody>
+              {mappings.map(m => (
+                <tr key={m.id} style={{ transition:'background .15s' }}
+                  onMouseEnter={e => e.currentTarget.style.background = `${t.accent}08`}
+                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                  <TableCell><span style={{ fontWeight:600, color:t.accent }}>{m.pon_port}</span></TableCell>
+                  <TableCell><span style={{ fontWeight:700, color:t.text }}>{m.onu_id}</span></TableCell>
+                  <TableCell><span style={{ fontFamily:'monospace', fontSize:12 }}>{m.serial_number || 'N/A'}</span></TableCell>
+                  <TableCell><span style={{ fontFamily:'monospace', fontSize:11 }}>{m.mac_address || 'N/A'}</span></TableCell>
+                  <TableCell>
+                    {m.subscriber ? (
+                      <div>
+                        <div style={{ color:t.accent, fontWeight:600, fontSize:13 }}>
+                          {m.subscriber.first_name} {m.subscriber.last_name}
+                        </div>
+                        <div style={{ color:t.textMuted, fontSize:11, marginTop:2 }}>
+                          {m.subscriber.account_number || `ID: ${m.subscriber.id}`}
+                          {m.subscriber.status && <span> | <StatusBadge status={m.subscriber.status} /></span>}
+                        </div>
+                      </div>
+                    ) : (
+                      <span style={{ color:t.textMuted, fontSize:12, fontStyle:'italic' }}>
+                        <Icon name="fa-user-slash" style={{ marginRight:4, fontSize:10 }} /> Unmapped
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell><StatusBadge status={m.status} /></TableCell>
+                  <TableCell><span style={{ fontSize:12 }}>{m.description || '-'}</span></TableCell>
+                  <TableCell>
+                    <span style={{ fontSize:11, color:t.textMuted }}>
+                      {m.updated_at ? new Date(m.updated_at).toLocaleDateString() : m.created_at ? new Date(m.created_at).toLocaleDateString() : '-'}
+                    </span>
+                  </TableCell>
+                  <TableCell>
+                    <div style={{ display:'flex', gap:6 }}>
+                      <Btn small onClick={() => openEditModal(m)} style={{ padding:'4px 10px' }} title="Edit mapping">
+                        <Icon name="fa-edit" style={{ fontSize:11 }} />
+                      </Btn>
+                      <Btn small onClick={() => { if(window.confirm('Delete this mapping? This cannot be undone.')) deleteMapping(m.id); }} style={{ padding:'4px 10px', color:t.danger }} title="Delete mapping">
+                        <Icon name="fa-trash" style={{ fontSize:11 }} />
+                      </Btn>
+                    </div>
+                  </TableCell>
+                </tr>
+              ))}
+              {mappings.length === 0 && (
+                <tr><td colSpan={9} style={{ padding:40, textAlign:'center' }}>
+                  <div style={{ fontSize:40, color:t.textMuted, marginBottom:12 }}><Icon name="fa-link" /></div>
+                  <div style={{ fontSize:14, fontWeight:600, color:t.text, marginBottom:6 }}>No ONU mappings found</div>
+                  <div style={{ fontSize:12, color:t.textMuted }}>Use "Add Mapping" to manually map ONUs, or "Auto-Discover" to auto-detect them</div>
+                </td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      <div style={{ marginTop:12, fontSize:12, color:t.textMuted }}>
+        Total: {mappings.length} mappings | {mappings.filter(m => m.subscriber).length} linked to subscribers
+      </div>
+
+      {/* Add/Edit Modal */}
+      {showAddModal && (
+        <Modal title={editMapping ? 'Edit ONU Mapping' : 'Add ONU Mapping'} onClose={() => setShowAddModal(false)}>
+          <div style={{ marginBottom:16, padding:12, background:t.bg, borderRadius:10 }}>
+            <div style={{ display:'flex', alignItems:'center', gap:8, fontSize:12, color:t.textMuted }}>
+              <Icon name="fa-info-circle" style={{ color:t.info }} />
+              {editMapping
+                ? `Editing mapping #${editMapping.id} (Port ${editMapping.pon_port} / ONU ${editMapping.onu_id})`
+                : 'Create a new mapping between an ONU and a subscriber. PON Port and ONU ID are required.'}
+            </div>
+          </div>
+
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+            <InputField label="PON Port *" value={form.ponPort} onChange={v => setForm({...form, ponPort:v})} placeholder="e.g. 1" type="number" />
+            <InputField label="ONU ID *" value={form.onuId} onChange={v => setForm({...form, onuId:v})} placeholder="e.g. 1" type="number" />
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+            <InputField label="Serial Number" value={form.serialNumber} onChange={v => setForm({...form, serialNumber:v})} placeholder="e.g. VSOL12345678" />
+            <InputField label="MAC Address" value={form.macAddress} onChange={v => setForm({...form, macAddress:v})} placeholder="e.g. AA:BB:CC:DD:EE:FF" />
+          </div>
+          <InputField label="Subscriber" value={form.subscriberId} onChange={v => setForm({...form, subscriberId:v})} options={subOptions} />
+          <InputField label="Description" value={form.description} onChange={v => setForm({...form, description:v})} placeholder="Optional description or notes" />
+
+          <div style={{ display:'flex', gap:12, marginTop:20, paddingTop:16, borderTop:`1px solid ${t.border}` }}>
+            <Btn onClick={() => setShowAddModal(false)}>Cancel</Btn>
+            <Btn primary onClick={handleSave} disabled={submitting}>
+              {submitting ? <><Icon name="fa-spinner fa-spin" /> Saving...</> : <><Icon name="fa-save" /> {editMapping ? 'Update Mapping' : 'Create Mapping'}</>}
+            </Btn>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+};
+
+
+// ============================================================
+//  ALARMS TAB
+// ============================================================
+
+const AlarmsTab = ({ deviceId }) => {
+  const [alarms, setAlarms] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [lastRefresh, setLastRefresh] = useState(null);
+  const [severityFilter, setSeverityFilter] = useState('all');
+
+  const loadAlarms = useCallback(async () => {
+    if (!deviceId) return;
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/devices/${deviceId}/alarms`);
+      const data = await res.json();
+      if (res.ok) setAlarms(data.alarms || []);
+      setLastRefresh(new Date());
+    } catch (err) { console.error(err); }
+    finally { setLoading(false); }
+  }, [deviceId]);
+
+  useEffect(() => { loadAlarms(); }, [loadAlarms]);
+
+  useEffect(() => {
+    if (!deviceId) return;
+    const iv = setInterval(loadAlarms, 30000);
+    return () => clearInterval(iv);
+  }, [deviceId, loadAlarms]);
+
+  const getSeverity = (alarm) => {
+    const val = String(alarm.value || '').toLowerCase();
+    const oid = String(alarm.oid || '').toLowerCase();
+    if (val.includes('critical') || val.includes('major') || oid.includes('critical')) return { label:'Critical', color:t.danger, icon:'fa-exclamation-circle', level:3 };
+    if (val.includes('minor') || val.includes('warning') || oid.includes('warning')) return { label:'Warning', color:t.warning, icon:'fa-exclamation-triangle', level:2 };
+    if (val.includes('info') || val.includes('clear') || oid.includes('info')) return { label:'Info', color:t.info, icon:'fa-info-circle', level:1 };
+    return { label:'Minor', color:t.textMuted, icon:'fa-question-circle', level:0 };
+  };
+
+  const alarmsWithSev = alarms.map(a => ({ ...a, _sev: getSeverity(a) }));
+  const filteredAlarms = severityFilter === 'all' ? alarmsWithSev : alarmsWithSev.filter(a => a._sev.label.toLowerCase() === severityFilter);
+  const critCount = alarmsWithSev.filter(a => a._sev.level === 3).length;
+  const warnCount = alarmsWithSev.filter(a => a._sev.level === 2).length;
+  const infoCount = alarmsWithSev.filter(a => a._sev.level <= 1).length;
+
+  if (!deviceId) return <EmptyState icon="fa-server" title="No Device Selected" sub="Select an OLT device from the dropdown above" />;
+  if (loading && alarms.length === 0) return <LoadingSpinner text="Loading alarms..." />;
+
+  return (
+    <div style={{ padding:24 }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20 }}>
+        <div>
+          <h2 style={{ fontSize:20, fontWeight:700, color:t.text }}>Active Alarms</h2>
+          {lastRefresh && (
+            <div style={{ fontSize:11, color:t.textMuted, marginTop:4 }}>
+              <Icon name="fa-clock" style={{ marginRight:4, fontSize:10 }} />
+              Last checked: {lastRefresh.toLocaleTimeString()} (auto-refresh every 30s)
+            </div>
+          )}
+        </div>
+        <Btn small onClick={loadAlarms}><Icon name="fa-sync-alt" /> Refresh</Btn>
+      </div>
+
+      {/* Alarm severity summary */}
+      {alarms.length > 0 && (
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(150px,1fr))', gap:12, marginBottom:20 }}>
+          <Card style={{ padding:14, cursor:'pointer', borderColor: severityFilter === 'all' ? t.accent : t.border, transition:'border .2s' }} onClick={() => setSeverityFilter('all')}>
+            <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+              <div style={{ width:36, height:36, borderRadius:10, background:`${t.accent}15`, display:'flex', alignItems:'center', justifyContent:'center', color:t.accent }}><Icon name="fa-bell" /></div>
+              <div>
+                <div style={{ fontSize:11, color:t.textMuted }}>All</div>
+                <div style={{ fontSize:18, fontWeight:800, color:t.text }}>{alarms.length}</div>
+              </div>
+            </div>
+          </Card>
+          <Card style={{ padding:14, cursor:'pointer', borderColor: severityFilter === 'critical' ? t.danger : t.border, transition:'border .2s' }} onClick={() => setSeverityFilter('critical')}>
+            <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+              <div style={{ width:36, height:36, borderRadius:10, background:`${t.danger}15`, display:'flex', alignItems:'center', justifyContent:'center', color:t.danger }}><Icon name="fa-exclamation-circle" /></div>
+              <div>
+                <div style={{ fontSize:11, color:t.textMuted }}>Critical</div>
+                <div style={{ fontSize:18, fontWeight:800, color:t.danger }}>{critCount}</div>
+              </div>
+            </div>
+          </Card>
+          <Card style={{ padding:14, cursor:'pointer', borderColor: severityFilter === 'warning' ? t.warning : t.border, transition:'border .2s' }} onClick={() => setSeverityFilter('warning')}>
+            <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+              <div style={{ width:36, height:36, borderRadius:10, background:`${t.warning}15`, display:'flex', alignItems:'center', justifyContent:'center', color:t.warning }}><Icon name="fa-exclamation-triangle" /></div>
+              <div>
+                <div style={{ fontSize:11, color:t.textMuted }}>Warning</div>
+                <div style={{ fontSize:18, fontWeight:800, color:t.warning }}>{warnCount}</div>
+              </div>
+            </div>
+          </Card>
+          <Card style={{ padding:14, cursor:'pointer', borderColor: severityFilter === 'info' || severityFilter === 'minor' ? t.info : t.border, transition:'border .2s' }} onClick={() => setSeverityFilter('info')}>
+            <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+              <div style={{ width:36, height:36, borderRadius:10, background:`${t.info}15`, display:'flex', alignItems:'center', justifyContent:'center', color:t.info }}><Icon name="fa-info-circle" /></div>
+              <div>
+                <div style={{ fontSize:11, color:t.textMuted }}>Info/Minor</div>
+                <div style={{ fontSize:18, fontWeight:800, color:t.info }}>{infoCount}</div>
+              </div>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {alarms.length === 0 ? (
+        <Card style={{ textAlign:'center', padding:'80px 20px' }}>
+          <div style={{ width:80, height:80, borderRadius:'50%', background:`${t.success}15`, display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 20px', fontSize:36, color:t.success }}>
+            <Icon name="fa-check-circle" />
+          </div>
+          <h3 style={{ fontSize:20, fontWeight:700, color:t.text, marginBottom:8 }}>No Active Alarms</h3>
+          <p style={{ fontSize:14, color:t.textMuted, maxWidth:400, margin:'0 auto', lineHeight:1.6 }}>
+            All systems are operating normally. The alarm monitor checks for new alarms every 30 seconds automatically.
+          </p>
+          <div style={{ marginTop:24, display:'inline-flex', alignItems:'center', gap:8, padding:'8px 16px', background:t.bg, borderRadius:8, fontSize:12, color:t.textMuted }}>
+            <Icon name="fa-shield-alt" style={{ color:t.success }} /> System healthy
+          </div>
+        </Card>
+      ) : (
+        <Card style={{ padding:0, overflow:'hidden' }}>
+          <div style={{ overflow:'auto', maxHeight:'calc(100vh - 360px)' }}>
+            <table style={{ width:'100%', borderCollapse:'collapse' }}>
+              <thead><tr>
+                <TableHead style={{ width:120 }}>Severity</TableHead>
+                <TableHead>Source (OID)</TableHead>
+                <TableHead>Description / Value</TableHead>
+                <TableHead>Type</TableHead>
+                <TableHead style={{ width:140 }}>Time</TableHead>
+              </tr></thead>
+              <tbody>
+                {filteredAlarms.map((alarm, i) => {
+                  const sev = alarm._sev;
+                  return (
+                    <tr key={i} style={{ transition:'background .15s' }}
+                      onMouseEnter={e => e.currentTarget.style.background = `${sev.color}08`}
+                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                      <TableCell>
+                        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                          <div style={{ width:28, height:28, borderRadius:8, background:`${sev.color}20`, display:'flex', alignItems:'center', justifyContent:'center' }}>
+                            <Icon name={sev.icon} style={{ color:sev.color, fontSize:13 }} />
+                          </div>
+                          <Badge color={sev.color} label={sev.label} />
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <span style={{ fontFamily:'monospace', fontSize:11, color:t.textSec, wordBreak:'break-all' }}>{alarm.oid || 'N/A'}</span>
+                      </TableCell>
+                      <TableCell>
+                        <span style={{ fontSize:13, color:t.text }}>{String(alarm.value || 'N/A')}</span>
+                      </TableCell>
+                      <TableCell>
+                        <span style={{ fontSize:11, color:t.textMuted, fontFamily:'monospace' }}>{alarm.type || 'N/A'}</span>
+                      </TableCell>
+                      <TableCell>
+                        <span style={{ fontSize:12, color:t.textMuted }}>
+                          <Icon name="fa-clock" style={{ marginRight:4, fontSize:10 }} />
+                          {alarm.timestamp || new Date().toLocaleString()}
+                        </span>
+                      </TableCell>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+
+      <div style={{ marginTop:12, display:'flex', justifyContent:'space-between', fontSize:12, color:t.textMuted }}>
+        <span>
+          {filteredAlarms.length} alarm(s) shown
+          {severityFilter !== 'all' && <span> (filtered by {severityFilter})</span>}
+        </span>
+        <span>Auto-refreshing every 30 seconds</span>
+      </div>
+    </div>
+  );
+};
+
+
+// ============================================================
+//  DIAGNOSTICS TAB
+// ============================================================
+
+const DiagnosticsTab = ({ deviceId, device }) => {
+  const [ponPort, setPonPort] = useState('1');
+  const [onuId, setOnuId] = useState('');
+  const [serialSearch, setSerialSearch] = useState('');
+  const [diagnostics, setDiagnostics] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const ponCount = device?.pon_port_count || 8;
+  const ponOptions = Array.from({ length:ponCount }, (_, i) => ({ value: String(i+1), label: `PON Port ${i+1}` }));
+
+  const runDiagnostics = async () => {
+    if (!onuId && !serialSearch) return;
+    setLoading(true);
+    setDiagnostics(null);
+    setError(null);
+
+    try {
+      let detail, optical;
+
+      if (serialSearch.trim()) {
+        // Search by serial first
+        const searchRes = await fetch(`${API}/devices/${deviceId}/onus?search=${encodeURIComponent(serialSearch)}`);
+        const searchData = await searchRes.json();
+        if (searchRes.ok && searchData.onus && searchData.onus.length > 0) {
+          const onu = searchData.onus[0];
+          const [dRes, oRes] = await Promise.all([
+            fetch(`${API}/devices/${deviceId}/onus/${onu.ponPort}/${onu.onuId}`),
+            fetch(`${API}/devices/${deviceId}/onus/${onu.ponPort}/${onu.onuId}/optical`),
+          ]);
+          detail = await dRes.json();
+          optical = await oRes.json();
+        } else {
+          setError('No ONU found matching that serial number');
+          setLoading(false);
+          return;
+        }
+      } else {
+        const [dRes, oRes] = await Promise.all([
+          fetch(`${API}/devices/${deviceId}/onus/${ponPort}/${onuId}`),
+          fetch(`${API}/devices/${deviceId}/onus/${ponPort}/${onuId}/optical`),
+        ]);
+        detail = await dRes.json();
+        optical = await oRes.json();
+      }
+
+      setDiagnostics({ ...detail, ...optical });
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!deviceId) return <EmptyState icon="fa-server" title="No Device Selected" sub="Select an OLT device from the dropdown above" />;
+
+  const rxVal = diagnostics?.rxPower != null ? parseFloat(diagnostics.rxPower) : null;
+  const txVal = diagnostics?.txPower != null ? parseFloat(diagnostics.txPower) : null;
+
+  return (
+    <div style={{ padding:24 }}>
+      <h2 style={{ fontSize:20, fontWeight:700, color:t.text, marginBottom:24 }}>ONU Diagnostics</h2>
+
+      <Card style={{ marginBottom:24 }}>
+        <h3 style={{ fontSize:14, fontWeight:700, color:t.text, marginBottom:16 }}>
+          <Icon name="fa-stethoscope" style={{ marginRight:8, color:t.accent }} /> Select ONU
+        </h3>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr auto', gap:12, alignItems:'end' }}>
+          <InputField label="PON Port" value={ponPort} onChange={v => setPonPort(v)} options={ponOptions} style={{ marginBottom:0 }} />
+          <InputField label="ONU ID" value={onuId} onChange={v => { setOnuId(v); setSerialSearch(''); }} placeholder="e.g. 1" type="number" style={{ marginBottom:0 }} />
+          <InputField label="Or Search by Serial" value={serialSearch} onChange={v => { setSerialSearch(v); setOnuId(''); }} placeholder="e.g. VSOL12345678" style={{ marginBottom:0 }} />
+          <Btn primary onClick={runDiagnostics} disabled={loading || (!onuId && !serialSearch.trim())}>
+            {loading ? <><Icon name="fa-spinner fa-spin" /> Running...</> : <><Icon name="fa-play" /> Run Diagnostics</>}
+          </Btn>
+        </div>
+      </Card>
+
+      {error && (
+        <Card style={{ marginBottom:24, borderColor:t.danger }}>
+          <div style={{ display:'flex', alignItems:'center', gap:12, color:t.danger }}>
+            <Icon name="fa-exclamation-circle" style={{ fontSize:20 }} />
+            <span style={{ fontSize:14, fontWeight:600 }}>{error}</span>
+          </div>
+        </Card>
+      )}
+
+      {diagnostics && (
+        <div>
+          {/* Header banner */}
+          <Card style={{ marginBottom:24, padding:20 }}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:16 }}>
+                <div style={{ width:52, height:52, borderRadius:14, background:`${t.accent}15`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:22, color:t.accent }}>
+                  <Icon name="fa-stethoscope" />
+                </div>
+                <div>
+                  <div style={{ fontSize:18, fontWeight:700, color:t.text }}>
+                    {diagnostics.serial || 'ONU Diagnostics'}
+                  </div>
+                  <div style={{ fontSize:12, color:t.textMuted, marginTop:2 }}>
+                    {diagnostics.description || 'Diagnostic results'}
+                  </div>
+                </div>
+              </div>
+              <StatusBadge status={diagnostics.status} />
+            </div>
+          </Card>
+
+          {/* Basic info */}
+          <h3 style={{ fontSize:14, fontWeight:700, color:t.text, marginBottom:12 }}>
+            <Icon name="fa-id-card" style={{ marginRight:8, color:t.info }} />
+            ONU Information
+          </h3>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr', gap:12, marginBottom:24 }}>
+            <Card style={{ padding:14 }}>
+              <div style={{ fontSize:11, color:t.textMuted, marginBottom:6 }}>Status</div>
+              <StatusBadge status={diagnostics.status} />
+            </Card>
+            <Card style={{ padding:14 }}>
+              <div style={{ fontSize:11, color:t.textMuted, marginBottom:6 }}>Serial Number</div>
+              <div style={{ fontSize:13, fontWeight:600, color:t.text, fontFamily:'monospace' }}>{diagnostics.serial || 'N/A'}</div>
+            </Card>
+            <Card style={{ padding:14 }}>
+              <div style={{ fontSize:11, color:t.textMuted, marginBottom:6 }}>Description</div>
+              <div style={{ fontSize:13, color:t.text }}>{diagnostics.description || '-'}</div>
+            </Card>
+            <Card style={{ padding:14 }}>
+              <div style={{ fontSize:11, color:t.textMuted, marginBottom:6 }}>MAC Address</div>
+              <div style={{ fontSize:13, color:t.text, fontFamily:'monospace' }}>{diagnostics.mac || 'N/A'}</div>
+            </Card>
+          </div>
+
+          {/* Optical levels */}
+          <h3 style={{ fontSize:16, fontWeight:700, color:t.text, marginBottom:16 }}>Optical Signal Levels</h3>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:16, marginBottom:24 }}>
+            <Card style={{ padding:20, textAlign:'center' }}>
+              <div style={{ fontSize:12, color:t.textMuted, marginBottom:12, fontWeight:600 }}>Rx Power</div>
+              {rxVal != null ? (
+                <div>
+                  {/* Gauge visualization */}
+                  <div style={{ position:'relative', width:120, height:60, margin:'0 auto 12px', overflow:'hidden' }}>
+                    <div style={{ width:120, height:120, borderRadius:'50%', border:`8px solid ${t.border}`, borderBottomColor:'transparent', borderLeftColor:'transparent', position:'absolute', top:0, transform:'rotate(0deg)' }} />
+                    <div style={{
+                      width:120, height:120, borderRadius:'50%',
+                      border:`8px solid ${rxVal > -25 ? t.success : rxVal > -28 ? t.warning : t.danger}`,
+                      borderBottomColor:'transparent', borderLeftColor:'transparent',
+                      position:'absolute', top:0,
+                      transform:`rotate(${Math.max(0, Math.min(180, ((rxVal + 40) / 30) * 180))}deg)`,
+                      transition:'transform .5s'
+                    }} />
+                    <div style={{ position:'absolute', bottom:0, left:'50%', transform:'translateX(-50%)', fontSize:20, fontWeight:800, color: rxVal > -25 ? t.success : rxVal > -28 ? t.warning : t.danger }}>
+                      {rxVal.toFixed(2)}
+                    </div>
+                  </div>
+                  <div style={{ fontSize:12, color:t.textMuted }}>dBm</div>
+                  <SignalMeter value={rxVal} />
+                </div>
+              ) : <span style={{ color:t.textMuted }}>N/A</span>}
+            </Card>
+
+            <Card style={{ padding:20, textAlign:'center' }}>
+              <div style={{ fontSize:12, color:t.textMuted, marginBottom:12, fontWeight:600 }}>Tx Power</div>
+              {txVal != null ? (
+                <div>
+                  <div style={{ fontSize:32, fontWeight:800, color:t.text, marginBottom:8 }}>{txVal.toFixed(2)}</div>
+                  <div style={{ fontSize:12, color:t.textMuted }}>dBm</div>
+                  <div style={{ marginTop:12, height:8, borderRadius:4, background:t.border, overflow:'hidden' }}>
+                    <div style={{ width:`${Math.max(0, Math.min(100, ((txVal + 10) / 15) * 100))}%`, height:'100%', borderRadius:4, background:t.info }} />
+                  </div>
+                </div>
+              ) : <span style={{ color:t.textMuted }}>N/A</span>}
+            </Card>
+
+            <Card style={{ padding:20, textAlign:'center' }}>
+              <div style={{ fontSize:12, color:t.textMuted, marginBottom:12, fontWeight:600 }}>Distance</div>
+              {diagnostics.distance != null ? (
+                <div>
+                  <div style={{ fontSize:32, fontWeight:800, color:t.text, marginBottom:8 }}>{diagnostics.distance}</div>
+                  <div style={{ fontSize:12, color:t.textMuted }}>meters</div>
+                  <div style={{ marginTop:12, display:'flex', alignItems:'center', justifyContent:'center', gap:8 }}>
+                    <Icon name="fa-ruler-horizontal" style={{ color:t.accent }} />
+                    <span style={{ fontSize:13, color:t.textSec }}>{(diagnostics.distance / 1000).toFixed(2)} km</span>
+                  </div>
+                </div>
+              ) : <span style={{ color:t.textMuted }}>N/A</span>}
+            </Card>
+          </div>
+
+          {/* Signal quality visualization */}
+          <h3 style={{ fontSize:14, fontWeight:700, color:t.text, marginBottom:16 }}>
+            <Icon name="fa-chart-bar" style={{ marginRight:8, color:t.accent }} />
+            Signal Quality Visualization
+          </h3>
+          <Card style={{ marginBottom:24 }}>
+            <div style={{ display:'flex', alignItems:'flex-end', gap:32, height:160, padding:'16px 24px' }}>
+              {[
+                { label:'Rx Power', value:rxVal, max:-10, min:-40, unit:'dBm', color: rxVal != null ? (rxVal > -25 ? t.success : rxVal > -28 ? t.warning : t.danger) : t.textMuted, threshold:true },
+                { label:'Tx Power', value:txVal, max:5, min:-10, unit:'dBm', color:t.info, threshold:false },
+              ].map((bar, i) => {
+                const pct = bar.value != null ? Math.max(5, Math.min(100, ((bar.value - bar.min) / (bar.max - bar.min)) * 100)) : 0;
+                return (
+                  <div key={i} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:8 }}>
+                    <div style={{ fontSize:14, fontWeight:700, color:bar.color }}>{bar.value != null ? `${bar.value.toFixed(2)} ${bar.unit}` : 'N/A'}</div>
+                    {bar.threshold && bar.value != null && (
+                      <Badge color={bar.color} label={bar.value > -25 ? 'Good' : bar.value > -28 ? 'Warning' : 'Critical'} />
+                    )}
+                    <div style={{ width:'100%', maxWidth:100, height:120, background:t.border, borderRadius:10, overflow:'hidden', display:'flex', alignItems:'flex-end', position:'relative' }}>
+                      {/* Threshold lines for Rx */}
+                      {bar.threshold && (
+                        <div>
+                          <div style={{ position:'absolute', bottom:`${((-25 - bar.min) / (bar.max - bar.min)) * 100}%`, left:0, right:0, borderTop:`1px dashed ${t.warning}`, zIndex:1 }} />
+                          <div style={{ position:'absolute', bottom:`${((-28 - bar.min) / (bar.max - bar.min)) * 100}%`, left:0, right:0, borderTop:`1px dashed ${t.danger}`, zIndex:1 }} />
+                        </div>
+                      )}
+                      <div style={{ width:'100%', height:`${pct}%`, background:`linear-gradient(to top, ${bar.color}40, ${bar.color})`, borderRadius:10, transition:'height .6s ease-out' }} />
+                    </div>
+                    <div style={{ fontSize:12, color:t.textMuted, fontWeight:600 }}>{bar.label}</div>
+                  </div>
+                );
+              })}
+              {/* Distance as a separate visual */}
+              <div style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:8 }}>
+                <div style={{ fontSize:14, fontWeight:700, color:t.text }}>{diagnostics.distance != null ? `${diagnostics.distance} m` : 'N/A'}</div>
+                {diagnostics.distance != null && (
+                  <div style={{ fontSize:12, color:t.textSec }}>({(diagnostics.distance / 1000).toFixed(2)} km)</div>
+                )}
+                <div style={{ width:'100%', maxWidth:100, height:120, background:t.border, borderRadius:10, overflow:'hidden', display:'flex', alignItems:'flex-end' }}>
+                  <div style={{ width:'100%', height:`${diagnostics.distance != null ? Math.max(5, Math.min(100, (diagnostics.distance / 20000) * 100)) : 0}%`, background:`linear-gradient(to top, ${t.accent}40, ${t.accent})`, borderRadius:10, transition:'height .6s ease-out' }} />
+                </div>
+                <div style={{ fontSize:12, color:t.textMuted, fontWeight:600 }}>Distance</div>
+              </div>
+            </div>
+          </Card>
+
+          {/* Detailed signal readings table */}
+          <h3 style={{ fontSize:14, fontWeight:700, color:t.text, marginBottom:12 }}>
+            <Icon name="fa-table" style={{ marginRight:8, color:t.info }} />
+            Detailed Readings
+          </h3>
+          <Card style={{ padding:0, overflow:'hidden', marginBottom:24 }}>
+            <table style={{ width:'100%', borderCollapse:'collapse' }}>
+              <thead><tr>
+                <TableHead>Parameter</TableHead>
+                <TableHead>Value</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Notes</TableHead>
+              </tr></thead>
+              <tbody>
+                <tr>
+                  <TableCell><strong style={{ color:t.text }}>Rx Power (ONU)</strong></TableCell>
+                  <TableCell>{rxVal != null ? <span style={{ fontFamily:'monospace', fontWeight:600 }}>{rxVal.toFixed(2)} dBm</span> : 'N/A'}</TableCell>
+                  <TableCell>{rxVal != null ? <Badge color={rxVal > -25 ? t.success : rxVal > -28 ? t.warning : t.danger} label={rxVal > -25 ? 'Good' : rxVal > -28 ? 'Warning' : 'Critical'} /> : '-'}</TableCell>
+                  <TableCell><span style={{ fontSize:12, color:t.textMuted }}>{rxVal != null ? (rxVal > -25 ? 'Within normal range' : rxVal > -28 ? 'Signal degradation detected' : 'Signal loss risk - check fiber') : 'No data available'}</span></TableCell>
+                </tr>
+                <tr>
+                  <TableCell><strong style={{ color:t.text }}>Tx Power (ONU)</strong></TableCell>
+                  <TableCell>{txVal != null ? <span style={{ fontFamily:'monospace', fontWeight:600 }}>{txVal.toFixed(2)} dBm</span> : 'N/A'}</TableCell>
+                  <TableCell>{txVal != null ? <Badge color={txVal > 0 ? t.success : txVal > -3 ? t.warning : t.danger} label={txVal > 0 ? 'Normal' : 'Low'} /> : '-'}</TableCell>
+                  <TableCell><span style={{ fontSize:12, color:t.textMuted }}>ONU transmit power level</span></TableCell>
+                </tr>
+                <tr>
+                  <TableCell><strong style={{ color:t.text }}>Distance</strong></TableCell>
+                  <TableCell>{diagnostics.distance != null ? <span style={{ fontFamily:'monospace', fontWeight:600 }}>{diagnostics.distance} m ({(diagnostics.distance / 1000).toFixed(2)} km)</span> : 'N/A'}</TableCell>
+                  <TableCell>{diagnostics.distance != null ? <Badge color={diagnostics.distance < 15000 ? t.success : t.warning} label={diagnostics.distance < 15000 ? 'Normal' : 'Long'} /> : '-'}</TableCell>
+                  <TableCell><span style={{ fontSize:12, color:t.textMuted }}>Estimated fiber distance from OLT</span></TableCell>
+                </tr>
+                <tr>
+                  <TableCell><strong style={{ color:t.text }}>ONU Status</strong></TableCell>
+                  <TableCell><StatusBadge status={diagnostics.status} /></TableCell>
+                  <TableCell>-</TableCell>
+                  <TableCell><span style={{ fontSize:12, color:t.textMuted }}>Current registration/link status</span></TableCell>
+                </tr>
+              </tbody>
+            </table>
+          </Card>
+
+          {/* Threshold reference chart */}
+          <h3 style={{ fontSize:14, fontWeight:700, color:t.text, marginBottom:16 }}>
+            <Icon name="fa-ruler-combined" style={{ marginRight:8, color:t.warning }} />
+            Rx Power Threshold Reference
+          </h3>
+          <Card style={{ marginBottom:24 }}>
+            <div style={{ display:'flex', alignItems:'center', gap:0, height:36, borderRadius:8, overflow:'hidden', marginBottom:16 }}>
+              <div style={{ flex:1, background:`${t.danger}30`, height:'100%', display:'flex', alignItems:'center', justifyContent:'center', fontSize:11, fontWeight:600, color:t.danger }}>
+                <Icon name="fa-exclamation-circle" style={{ marginRight:4, fontSize:10 }} /> Critical
+              </div>
+              <div style={{ flex:1, background:`${t.warning}30`, height:'100%', display:'flex', alignItems:'center', justifyContent:'center', fontSize:11, fontWeight:600, color:t.warning }}>
+                <Icon name="fa-exclamation-triangle" style={{ marginRight:4, fontSize:10 }} /> Warning
+              </div>
+              <div style={{ flex:2, background:`${t.success}30`, height:'100%', display:'flex', alignItems:'center', justifyContent:'center', fontSize:11, fontWeight:600, color:t.success }}>
+                <Icon name="fa-check-circle" style={{ marginRight:4, fontSize:10 }} /> Good
+              </div>
+            </div>
+            <div style={{ display:'flex', justifyContent:'space-between', fontSize:11, color:t.textMuted, marginBottom:12 }}>
+              <span>-40 dBm</span>
+              <span>-28 dBm</span>
+              <span>-25 dBm</span>
+              <span>-10 dBm</span>
+            </div>
+            {rxVal != null && (
+              <div>
+                {/* Current value indicator on the bar */}
+                <div style={{ position:'relative', height:20, background:t.border, borderRadius:4, overflow:'hidden', marginBottom:12 }}>
+                  <div style={{ position:'absolute', left:0, width:'40%', height:'100%', background:`${t.danger}20` }} />
+                  <div style={{ position:'absolute', left:'40%', width:'10%', height:'100%', background:`${t.warning}20` }} />
+                  <div style={{ position:'absolute', left:'50%', width:'50%', height:'100%', background:`${t.success}20` }} />
+                  {/* Marker for current value */}
+                  <div style={{
+                    position:'absolute',
+                    left:`${Math.max(2, Math.min(98, ((rxVal + 40) / 30) * 100))}%`,
+                    top:0, width:4, height:'100%',
+                    background:rxVal > -25 ? t.success : rxVal > -28 ? t.warning : t.danger,
+                    borderRadius:2, transform:'translateX(-50%)',
+                    boxShadow:`0 0 6px ${rxVal > -25 ? t.success : rxVal > -28 ? t.warning : t.danger}`,
+                  }} />
+                </div>
+                <div style={{ display:'flex', alignItems:'center', gap:12, padding:10, background:t.bg, borderRadius:8 }}>
+                  <Icon name="fa-arrow-right" style={{ color:t.accent }} />
+                  <span style={{ fontSize:13, color:t.text }}>Current: <strong style={{ color: rxVal > -25 ? t.success : rxVal > -28 ? t.warning : t.danger }}>{rxVal.toFixed(2)} dBm</strong></span>
+                  <Badge color={rxVal > -25 ? t.success : rxVal > -28 ? t.warning : t.danger} label={rxVal > -25 ? 'Good' : rxVal > -28 ? 'Warning' : 'Critical'} />
+                  <span style={{ marginLeft:'auto', fontSize:11, color:t.textMuted }}>
+                    {rxVal > -25 ? 'No action needed' : rxVal > -28 ? 'Monitor closely - consider fiber inspection' : 'Immediate attention required - check fiber and connectors'}
+                  </span>
+                </div>
+              </div>
+            )}
+          </Card>
+
+          {/* Recommendations */}
+          <h3 style={{ fontSize:14, fontWeight:700, color:t.text, marginBottom:12 }}>
+            <Icon name="fa-clipboard-check" style={{ marginRight:8, color:t.success }} />
+            Diagnostic Summary
+          </h3>
+          <Card>
+            <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+              {rxVal != null && rxVal < -28 && (
+                <div style={{ display:'flex', alignItems:'flex-start', gap:12, padding:12, background:`${t.danger}10`, borderRadius:8, borderLeft:`3px solid ${t.danger}` }}>
+                  <Icon name="fa-exclamation-circle" style={{ color:t.danger, fontSize:16, marginTop:2 }} />
+                  <div>
+                    <div style={{ fontSize:13, fontWeight:600, color:t.danger }}>Critical Signal Level</div>
+                    <div style={{ fontSize:12, color:t.textSec, marginTop:4 }}>Rx power is below -28 dBm. This may cause intermittent connectivity or packet loss. Check fiber connectors, splitters, and cable integrity.</div>
+                  </div>
+                </div>
+              )}
+              {rxVal != null && rxVal >= -28 && rxVal < -25 && (
+                <div style={{ display:'flex', alignItems:'flex-start', gap:12, padding:12, background:`${t.warning}10`, borderRadius:8, borderLeft:`3px solid ${t.warning}` }}>
+                  <Icon name="fa-exclamation-triangle" style={{ color:t.warning, fontSize:16, marginTop:2 }} />
+                  <div>
+                    <div style={{ fontSize:13, fontWeight:600, color:t.warning }}>Marginal Signal Level</div>
+                    <div style={{ fontSize:12, color:t.textSec, marginTop:4 }}>Rx power is between -25 and -28 dBm. The connection is functional but approaching threshold. Schedule fiber inspection if possible.</div>
+                  </div>
+                </div>
+              )}
+              {rxVal != null && rxVal >= -25 && (
+                <div style={{ display:'flex', alignItems:'flex-start', gap:12, padding:12, background:`${t.success}10`, borderRadius:8, borderLeft:`3px solid ${t.success}` }}>
+                  <Icon name="fa-check-circle" style={{ color:t.success, fontSize:16, marginTop:2 }} />
+                  <div>
+                    <div style={{ fontSize:13, fontWeight:600, color:t.success }}>Signal Level Normal</div>
+                    <div style={{ fontSize:12, color:t.textSec, marginTop:4 }}>Rx power is above -25 dBm, which is within the acceptable range. No action needed.</div>
+                  </div>
+                </div>
+              )}
+              {diagnostics.distance != null && diagnostics.distance > 15000 && (
+                <div style={{ display:'flex', alignItems:'flex-start', gap:12, padding:12, background:`${t.info}10`, borderRadius:8, borderLeft:`3px solid ${t.info}` }}>
+                  <Icon name="fa-info-circle" style={{ color:t.info, fontSize:16, marginTop:2 }} />
+                  <div>
+                    <div style={{ fontSize:13, fontWeight:600, color:t.info }}>Long Distance ONU</div>
+                    <div style={{ fontSize:12, color:t.textSec, marginTop:4 }}>This ONU is {(diagnostics.distance / 1000).toFixed(1)} km away, which is relatively far. Signal degradation is expected at longer distances.</div>
+                  </div>
+                </div>
+              )}
+              {(rxVal == null && txVal == null) && (
+                <div style={{ display:'flex', alignItems:'flex-start', gap:12, padding:12, background:`${t.textMuted}10`, borderRadius:8, borderLeft:`3px solid ${t.textMuted}` }}>
+                  <Icon name="fa-question-circle" style={{ color:t.textMuted, fontSize:16, marginTop:2 }} />
+                  <div>
+                    <div style={{ fontSize:13, fontWeight:600, color:t.text }}>No Optical Data Available</div>
+                    <div style={{ fontSize:12, color:t.textSec, marginTop:4 }}>Optical level readings are not available. The ONU may be offline or the OLT may not support SNMP optical level queries for this ONU.</div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </Card>
+        </div>
+      )}
+    </div>
+  );
+};
+
+
+// ============================================================
+//  DEVICE MANAGEMENT MODAL
+// ============================================================
+
+const DeviceManagerModal = ({ onClose, onDeviceChange, showToast }) => {
+  const [devices, setDevices] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [editDevice, setEditDevice] = useState(null);
+  const [showForm, setShowForm] = useState(false);
+  const [testing, setTesting] = useState(null);
+  const [testResult, setTestResult] = useState(null);
+
+  const emptyForm = {
+    label:'', host:'', olt_model:'V1600G', snmp_community:'public', snmp_version:'2c', snmp_port:'161',
+    ssh_username:'', ssh_password:'', enable_password:'', ssh_port:'22', telnet_port:'23', use_ssh:true, pon_port_count:'8', notes:''
+  };
+  const [form, setForm] = useState(emptyForm);
+  const [submitting, setSubmitting] = useState(false);
+
+  const modelOptions = [
+    { value:'V1600G', label:'V1600G' },
+    { value:'V1600D', label:'V1600D' },
+    { value:'V1600G4', label:'V1600G4' },
+    { value:'V1600D8', label:'V1600D8' },
+  ];
+
+  const snmpVersionOptions = [
+    { value:'1', label:'v1' },
+    { value:'2c', label:'v2c' },
+    { value:'3', label:'v3' },
+  ];
+
+  const loadDevices = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/devices`);
+      const data = await res.json();
+      if (res.ok) setDevices(data.devices || []);
+    } catch (err) { console.error(err); }
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => { loadDevices(); }, []);
+
+  const openAdd = () => {
+    setForm(emptyForm);
+    setEditDevice(null);
+    setShowForm(true);
+    setTestResult(null);
+  };
+
+  const openEdit = (d) => {
+    setForm({
+      label: d.label || '',
+      host: d.host || '',
+      olt_model: d.olt_model || 'V1600G',
+      snmp_community: d.snmp_community || 'public',
+      snmp_version: d.snmp_version || '2c',
+      snmp_port: String(d.snmp_port || 161),
+      ssh_username: d.ssh_username || '',
+      ssh_password: d.ssh_password || '', enable_password: d.enable_password || '',
+      ssh_port: String(d.ssh_port || 22),
+      telnet_port: String(d.telnet_port || 23),
+      use_ssh: d.use_ssh !== false,
+      pon_port_count: String(d.pon_port_count || 8),
+      notes: d.notes || '',
+    });
+    setEditDevice(d);
+    setShowForm(true);
+    setTestResult(null);
+  };
+
+  const handleSave = async () => {
+    if (!form.label || !form.host) { showToast('Label and Host are required', 'error'); return; }
+    setSubmitting(true);
+    try {
+      const body = {
+        label: form.label,
+        host: form.host,
+        olt_model: form.olt_model,
+        snmp_community: form.snmp_community,
+        snmp_version: form.snmp_version,
+        snmp_port: parseInt(form.snmp_port, 10),
+        ssh_username: form.ssh_username || null,
+        ssh_password: form.ssh_password || null,
+        enable_password: form.enable_password || null,
+        ssh_port: parseInt(form.ssh_port, 10),
+        telnet_port: parseInt(form.telnet_port, 10),
+        use_ssh: form.use_ssh,
+        pon_port_count: parseInt(form.pon_port_count, 10),
+        notes: form.notes || null,
+      };
+
+      let res;
+      if (editDevice) {
+        res = await fetch(`${API}/devices/${editDevice.id}`, {
+          method: 'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body),
+        });
+      } else {
+        res = await fetch(`${API}/devices`, {
+          method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body),
+        });
+      }
+
+      const data = await res.json();
+      if (res.ok) {
+        showToast(editDevice ? 'Device updated' : 'Device created', 'success');
+        setShowForm(false);
+        loadDevices();
+        onDeviceChange();
+      } else {
+        showToast(data.error || 'Save failed', 'error');
+      }
+    } catch (err) { showToast(err.message, 'error'); }
+    finally { setSubmitting(false); }
+  };
+
+  const deleteDevice = async (id) => {
+    if (!window.confirm('Are you sure you want to delete this device?')) return;
+    try {
+      const res = await fetch(`${API}/devices/${id}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (res.ok) { showToast('Device deleted', 'success'); loadDevices(); onDeviceChange(); }
+      else showToast(data.error || 'Delete failed', 'error');
+    } catch (err) { showToast(err.message, 'error'); }
+  };
+
+  const testDevice = async (id) => {
+    setTesting(id);
+    setTestResult(null);
+    try {
+      const res = await fetch(`${API}/devices/${id}/test`, { method: 'POST', headers:{'Content-Type':'application/json'} });
+      const data = await res.json();
+      setTestResult({ id, ...data });
+      if (res.ok) showToast('Connection test complete', 'success');
+      else showToast(data.error || 'Test failed', 'error');
+    } catch (err) { showToast(err.message, 'error'); setTestResult({ id, error:err.message }); }
+    finally { setTesting(null); }
+  };
+
+  return (
+    <Modal title="Device Management" onClose={onClose} wide>
+      {showForm ? (
+        <div>
+          <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:20 }}>
+            <button onClick={() => setShowForm(false)} style={{ background:'none', border:'none', color:t.textMuted, cursor:'pointer', fontSize:14 }}>
+              <Icon name="fa-arrow-left" /> Back to list
+            </button>
+            <h3 style={{ fontSize:15, fontWeight:700, color:t.text }}>{editDevice ? 'Edit Device' : 'Add New Device'}</h3>
+          </div>
+
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+            <InputField label="Label *" value={form.label} onChange={v => setForm({...form, label:v})} placeholder="e.g. Main OLT" />
+            <InputField label="Host/IP *" value={form.host} onChange={v => setForm({...form, host:v})} placeholder="e.g. 192.168.1.1" />
+            <InputField label="Model" value={form.olt_model} onChange={v => setForm({...form, olt_model:v})} options={modelOptions} />
+            <InputField label="PON Port Count" value={form.pon_port_count} onChange={v => setForm({...form, pon_port_count:v})} type="number" />
+            <InputField label="SNMP Community" value={form.snmp_community} onChange={v => setForm({...form, snmp_community:v})} placeholder="public" />
+            <InputField label="SNMP Version" value={form.snmp_version} onChange={v => setForm({...form, snmp_version:v})} options={snmpVersionOptions} />
+            <InputField label="SNMP Port" value={form.snmp_port} onChange={v => setForm({...form, snmp_port:v})} type="number" />
+            <InputField label="SSH Username" value={form.ssh_username} onChange={v => setForm({...form, ssh_username:v})} placeholder="admin" />
+            <InputField label="SSH Password" value={form.ssh_password} onChange={v => setForm({...form, ssh_password:v})} placeholder="password" type="password" />
+            <InputField label="Enable Password" value={form.enable_password} onChange={v => setForm({...form, enable_password:v})} placeholder="privileged mode (enable)" type="password" />
+            <InputField label="SSH Port" value={form.ssh_port} onChange={v => setForm({...form, ssh_port:v})} type="number" />
+            <InputField label="Telnet Port" value={form.telnet_port} onChange={v => setForm({...form, telnet_port:v})} type="number" />
+            <div style={{ marginBottom:14 }}>
+              <label style={{ fontSize:12, fontWeight:600, color:t.textSec, marginBottom:6, display:'block' }}>Use SSH</label>
+              <label style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer' }}>
+                <input type="checkbox" checked={form.use_ssh} onChange={e => setForm({...form, use_ssh:e.target.checked})} />
+                <span style={{ fontSize:13, color:t.text }}>{form.use_ssh ? 'Enabled' : 'Disabled'}</span>
+              </label>
+            </div>
+          </div>
+
+          <InputField label="Notes" value={form.notes} onChange={v => setForm({...form, notes:v})} placeholder="Optional notes" />
+
+          <div style={{ display:'flex', gap:12, marginTop:16 }}>
+            <Btn onClick={() => setShowForm(false)}>Cancel</Btn>
+            <Btn primary onClick={handleSave} disabled={submitting}>
+              {submitting ? <><Icon name="fa-spinner fa-spin" /> Saving...</> : <><Icon name="fa-save" /> {editDevice ? 'Update' : 'Create'}</>}
+            </Btn>
+          </div>
+        </div>
+      ) : (
+        <div>
+          <div style={{ display:'flex', justifyContent:'space-between', marginBottom:20 }}>
+            <span style={{ fontSize:13, color:t.textMuted }}>{devices.length} device(s)</span>
+            <Btn small primary onClick={openAdd}><Icon name="fa-plus" /> Add Device</Btn>
+          </div>
+
+          {loading ? <LoadingSpinner text="Loading devices..." /> : devices.length === 0 ? (
+            <Card style={{ textAlign:'center', padding:'60px 20px' }}>
+              <div style={{ width:72, height:72, borderRadius:'50%', background:`${t.accent}15`, display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 20px', fontSize:32, color:t.accent }}>
+                <Icon name="fa-server" />
+              </div>
+              <h3 style={{ fontSize:18, fontWeight:700, color:t.text, marginBottom:8 }}>No Devices Configured</h3>
+              <p style={{ fontSize:13, color:t.textMuted, marginBottom:20 }}>Add your first VSOL OLT device to start monitoring</p>
+              <Btn primary onClick={openAdd}><Icon name="fa-plus" /> Add First Device</Btn>
+            </Card>
+          ) : (
+            <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+              {devices.map(d => (
+                <Card key={d.id} style={{ padding:16 }}>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', flexWrap:'wrap', gap:12 }}>
+                    <div style={{ display:'flex', alignItems:'center', gap:16 }}>
+                      <div style={{ width:48, height:48, borderRadius:12, background:`${d.is_active !== false ? t.accent : t.textMuted}15`, display:'flex', alignItems:'center', justifyContent:'center', color:d.is_active !== false ? t.accent : t.textMuted, fontSize:22 }}>
+                        <Icon name="fa-server" />
+                      </div>
+                      <div>
+                        <div style={{ fontSize:15, fontWeight:700, color:t.text }}>{d.label}</div>
+                        <div style={{ display:'flex', gap:12, fontSize:12, color:t.textMuted, marginTop:4, flexWrap:'wrap' }}>
+                          <span><Icon name="fa-globe" style={{ marginRight:4, fontSize:10 }} />{d.host}</span>
+                          <span><Icon name="fa-microchip" style={{ marginRight:4, fontSize:10 }} />{d.olt_model || 'Unknown model'}</span>
+                          <span><Icon name="fa-ethernet" style={{ marginRight:4, fontSize:10 }} />{d.pon_port_count || 8} PON ports</span>
+                          <span><Icon name="fa-network-wired" style={{ marginRight:4, fontSize:10 }} />SNMP {d.snmp_version || '2c'}</span>
+                          {d.use_ssh && <span><Icon name="fa-terminal" style={{ marginRight:4, fontSize:10 }} />SSH:{d.ssh_port || 22}</span>}
+                        </div>
+                        {d.notes && <div style={{ fontSize:11, color:t.textMuted, marginTop:4, fontStyle:'italic' }}>{d.notes}</div>}
+                      </div>
+                    </div>
+                    <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+                      <Badge color={d.is_active !== false ? t.success : t.danger} label={d.is_active !== false ? 'Active' : 'Inactive'} />
+                      <Btn small onClick={() => testDevice(d.id)} disabled={testing === d.id}>
+                        {testing === d.id ? <><Icon name="fa-spinner fa-spin" /> Testing...</> : <><Icon name="fa-plug" /> Test</>}
+                      </Btn>
+                      <Btn small onClick={() => openEdit(d)}><Icon name="fa-edit" /> Edit</Btn>
+                      <Btn small onClick={() => deleteDevice(d.id)} style={{ color:t.danger }}><Icon name="fa-trash" /></Btn>
+                    </div>
+                  </div>
+
+                  {testResult && testResult.id === d.id && (
+                    <div style={{ marginTop:16, padding:16, background:t.bg, borderRadius:10, fontSize:12 }}>
+                      <div style={{ fontSize:13, fontWeight:700, color:t.text, marginBottom:10 }}>Connection Test Results</div>
+                      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+                        <div style={{ padding:12, background:t.bgCard, borderRadius:8, border:`1px solid ${t.border}` }}>
+                          <div style={{ fontSize:11, color:t.textMuted, marginBottom:6 }}>SNMP Connection</div>
+                          {testResult.results?.snmp ? (
+                            <div>
+                              <div style={{ display:'flex', alignItems:'center', gap:6, color:t.success, fontWeight:600, marginBottom:4 }}>
+                                <Icon name="fa-check-circle" /> Connected
+                              </div>
+                              {testResult.results.snmp.sysName && <div style={{ fontSize:11, color:t.textSec }}>Name: {testResult.results.snmp.sysName}</div>}
+                              {testResult.results.snmp.uptime && <div style={{ fontSize:11, color:t.textSec }}>Uptime: {testResult.results.snmp.uptime}</div>}
+                            </div>
+                          ) : testResult.error ? (
+                            <div style={{ color:t.danger, fontWeight:600 }}><Icon name="fa-times-circle" /> {testResult.error}</div>
+                          ) : (
+                            <div style={{ color:t.danger, fontWeight:600 }}><Icon name="fa-times-circle" /> Failed</div>
+                          )}
+                        </div>
+                        <div style={{ padding:12, background:t.bgCard, borderRadius:8, border:`1px solid ${t.border}` }}>
+                          <div style={{ fontSize:11, color:t.textMuted, marginBottom:6 }}>SSH Connection</div>
+                          {testResult.results?.ssh?.connected ? (
+                            <div style={{ display:'flex', alignItems:'center', gap:6, color:t.success, fontWeight:600 }}>
+                              <Icon name="fa-check-circle" /> Connected
+                            </div>
+                          ) : (
+                            <div style={{ color:t.warning, fontWeight:600 }}>
+                              <Icon name="fa-minus-circle" /> {testResult.results?.ssh?.message || testResult.results?.ssh?.error || 'Not tested'}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </Card>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </Modal>
+  );
+};
+
+
+// ============================================================
+//  MAIN APP
+// ============================================================
+
+const OLTApp = () => {
+  const [devices, setDevices] = useState([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState(null);
+  const [activeTab, setActiveTab] = useState('overview');
+  const [showDeviceModal, setShowDeviceModal] = useState(false);
+  const [toast, setToast] = useState(null);
+  const [loadingDevices, setLoadingDevices] = useState(true);
+
+  const showToast = (message, type = 'info') => setToast({ message, type });
+
+  const loadDevices = async () => {
+    setLoadingDevices(true);
+    try {
+      const res = await fetch(`${API}/devices`);
+      const data = await res.json();
+      if (res.ok) {
+        const devs = data.devices || [];
+        setDevices(devs);
+        if (!selectedDeviceId && devs.length > 0) setSelectedDeviceId(devs[0].id);
+        else if (selectedDeviceId && !devs.find(d => d.id === selectedDeviceId) && devs.length > 0) setSelectedDeviceId(devs[0].id);
+      }
+    } catch (err) { console.error(err); }
+    finally { setLoadingDevices(false); }
+  };
+
+  useEffect(() => { loadDevices(); }, []);
+
+  const selectedDevice = devices.find(d => d.id === selectedDeviceId) || null;
+
+  const tabs = [
+    { id:'overview',    label:'Overview',       icon:'fa-tachometer-alt' },
+    { id:'pon-ports',   label:'PON Ports',      icon:'fa-ethernet' },
+    { id:'onus',        label:'ONUs',           icon:'fa-cube' },
+    { id:'register',    label:'Registration',   icon:'fa-plus-circle' },
+    { id:'mappings',    label:'Mappings',       icon:'fa-link' },
+    { id:'alarms',      label:'Alarms',         icon:'fa-bell' },
+    { id:'diagnostics', label:'Diagnostics',    icon:'fa-stethoscope' },
+  ];
+
+  return (
+    <div style={{ height:'100vh', display:'flex', flexDirection:'column', background:t.bg, color:t.text }}>
+      {/* Top bar */}
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'12px 24px', background:t.bgCard, borderBottom:`1px solid ${t.border}`, flexShrink:0 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:16 }}>
+          <div style={{ width:36, height:36, borderRadius:9, background:`linear-gradient(135deg,${t.accent},${t.accentDk})`, display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontWeight:800, fontSize:14, letterSpacing:-0.5 }}>NF</div>
+          <div>
+            <h1 style={{ fontSize:17, fontWeight:700, color:t.text, lineHeight:1.2 }}>OLT Manager</h1>
+            <div style={{ fontSize:10, color:t.textMuted, marginTop:1 }}>VSOL OLT Management Console</div>
+          </div>
+
+          {/* Separator */}
+          <div style={{ width:1, height:32, background:t.border, margin:'0 4px' }} />
+
+          {/* Device selector */}
+          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+            <div style={{ fontSize:12, color:t.textMuted, fontWeight:600, whiteSpace:'nowrap' }}>
+              <Icon name="fa-server" style={{ marginRight:4 }} /> Device:
+            </div>
+            <select value={selectedDeviceId || ''} onChange={e => setSelectedDeviceId(parseInt(e.target.value, 10) || null)}
+              style={{ padding:'8px 14px', border:`1px solid ${t.inputBorder}`, borderRadius:8, fontSize:13, background:t.input, color:t.text, fontFamily:'inherit', outline:'none', minWidth:220 }}>
+              {devices.length === 0 && <option value="">No devices configured</option>}
+              {devices.map(d => <option key={d.id} value={d.id}>{d.label} ({d.host})</option>)}
+            </select>
+            {selectedDevice && (
+              <div style={{ display:'flex', alignItems:'center', gap:6, fontSize:11 }}>
+                <span style={{ width:8, height:8, borderRadius:'50%', background: selectedDevice.is_active !== false ? t.success : t.danger }} />
+                <span style={{ color:t.textMuted }}>{selectedDevice.olt_model || 'OLT'}</span>
+                <span style={{ color:t.textMuted }}>|</span>
+                <span style={{ color:t.textMuted }}>{selectedDevice.pon_port_count || 8} ports</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          <button onClick={() => setShowDeviceModal(true)} title="Device Settings"
+            style={{ width:36, height:36, borderRadius:8, background:t.bg, border:`1px solid ${t.border}`, color:t.textMuted, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', fontSize:16, transition:'all .2s' }}>
+            <Icon name="fa-cog" />
+          </button>
+          <a href="/crm/" style={{ padding:'8px 16px', borderRadius:8, border:`1px solid ${t.border}`, background:t.bg, color:t.textSec, fontSize:13, fontWeight:600, textDecoration:'none', display:'flex', alignItems:'center', gap:6, transition:'all .2s' }}>
+            <Icon name="fa-arrow-left" /> Back to CRM
+          </a>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <Tabs tabs={tabs} active={activeTab} onChange={setActiveTab} />
+
+      {/* Content */}
+      <div style={{ flex:1, overflow:'auto' }}>
+        {loadingDevices ? (
+          <LoadingSpinner text="Loading OLT devices..." />
+        ) : devices.length === 0 ? (
+          <div style={{ padding:40 }}>
+            <Card style={{ textAlign:'center', padding:'80px 40px', maxWidth:500, margin:'0 auto' }}>
+              <div style={{ width:80, height:80, borderRadius:'50%', background:`${t.accent}15`, display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 24px', fontSize:36, color:t.accent }}>
+                <Icon name="fa-server" />
+              </div>
+              <h2 style={{ fontSize:22, fontWeight:700, color:t.text, marginBottom:12 }}>Welcome to OLT Manager</h2>
+              <p style={{ fontSize:14, color:t.textMuted, marginBottom:24, lineHeight:1.6 }}>
+                No OLT devices have been configured yet. Add your first VSOL OLT device to begin monitoring PON ports, ONUs, and optical signal levels.
+              </p>
+              <Btn primary onClick={() => setShowDeviceModal(true)}>
+                <Icon name="fa-plus" /> Add Your First Device
+              </Btn>
+              <div style={{ marginTop:24, display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:16 }}>
+                <div style={{ padding:12, background:t.bg, borderRadius:8 }}>
+                  <Icon name="fa-ethernet" style={{ color:t.accent, fontSize:20, marginBottom:8 }} />
+                  <div style={{ fontSize:11, color:t.textMuted }}>PON Port Monitoring</div>
+                </div>
+                <div style={{ padding:12, background:t.bg, borderRadius:8 }}>
+                  <Icon name="fa-cube" style={{ color:t.success, fontSize:20, marginBottom:8 }} />
+                  <div style={{ fontSize:11, color:t.textMuted }}>ONU Management</div>
+                </div>
+                <div style={{ padding:12, background:t.bg, borderRadius:8 }}>
+                  <Icon name="fa-signal" style={{ color:t.warning, fontSize:20, marginBottom:8 }} />
+                  <div style={{ fontSize:11, color:t.textMuted }}>Signal Diagnostics</div>
+                </div>
+              </div>
+            </Card>
+          </div>
+        ) : (
+          <div>
+            {activeTab === 'overview' && <OverviewTab deviceId={selectedDeviceId} />}
+            {activeTab === 'pon-ports' && <PonPortsTab deviceId={selectedDeviceId} />}
+            {activeTab === 'onus' && <OnusTab deviceId={selectedDeviceId} showToast={showToast} />}
+            {activeTab === 'register' && <RegistrationTab deviceId={selectedDeviceId} device={selectedDevice} showToast={showToast} />}
+            {activeTab === 'mappings' && <MappingsTab deviceId={selectedDeviceId} showToast={showToast} />}
+            {activeTab === 'alarms' && <AlarmsTab deviceId={selectedDeviceId} />}
+            {activeTab === 'diagnostics' && <DiagnosticsTab deviceId={selectedDeviceId} device={selectedDevice} />}
+          </div>
+        )}
+      </div>
+
+      {/* Status bar */}
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'6px 24px', background:t.bgCard, borderTop:`1px solid ${t.border}`, flexShrink:0, fontSize:11, color:t.textMuted }}>
+        <div style={{ display:'flex', alignItems:'center', gap:16 }}>
+          <span>
+            <Icon name="fa-server" style={{ marginRight:4 }} />
+            {devices.length} device(s)
+          </span>
+          {selectedDevice && (
+            <span>
+              <span style={{ width:6, height:6, borderRadius:'50%', background:t.success, display:'inline-block', marginRight:4 }} />
+              Connected to {selectedDevice.label}
+            </span>
+          )}
+        </div>
+        <div style={{ display:'flex', alignItems:'center', gap:16 }}>
+          <span>Netfactory OLT Manager v1.0</span>
+          <span>API: {API}</span>
+        </div>
+      </div>
+
+      {/* Device management modal */}
+      {showDeviceModal && (
+        <DeviceManagerModal onClose={() => setShowDeviceModal(false)} onDeviceChange={loadDevices} showToast={showToast} />
+      )}
+
+      {/* Toast */}
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+    </div>
+  );
+};
+
+
+// ── Mount ────────────────────────────────────────────────────
+ReactDOM.createRoot(document.getElementById('root')).render(<OLTApp />);
+</script>
+
+<!-- Boot script: Babel transpile with localStorage caching -->
+<script>
+(function() {
+  var CACHE_KEY = 'j2olt_compiled_v1';
+  var src = document.getElementById('jsx-source').textContent;
+  function fastHash(s) { for(var h=5381,i=0;i<s.length;i++) h=((h<<5)+h)^s.charCodeAt(i); return (h>>>0).toString(36); }
+  var hash = fastHash(src);
+  try { var cached = localStorage.getItem(CACHE_KEY); if(cached) { var sep=cached.indexOf('|'); if(sep>0&&cached.substring(0,sep)===hash) { var s=document.createElement('script'); s.textContent=cached.substring(sep+1); document.body.appendChild(s); console.log('[OLT] Loaded from cache (' + hash + ')'); return; } } } catch(e){}
+  console.log('[OLT] Cache miss — loading Babel...');
+  var babel = document.createElement('script');
+  babel.src = 'https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js';
+  babel.onload = function() { try { var t0 = performance.now(); var result = Babel.transform(src, {presets:['react']}).code; console.log('[OLT] Transpiled in ' + Math.round(performance.now() - t0) + 'ms'); try{localStorage.setItem(CACHE_KEY, hash+'|'+result);}catch(e){console.warn('[OLT] Cache write failed:', e);} var s=document.createElement('script'); s.textContent=result; document.body.appendChild(s); }catch(e){console.error('[OLT] Transpile error:',e);} };
+  document.head.appendChild(babel);
+})();
+</script>
+</body>
+</html>

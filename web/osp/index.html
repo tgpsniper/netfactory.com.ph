@@ -1,0 +1,1005 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+// ── Secure Fetch Interceptor ─────────────────────────────
+(function(){
+  const _fetch = window.fetch;
+  window.fetch = function(url, opts) {
+    opts = opts || {};
+    const urlStr = typeof url === 'string' ? url : (url.url || '');
+    if (urlStr.startsWith('/api') || urlStr.includes('/api/')) {
+      opts.credentials = 'include';
+      const method = (opts.method || 'GET').toUpperCase();
+      if (['POST','PUT','DELETE','PATCH'].includes(method)) {
+        opts.headers = opts.headers || {};
+        if (!opts.headers['X-CSRF-Token'] && !opts.headers['x-csrf-token']) {
+          const m = document.cookie.match(/j2_csrf=([^;]+)/);
+          if (m) opts.headers['X-CSRF-Token'] = m[1];
+        }
+      }
+    }
+    return _fetch.call(this, url, opts);
+  };
+})();
+</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0f172a">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="/osp/manifest.json">
+<link rel="apple-touch-icon" href="/osp/icon-192.png">
+<title>Netfactory — Field Operations</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@700;800&display=swap" rel="stylesheet">
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0f172a;--bg2:#1e293b;--card:#1e293b;--border:#334155;
+  --text:#f1f5f9;--text2:#94a3b8;--text3:#64748b;
+  --accent:#06b6d4;--accent2:#0891b2;
+  --success:#22c55e;--warning:#f59e0b;--danger:#ef4444;
+  --purple:#8b5cf6;--amber:#f59e0b;
+  --input:#0f172a;--inputBorder:#475569;
+  --shadow:0 4px 24px rgba(0,0,0,.4);
+  --radius:16px;
+}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;-webkit-tap-highlight-color:transparent;overflow-x:hidden}
+input,textarea,select,button{font-family:inherit}
+
+::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--accent2);border-radius:4px}
+@keyframes fadeIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(100%)}to{opacity:1;transform:translateY(0)}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+@keyframes spin{to{transform:rotate(360deg)}}
+.fade-in{animation:fadeIn .3s ease}.slide-up{animation:slideUp .3s ease}
+
+.app{max-width:480px;margin:0 auto;min-height:100vh;position:relative;display:flex;flex-direction:column}
+
+/* ── Header ── */
+.header{padding:14px 20px;background:var(--bg2);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between}
+.header-logo{display:flex;align-items:center;gap:10px}
+.header-logo h1{font-family:'Space Grotesk',sans-serif;font-size:18px;font-weight:800;background:linear-gradient(135deg,var(--accent),var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.header-logo span{font-size:11px;color:var(--text3);font-weight:500}
+.header-user{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text2)}
+.header-user .avatar{width:32px;height:32px;border-radius:50%;background:var(--accent2);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;color:#fff}
+.logout-btn{background:none;border:none;color:var(--text3);font-size:18px;cursor:pointer;padding:4px;margin-left:6px}
+
+/* ── Bottom Nav ── */
+.bottom-nav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:480px;display:flex;background:var(--bg2);border-top:1px solid var(--border);padding:6px 8px;gap:4px;z-index:50}
+.bottom-nav .nav-item{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:8px 4px;border-radius:12px;border:none;background:transparent;color:var(--text3);font-size:10px;font-weight:600;cursor:pointer;transition:all .2s}
+.bottom-nav .nav-item.active{background:var(--accent);color:#fff}
+.bottom-nav .nav-item i{font-size:16px}
+.bottom-nav .nav-item .badge{position:absolute;top:-2px;right:-2px;width:16px;height:16px;border-radius:50%;background:var(--danger);color:#fff;font-size:8px;font-weight:800;display:flex;align-items:center;justify-content:center}
+
+/* ── Content ── */
+.content{flex:1;overflow-y:auto;padding-bottom:80px}
+
+/* ── Stats Bar ── */
+.stats-bar{display:flex;gap:8px;padding:16px 16px 8px;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.stats-bar::-webkit-scrollbar{display:none}
+.stat-pill{flex:0 0 auto;padding:10px 16px;border-radius:14px;background:var(--card);border:1px solid var(--border);text-align:center;min-width:80px}
+.stat-pill .num{font-size:20px;font-weight:800;font-family:'Space Grotesk',sans-serif}
+.stat-pill .label{font-size:9px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-top:2px}
+
+/* ── Cards ── */
+.sub-card,.wo-card{margin:0 16px 12px;border-radius:14px;background:var(--card);border:1px solid var(--border);padding:16px;transition:all .2s;cursor:pointer;position:relative}
+.sub-card:active,.wo-card:active{transform:scale(.98);background:var(--bg)}
+
+/* ── Section ── */
+.section-title{padding:16px 16px 8px;font-size:12px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:1px;display:flex;align-items:center;gap:8px}
+
+/* ── Empty State ── */
+.empty{padding:60px 20px;text-align:center}
+.empty .icon{font-size:48px;margin-bottom:12px}
+.empty .msg{font-size:14px;color:var(--text2);line-height:1.5}
+
+/* ── Modal ── */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:100;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:blur(4px)}
+.modal-sheet{background:var(--bg2);border-radius:24px 24px 0 0;width:100%;max-width:480px;max-height:92vh;overflow-y:auto;animation:slideUp .3s ease}
+.modal-handle{width:40px;height:4px;border-radius:4px;background:var(--border);margin:12px auto}
+.modal-header{padding:4px 24px 16px;display:flex;justify-content:space-between;align-items:center}
+.modal-header h2{font-size:18px;font-weight:800;font-family:'Space Grotesk',sans-serif}
+.modal-close{background:none;border:none;color:var(--text3);font-size:24px;cursor:pointer;padding:4px}
+.modal-body{padding:0 24px 32px}
+
+/* ── GPS Banner ── */
+.gps-banner{padding:12px 16px;border-radius:12px;font-size:13px;font-weight:600;display:flex;align-items:center;gap:10px;margin-bottom:16px}
+.gps-banner.ok{background:rgba(34,197,94,.12);color:var(--success)}
+.gps-banner.wait{background:rgba(245,158,11,.12);color:var(--warning)}
+.gps-banner .coords{font-size:10px;font-weight:400;opacity:.8;margin-left:auto}
+
+/* ── Photo ── */
+.photo-area{margin-bottom:16px}
+.photo-label{font-size:12px;font-weight:600;color:var(--text2);margin-bottom:10px;display:flex;align-items:center;gap:6px}
+.photo-options{display:flex;gap:10px}
+.photo-btn{flex:1;padding:24px 12px;border-radius:14px;border:2px dashed var(--border);background:var(--input);text-align:center;cursor:pointer;transition:all .2s}
+.photo-btn:active{border-color:var(--accent);background:rgba(6,182,212,.05)}
+.photo-btn .icon{font-size:32px;margin-bottom:6px}
+.photo-btn .text{font-size:12px;font-weight:600;color:var(--accent)}
+.photo-btn .sub{font-size:10px;color:var(--text3);margin-top:2px}
+.photo-btn input{display:none}
+.photo-preview{position:relative;border-radius:14px;overflow:hidden;border:1px solid var(--border)}
+.photo-preview img{width:100%;max-height:280px;object-fit:cover;display:block}
+.photo-preview .remove{position:absolute;top:10px;right:10px;width:32px;height:32px;border-radius:50%;background:rgba(0,0,0,.7);color:#fff;border:none;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+
+/* ── Form ── */
+.form-group{margin-bottom:16px}
+.form-group label{font-size:12px;font-weight:600;color:var(--text2);margin-bottom:6px;display:block}
+.form-group textarea,.form-group input,.form-group select{width:100%;padding:14px;border-radius:12px;border:1px solid var(--inputBorder);background:var(--input);color:var(--text);font-size:14px;outline:none}
+.form-group textarea{resize:vertical;min-height:80px;line-height:1.5}
+.form-group input:focus,.form-group textarea:focus,.form-group select:focus{border-color:var(--accent)}
+.form-group ::placeholder{color:var(--text3)}
+
+/* ── Buttons ── */
+.btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:16px;border-radius:14px;font-size:15px;font-weight:700;border:none;cursor:pointer;transition:all .15s;-webkit-tap-highlight-color:transparent}
+.btn:active{transform:scale(.97)}
+.btn-primary{background:linear-gradient(135deg,var(--accent2),var(--purple));color:#fff}
+.btn-approve{background:var(--purple);color:#fff}
+.btn-decline{background:var(--danger);color:#fff}
+.btn-success{background:var(--success);color:#fff}
+.btn-amber{background:var(--amber);color:#000}
+.btn-cancel{background:var(--bg);color:var(--text2);border:1px solid var(--border)}
+.btn-sm{padding:10px 16px;font-size:13px;border-radius:10px;width:auto}
+.btn:disabled{opacity:.5;cursor:default;transform:none}
+.btn-group{display:flex;flex-direction:column;gap:10px;margin-top:20px}
+
+/* ── Checklist ── */
+.checklist-group{margin-bottom:16px}
+.checklist-group-title{font-size:11px;font-weight:700;color:var(--amber);text-transform:uppercase;letter-spacing:.5px;padding:8px 0 4px;display:flex;align-items:center;gap:6px}
+.checklist-item{display:flex;align-items:center;gap:10px;padding:12px;border-radius:10px;background:var(--input);border:1px solid var(--border);margin-bottom:6px;cursor:pointer;transition:all .15s}
+.checklist-item:active{background:var(--bg2)}
+.checklist-item.done{border-color:rgba(34,197,94,.3)}
+.check-box{width:24px;height:24px;border-radius:7px;border:2px solid var(--text3);display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .2s}
+.checklist-item.done .check-box{background:var(--success);border-color:var(--success)}
+.check-label{font-size:13px;color:var(--text);flex:1}
+.checklist-item.done .check-label{text-decoration:line-through;color:var(--text3)}
+
+/* ── Progress ── */
+.progress-bar{height:8px;border-radius:4px;background:var(--border);margin:8px 0 16px;overflow:hidden}
+.progress-bar .fill{height:100%;border-radius:4px;transition:width .3s}
+
+/* ── Detail Grid ── */
+.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;padding:16px;background:var(--input);border-radius:14px;border:1px solid var(--border)}
+.detail-item .dl{font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.5px}
+.detail-item .dv{font-size:13px;font-weight:500;color:var(--text);margin-top:2px}
+
+/* ── Material Row ── */
+.material-row{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-radius:10px;background:var(--input);border:1px solid var(--border);margin-bottom:6px}
+.material-row .mat-name{font-size:13px;color:var(--text)}
+.material-row .mat-qty{font-size:12px;color:var(--text2);font-weight:600}
+.material-row .mat-del{background:none;border:none;color:var(--danger);cursor:pointer;font-size:14px;padding:4px}
+
+/* ── Login ── */
+.login-wrap{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 24px}
+.login-card{width:100%;max-width:360px}
+.login-logo{text-align:center;margin-bottom:32px}
+.login-logo h1{font-family:'Space Grotesk',sans-serif;font-size:28px;font-weight:800;background:linear-gradient(135deg,var(--accent),var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.login-logo p{font-size:13px;color:var(--text3);margin-top:6px}
+
+.spinner{width:20px;height:20px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite;display:inline-block}
+
+.toast{position:fixed;bottom:90px;left:50%;transform:translateX(-50%);padding:12px 24px;border-radius:14px;font-size:13px;font-weight:600;z-index:200;animation:fadeIn .3s ease;max-width:90%;text-align:center}
+.toast.success{background:var(--success);color:#fff}
+.toast.error{background:var(--danger);color:#fff}
+
+/* ── Signature Pad ── */
+.sig-canvas{width:100%;height:150px;border-radius:12px;border:2px dashed var(--border);background:var(--input);touch-action:none}
+
+/* ── Responsive ── */
+@media(min-width:481px){.app{border-left:1px solid var(--border);border-right:1px solid var(--border)}}
+@media(min-width:768px){body{background:#0b1120}.app{margin-top:20px;margin-bottom:20px;border-radius:20px;overflow:hidden;min-height:calc(100vh - 40px);border:1px solid var(--border)}.modal-sheet{border-radius:24px;margin-bottom:20px;max-height:85vh}.bottom-nav{border-radius:0 0 20px 20px}}
+</style>
+</head>
+<body>
+<div class="app" id="app"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════
+// Netfactory — OSP Field Operations App
+// Survey + Work Orders + Installation Checklists
+// ═══════════════════════════════════════════════════════
+const API = "/api";
+const OSP_API = "/api/admin/osp";
+const TOKEN_KEY = "j2_osp_token";
+const USER_KEY = "j2_osp_user";
+
+// ── Status colors ──
+const STATUS_COLORS = { pending:'#f59e0b', assigned:'#60a5fa', scheduled:'#a78bfa', in_progress:'#22d3ee', completed:'#34d399', cancelled:'#f87171' };
+const PRIORITY_COLORS = { low:'#34d399', normal:'#60a5fa', high:'#fbbf24', urgent:'#f87171' };
+const TYPE_ICONS = { installation:'fa-tools', survey:'fa-clipboard-check', repair:'fa-wrench', maintenance:'fa-cogs', relocation:'fa-truck' };
+
+// ── State ──
+let state = {
+  screen: "login",
+  user: null,
+  token: null,
+  loading: false,
+  activeTab: "workorders", // workorders | surveys | profile
+  // Work Orders
+  workOrders: [],
+  woFilter: "active", // active | completed | all
+  selectedWO: null,
+  woDetail: null,
+  woDetailTab: "checklist", // checklist | materials | photos
+  // Surveys (legacy)
+  subscribers: [],
+  completedSurveys: [],
+  surveyTab: "surveyed",
+  // Survey modal
+  surveyModal: null,
+  surveyResult: null,
+  surveyPhoto: null,
+  surveyPhotoPreview: null,
+  surveyLat: null,
+  surveyLng: null,
+  gpsStatus: "",
+  surveyNotes: "",
+  surveyLoading: false,
+  // Material add
+  matName: "",
+  matQty: "1",
+  matUnit: "pcs",
+  // Signature
+  sigPad: null,
+  sigDrawing: false,
+  // Toast
+  toast: null,
+  toastType: "success"
+};
+
+// ── Helpers ──
+const $ = id => document.getElementById(id);
+const authHeaders = () => ({ "Content-Type": "application/json", "Authorization": `Bearer ${state.token}` });
+const initials = n => (n||"?").split(" ").map(w=>w[0]).join("").toUpperCase().substring(0,2);
+const fmtDate = d => d ? new Date(d).toLocaleDateString("en-PH",{month:"short",day:"numeric",year:"numeric"}) : "—";
+const fmtTime = d => d ? new Date(d).toLocaleTimeString("en-PH",{hour:"2-digit",minute:"2-digit"}) : "";
+const timeAgo = d => { if(!d)return""; const m=Math.floor((Date.now()-new Date(d).getTime())/60000); if(m<60)return m+"m ago"; const h=Math.floor(m/60); if(h<24)return h+"h ago"; return Math.floor(h/24)+"d ago"; };
+
+function showToast(msg, type="success") {
+  state.toast = msg; state.toastType = type; render();
+  setTimeout(() => { state.toast = null; render(); }, 3000);
+}
+
+// ── Auth ──
+function checkAuth() {
+  const token = localStorage.getItem(TOKEN_KEY);
+  const user = localStorage.getItem(USER_KEY);
+  if (token && user) {
+    state.token = token;
+    state.user = JSON.parse(user);
+    state.screen = "main";
+    loadData();
+  }
+}
+
+async function doLogin() {
+  const un = $("login-user")?.value?.trim();
+  const pw = $("login-pass")?.value;
+  if (!un || !pw) return;
+  state.loading = true; render();
+  try {
+    const res = await fetch(API + "/admin/login", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({username:un,password:pw}) });
+    const data = await res.json();
+    if (data.error) { showToast(data.error, "error"); }
+    else {
+      state.token = data.token;
+      state.user = { id:data.admin.id, name:data.admin.fullName||data.admin.username, username:data.admin.username, role:data.admin.role };
+      localStorage.setItem(TOKEN_KEY, data.token);
+      localStorage.setItem(USER_KEY, JSON.stringify(state.user));
+      state.screen = "main";
+      loadData();
+    }
+  } catch(e) { showToast("Connection failed","error"); }
+  state.loading = false; render();
+}
+
+function doLogout() {
+  localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY);
+  state = { ...state, token:null, user:null, screen:"login", workOrders:[], subscribers:[], completedSurveys:[], selectedWO:null, woDetail:null };
+  render();
+}
+
+// ── Data Loading ──
+async function loadData() {
+  state.loading = true; render();
+  await Promise.all([loadWorkOrders(), loadSurveys()]);
+  state.loading = false; render();
+}
+
+async function loadWorkOrders() {
+  try {
+    const res = await fetch(OSP_API + "/work-orders?assigned_to=" + state.user.id, { headers:authHeaders() });
+    const data = await res.json();
+    if (!data.error) state.workOrders = data.workOrders || [];
+  } catch(e) {}
+}
+
+async function loadSurveys() {
+  try {
+    const res = await fetch(API + "/admin/subscribers?status=surveyed&limit=100", { headers:authHeaders() });
+    const data = await res.json();
+    if (!data.error) state.subscribers = data.subscribers || [];
+  } catch(e) {}
+  try {
+    const res2 = await fetch(API + "/admin/subscribers?status=approved,declined&limit=30", { headers:authHeaders() });
+    const data2 = await res2.json();
+    if (!data2.error) state.completedSurveys = (data2.subscribers||[]).filter(s=>s.notes&&(s.notes.includes("SURVEY APPROVED")||s.notes.includes("SURVEY DECLINED"))).slice(0,20);
+  } catch(e) {}
+}
+
+async function loadWODetail(id) {
+  state.loading = true; render();
+  try {
+    const res = await fetch(OSP_API + "/work-orders/" + id, { headers:authHeaders() });
+    const data = await res.json();
+    if (!data.error) { state.woDetail = data.workOrder; state.selectedWO = id; state.woDetailTab = "checklist"; }
+  } catch(e) { showToast("Failed to load","error"); }
+  state.loading = false; render();
+}
+
+// ── Work Order Actions ──
+async function toggleTask(woId, taskId, completed) {
+  try {
+    await fetch(OSP_API + "/work-orders/" + woId + "/tasks/" + taskId, {
+      method:"PUT", headers:authHeaders(), body:JSON.stringify({ is_completed: completed })
+    });
+    await loadWODetail(woId);
+  } catch(e) { showToast("Failed","error"); }
+}
+
+async function updateWOStatus(woId, status) {
+  try {
+    await fetch(OSP_API + "/work-orders/" + woId, {
+      method:"PUT", headers:authHeaders(), body:JSON.stringify({ status })
+    });
+    showToast("Status updated");
+    await loadWODetail(woId);
+    await loadWorkOrders();
+    render();
+  } catch(e) { showToast("Failed","error"); }
+}
+
+async function completeWO(woId) {
+  try {
+    const res = await fetch(OSP_API + "/work-orders/" + woId + "/complete", { method:"POST", headers:authHeaders() });
+    const data = await res.json();
+    if (data.error) { showToast(data.error,"error"); return; }
+    showToast("Work order completed!");
+    await loadWODetail(woId);
+    await loadWorkOrders();
+    render();
+  } catch(e) { showToast("Failed","error"); }
+}
+
+async function addMaterial(woId) {
+  if (!state.matName.trim()) return;
+  try {
+    await fetch(OSP_API + "/work-orders/" + woId + "/materials", {
+      method:"POST", headers:authHeaders(),
+      body:JSON.stringify({ item_name:state.matName, quantity:parseInt(state.matQty)||1, unit:state.matUnit })
+    });
+    state.matName = ""; state.matQty = "1"; state.matUnit = "pcs";
+    await loadWODetail(woId);
+  } catch(e) { showToast("Failed","error"); }
+}
+
+async function deleteMaterial(woId, matId) {
+  try {
+    await fetch(OSP_API + "/work-orders/" + woId + "/materials/" + matId, { method:"DELETE", headers:authHeaders() });
+    await loadWODetail(woId);
+  } catch(e) { showToast("Failed","error"); }
+}
+
+async function saveSignature(woId) {
+  const canvas = $("sig-canvas");
+  if (!canvas) return;
+  const data = canvas.toDataURL("image/png");
+  try {
+    await fetch(OSP_API + "/work-orders/" + woId + "/signature", {
+      method:"POST", headers:authHeaders(),
+      body:JSON.stringify({ signature_data:data, signed_by:state.woDetail?.subscribers?.first_name + " " + state.woDetail?.subscribers?.last_name })
+    });
+    showToast("Signature saved");
+    await loadWODetail(woId);
+  } catch(e) { showToast("Failed","error"); }
+}
+
+// ── Survey Actions (legacy) ──
+function openSurvey(sub, result) {
+  state.surveyModal = sub; state.surveyResult = result;
+  state.surveyPhoto = null; state.surveyPhotoPreview = null;
+  state.surveyLat = null; state.surveyLng = null;
+  state.gpsStatus = "Detecting location..."; state.surveyNotes = ""; state.surveyLoading = false;
+  render();
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+      pos => { state.surveyLat=pos.coords.latitude; state.surveyLng=pos.coords.longitude; state.gpsStatus="Location captured"; render(); },
+      err => { state.gpsStatus="GPS unavailable: "+err.message; render(); },
+      { enableHighAccuracy:true, timeout:15000 }
+    );
+  } else { state.gpsStatus="GPS not supported"; render(); }
+}
+
+function handlePhoto(e) {
+  const file = e.target.files[0]; if(!file)return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      const MAX=1200; let w=img.width,h=img.height;
+      if(w>MAX||h>MAX){ if(w>h){h=Math.round(h*MAX/w);w=MAX;}else{w=Math.round(w*MAX/h);h=MAX;} }
+      canvas.width=w;canvas.height=h;canvas.getContext("2d").drawImage(img,0,0,w,h);
+      const compressed=canvas.toDataURL("image/jpeg",.7);
+      state.surveyPhoto=compressed;state.surveyPhotoPreview=compressed;render();
+    };
+    img.src=ev.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+async function submitSurvey() {
+  if(!state.surveyModal||state.surveyLoading)return;
+  if(!state.surveyPhoto){showToast("Photo is required","error");return;}
+  state.surveyLoading=true;render();
+  try {
+    const res=await fetch(API+"/admin/surveys",{method:"POST",headers:authHeaders(),body:JSON.stringify({subscriber_id:state.surveyModal.id,latitude:state.surveyLat,longitude:state.surveyLng,notes:state.surveyNotes,result:state.surveyResult,photo:state.surveyPhoto})});
+    const data=await res.json();
+    if(data.error){showToast(data.error,"error");}
+    else{showToast(`Survey ${state.surveyResult==="approved"?"approved":"declined"}`);state.surveyModal=null;loadSurveys().then(()=>render());}
+  }catch(e){showToast("Network error","error");}
+  state.surveyLoading=false;render();
+}
+
+// ═══════════════════════════════════════════════════════
+// RENDER
+// ═══════════════════════════════════════════════════════
+function render() {
+  const app = $("app");
+  if (state.screen === "login") { app.innerHTML = renderLogin(); }
+  else if (state.woDetail) { app.innerHTML = renderHeader() + renderWODetail() + renderToast(); }
+  else { app.innerHTML = renderHeader() + renderContent() + renderBottomNav() + renderSurveyModal() + renderToast(); }
+  bindEvents();
+}
+
+function renderLogin() {
+  return `
+    <div class="login-wrap fade-in">
+      <div class="login-card">
+        <div class="login-logo">
+          <h1>Netfactory</h1>
+          <p>Field Operations Portal</p>
+        </div>
+        <div class="form-group"><label>Username</label><input id="login-user" type="text" placeholder="Enter username" autocomplete="username" autocapitalize="off"></div>
+        <div class="form-group"><label>Password</label><input id="login-pass" type="password" placeholder="Enter password" autocomplete="current-password"></div>
+        <button class="btn btn-primary" id="login-btn" ${state.loading?"disabled":""}>${state.loading?'<span class="spinner"></span>':"Sign In"}</button>
+      </div>
+      ${renderToast()}
+    </div>`;
+}
+
+function renderHeader() {
+  return `
+    <div class="header">
+      <div class="header-logo">
+        ${state.woDetail ? `<button id="back-btn" style="background:none;border:none;color:var(--text2);font-size:16px;cursor:pointer;padding:4px 8px 4px 0"><i class="fas fa-arrow-left"></i></button>` : ""}
+        <div><h1>${state.woDetail ? state.woDetail.order_number : "Netfactory Field Ops"}</h1><span>${state.woDetail ? "Work Order Detail" : "Field Operations"}</span></div>
+      </div>
+      <div class="header-user">
+        <div class="avatar">${initials(state.user?.name)}</div>
+        <button class="logout-btn" id="logout-btn" title="Logout"><i class="fas fa-sign-out-alt"></i></button>
+      </div>
+    </div>`;
+}
+
+function renderBottomNav() {
+  const woActive = state.workOrders.filter(w=>!["completed","cancelled"].includes(w.status)).length;
+  const surveyCount = state.subscribers.length;
+  return `
+    <div class="bottom-nav">
+      <button class="nav-item ${state.activeTab==="workorders"?"active":""}" data-nav="workorders">
+        <span style="position:relative"><i class="fas fa-clipboard-list"></i>${woActive>0?`<span class="badge">${woActive}</span>`:""}</span>
+        <span>Work Orders</span>
+      </button>
+      <button class="nav-item ${state.activeTab==="surveys"?"active":""}" data-nav="surveys">
+        <span style="position:relative"><i class="fas fa-clipboard-check"></i>${surveyCount>0?`<span class="badge">${surveyCount}</span>`:""}</span>
+        <span>Surveys</span>
+      </button>
+      <button class="nav-item ${state.activeTab==="profile"?"active":""}" data-nav="profile">
+        <i class="fas fa-user-circle"></i>
+        <span>Profile</span>
+      </button>
+    </div>`;
+}
+
+function renderContent() {
+  if (state.activeTab === "workorders") return renderWorkOrders();
+  if (state.activeTab === "surveys") return renderSurveys();
+  if (state.activeTab === "profile") return renderProfile();
+  return "";
+}
+
+// ── Work Orders Tab ──
+function renderWorkOrders() {
+  const active = state.workOrders.filter(w=>!["completed","cancelled"].includes(w.status));
+  const completed = state.workOrders.filter(w=>w.status==="completed");
+  const items = state.woFilter==="active" ? active : state.woFilter==="completed" ? completed : state.workOrders;
+
+  return `
+    <div class="content fade-in">
+      <div class="stats-bar">
+        <div class="stat-pill"><div class="num" style="color:var(--warning)">${active.length}</div><div class="label">Active</div></div>
+        <div class="stat-pill"><div class="num" style="color:var(--accent)">${state.workOrders.filter(w=>w.status==="in_progress").length}</div><div class="label">In Progress</div></div>
+        <div class="stat-pill"><div class="num" style="color:var(--success)">${completed.length}</div><div class="label">Completed</div></div>
+        <div class="stat-pill"><div class="num" style="color:var(--text)">${state.workOrders.length}</div><div class="label">Total</div></div>
+      </div>
+
+      <div style="display:flex;gap:6px;padding:8px 16px">
+        <button class="btn btn-sm ${state.woFilter==="active"?"btn-amber":"btn-cancel"}" data-wofilter="active" style="flex:1">Active</button>
+        <button class="btn btn-sm ${state.woFilter==="completed"?"btn-success":"btn-cancel"}" data-wofilter="completed" style="flex:1">Done</button>
+        <button class="btn btn-sm ${state.woFilter==="all"?"btn-primary":"btn-cancel"}" data-wofilter="all" style="flex:1">All</button>
+      </div>
+
+      <div style="padding:8px 16px"><button class="btn btn-cancel btn-sm" id="refresh-wo" style="width:100%"><i class="fas fa-sync-alt"></i> Refresh</button></div>
+
+      ${items.length === 0 ? `<div class="empty"><div class="icon"><i class="fas fa-clipboard-list" style="color:var(--text3)"></i></div><div class="msg">No work orders found</div></div>` :
+        items.map((wo,i) => {
+          const sc = STATUS_COLORS[wo.status]||"#94a3b8";
+          const pc = PRIORITY_COLORS[wo.priority]||"#60a5fa";
+          return `
+            <div class="wo-card fade-in" data-wo-id="${wo.id}" style="animation-delay:${i*50}ms;border-left:3px solid ${sc}">
+              <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+                <div>
+                  <div style="font-size:14px;font-weight:700;color:var(--text)">${wo.order_number}</div>
+                  <div style="font-size:11px;color:${sc};font-weight:600;text-transform:capitalize;margin-top:2px"><i class="fas fa-circle" style="font-size:6px;margin-right:4px"></i>${wo.status.replace("_"," ")}</div>
+                </div>
+                <div style="display:flex;gap:6px">
+                  <span style="font-size:10px;font-weight:700;padding:3px 8px;border-radius:8px;background:${pc}20;color:${pc};text-transform:capitalize">${wo.priority}</span>
+                  <span style="font-size:10px;font-weight:700;padding:3px 8px;border-radius:8px;background:${sc}20;color:${sc}"><i class="fas ${TYPE_ICONS[wo.type]||"fa-file"}" style="margin-right:3px"></i>${wo.type}</span>
+                </div>
+              </div>
+              <div style="font-size:13px;color:var(--text2);margin-bottom:4px"><i class="fas fa-user" style="width:14px;color:var(--text3);font-size:11px"></i> ${wo.subscribers?.first_name||""} ${wo.subscribers?.last_name||""}</div>
+              ${wo.scheduled_date ? `<div style="font-size:11px;color:var(--text3)"><i class="fas fa-calendar" style="width:14px;font-size:10px"></i> ${fmtDate(wo.scheduled_date)}${wo.scheduled_time?" "+wo.scheduled_time:""}</div>` : ""}
+              <div style="font-size:10px;color:var(--text3);margin-top:4px">${timeAgo(wo.created_at)}</div>
+            </div>`;
+        }).join("")
+      }
+    </div>`;
+}
+
+// ── WO Detail View ──
+function renderWODetail() {
+  const wo = state.woDetail;
+  if (!wo) return "";
+  const tasks = wo.work_order_tasks||[];
+  const materials = wo.work_order_materials||[];
+  const photos = wo.work_order_photos||[];
+  const logs = wo.work_order_logs||[];
+  const sig = wo.work_order_signatures;
+  const done = tasks.filter(t=>t.is_completed).length;
+  const total = tasks.length;
+  const pct = total>0?Math.round(done/total*100):0;
+  const sc = STATUS_COLORS[wo.status]||"#94a3b8";
+
+  // Group tasks
+  const taskGroups = {};
+  tasks.forEach(t=>{ const g=t.task_group||"general"; if(!taskGroups[g])taskGroups[g]=[]; taskGroups[g].push(t); });
+
+  return `
+    <div class="content" style="padding-bottom:24px">
+      <!-- Status & Info -->
+      <div style="padding:16px">
+        <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+          <span style="padding:4px 12px;border-radius:20px;font-size:11px;font-weight:700;background:${sc}20;color:${sc};text-transform:capitalize"><i class="fas fa-circle" style="font-size:6px;margin-right:4px"></i>${wo.status.replace("_"," ")}</span>
+          <span style="padding:4px 12px;border-radius:20px;font-size:11px;font-weight:700;background:${PRIORITY_COLORS[wo.priority]}20;color:${PRIORITY_COLORS[wo.priority]};text-transform:capitalize">${wo.priority}</span>
+          <span style="padding:4px 12px;border-radius:20px;font-size:11px;font-weight:700;background:var(--accent)20;color:var(--accent);text-transform:capitalize"><i class="fas ${TYPE_ICONS[wo.type]||"fa-file"}" style="margin-right:3px"></i>${wo.type}</span>
+        </div>
+
+        <div class="detail-grid">
+          <div class="detail-item"><div class="dl">Subscriber</div><div class="dv">${wo.subscribers?.first_name||""} ${wo.subscribers?.last_name||""}</div></div>
+          <div class="detail-item"><div class="dl">Phone</div><div class="dv">${wo.subscribers?.phone_number||"—"}</div></div>
+          <div class="detail-item" style="grid-column:1/-1"><div class="dl">Address</div><div class="dv">${wo.subscribers?.address||"—"}</div></div>
+          ${wo.scheduled_date?`<div class="detail-item"><div class="dl">Scheduled</div><div class="dv">${fmtDate(wo.scheduled_date)}${wo.scheduled_time?" "+wo.scheduled_time:""}</div></div>`:""}
+          ${wo.notes?`<div class="detail-item" style="grid-column:1/-1"><div class="dl">Notes</div><div class="dv" style="font-size:12px">${wo.notes}</div></div>`:""}
+        </div>
+
+        <!-- Progress -->
+        <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700">
+          <span style="color:var(--text2)">Checklist Progress</span>
+          <span style="color:var(--amber)">${done}/${total} (${pct}%)</span>
+        </div>
+        <div class="progress-bar"><div class="fill" style="width:${pct}%;background:${pct===100?"var(--success)":"var(--amber)"}"></div></div>
+
+        <!-- Quick Actions -->
+        <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+          ${wo.status==="assigned"||wo.status==="scheduled"?`<button class="btn btn-amber btn-sm" data-action="start"><i class="fas fa-play"></i> Start Work</button>`:""}
+          ${wo.status==="in_progress"?`<button class="btn btn-success btn-sm" data-action="complete"><i class="fas fa-check-double"></i> Complete</button>`:""}
+        </div>
+
+        <!-- Detail Tabs -->
+        <div style="display:flex;gap:4px;margin-bottom:12px">
+          <button class="btn btn-sm ${state.woDetailTab==="checklist"?"btn-amber":"btn-cancel"}" data-dtab="checklist" style="flex:1"><i class="fas fa-tasks"></i> Tasks (${done}/${total})</button>
+          <button class="btn btn-sm ${state.woDetailTab==="materials"?"btn-amber":"btn-cancel"}" data-dtab="materials" style="flex:1"><i class="fas fa-boxes"></i> Materials (${materials.length})</button>
+          <button class="btn btn-sm ${state.woDetailTab==="photos"?"btn-amber":"btn-cancel"}" data-dtab="photos" style="flex:1"><i class="fas fa-camera"></i> (${photos.length})</button>
+        </div>
+
+        ${state.woDetailTab==="checklist" ? renderChecklist(wo, taskGroups) : ""}
+        ${state.woDetailTab==="materials" ? renderMaterials(wo, materials) : ""}
+        ${state.woDetailTab==="photos" ? renderPhotos(wo, photos, sig) : ""}
+
+        <!-- Activity Log -->
+        ${logs.length>0?`
+          <div style="margin-top:20px">
+            <div class="section-title"><i class="fas fa-history" style="font-size:11px"></i> Activity Log</div>
+            ${logs.slice(0,10).map(l=>`
+              <div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
+                <div style="width:8px;height:8px;border-radius:50%;background:var(--accent);margin-top:5px;flex-shrink:0"></div>
+                <div>
+                  <div style="font-size:12px;font-weight:600;color:var(--text);text-transform:capitalize">${l.action.replace(/_/g," ")}</div>
+                  ${l.details?`<div style="font-size:11px;color:var(--text2)">${l.details}</div>`:""}
+                  <div style="font-size:10px;color:var(--text3)">${l.performed_by||""} — ${timeAgo(l.created_at)}</div>
+                </div>
+              </div>`).join("")}
+          </div>`:""}
+      </div>
+    </div>`;
+}
+
+function renderChecklist(wo, taskGroups) {
+  return Object.entries(taskGroups).map(([group, tasks]) => `
+    <div class="checklist-group">
+      <div class="checklist-group-title"><i class="fas fa-layer-group" style="font-size:10px"></i>${group} <span style="font-size:10px;color:var(--text3);font-weight:400">(${tasks.filter(t=>t.is_completed).length}/${tasks.length})</span></div>
+      ${tasks.sort((a,b)=>a.sort_order-b.sort_order).map(task => `
+        <div class="checklist-item ${task.is_completed?"done":""}" data-task-id="${task.id}" data-wo-id="${wo.id}" data-completed="${task.is_completed?1:0}">
+          <div class="check-box">${task.is_completed?'<i class="fas fa-check" style="font-size:12px;color:#fff"></i>':""}</div>
+          <span class="check-label">${task.task_name}</span>
+          ${task.completed_at?`<span style="font-size:9px;color:var(--text3)">${timeAgo(task.completed_at)}</span>`:""}
+        </div>
+      `).join("")}
+    </div>
+  `).join("");
+}
+
+function renderMaterials(wo, materials) {
+  return `
+    <div>
+      <div style="display:flex;gap:6px;margin-bottom:12px">
+        <input id="mat-name" placeholder="Item name..." value="${state.matName}" style="flex:2;padding:10px;border-radius:10px;border:1px solid var(--inputBorder);background:var(--input);color:var(--text);font-size:13px;outline:none">
+        <input id="mat-qty" type="number" value="${state.matQty}" style="width:50px;padding:10px;border-radius:10px;border:1px solid var(--inputBorder);background:var(--input);color:var(--text);font-size:13px;text-align:center;outline:none">
+        <button class="btn btn-amber btn-sm" id="add-mat" style="width:auto;padding:10px 14px"><i class="fas fa-plus"></i></button>
+      </div>
+      ${materials.length===0?`<div style="text-align:center;padding:20px;color:var(--text3);font-size:13px">No materials logged</div>`:
+        materials.map(m=>`
+          <div class="material-row">
+            <div><div class="mat-name"><i class="fas fa-cube" style="color:var(--amber);margin-right:6px;font-size:11px"></i>${m.item_name}</div></div>
+            <div style="display:flex;align-items:center;gap:10px">
+              <span class="mat-qty">${m.quantity} ${m.unit}</span>
+              <button class="mat-del" data-mat-id="${m.id}" data-wo-id="${wo.id}"><i class="fas fa-trash-alt"></i></button>
+            </div>
+          </div>`).join("")}
+    </div>`;
+}
+
+function renderPhotos(wo, photos, sig) {
+  return `
+    <div>
+      ${photos.length===0?`<div style="text-align:center;padding:20px;color:var(--text3);font-size:13px">No photos uploaded yet</div>`:
+        `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          ${photos.map(p=>`
+            <div style="border-radius:12px;overflow:hidden;border:1px solid var(--border)">
+              <img src="${p.photo_path}" alt="${p.caption||"Photo"}" style="width:100%;height:120px;object-fit:cover">
+              <div style="padding:6px 8px"><div style="font-size:10px;font-weight:700;color:var(--amber);text-transform:capitalize">${p.photo_type}</div>${p.caption?`<div style="font-size:10px;color:var(--text3)">${p.caption}</div>`:""}</div>
+            </div>`).join("")}
+        </div>`}
+
+      <!-- Signature -->
+      <div style="margin-top:20px">
+        <div class="section-title"><i class="fas fa-signature" style="font-size:11px"></i> Customer Signature</div>
+        ${sig ? `
+          <div style="padding:12px;border-radius:12px;border:1px solid var(--border);background:var(--input)">
+            <img src="${sig.signature_data}" alt="Signature" style="max-height:80px;border-radius:4px">
+            <div style="font-size:10px;color:var(--text3);margin-top:4px">Signed by ${sig.signed_by||"Customer"} — ${fmtDate(sig.signed_at)}</div>
+          </div>
+        ` : `
+          <canvas id="sig-canvas" class="sig-canvas" width="400" height="150"></canvas>
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <button class="btn btn-cancel btn-sm" id="clear-sig" style="flex:1"><i class="fas fa-eraser"></i> Clear</button>
+            <button class="btn btn-success btn-sm" id="save-sig" data-wo-id="${wo.id}" style="flex:1"><i class="fas fa-save"></i> Save Signature</button>
+          </div>
+        `}
+      </div>
+    </div>`;
+}
+
+// ── Surveys Tab ──
+function renderSurveys() {
+  const surveyed = state.subscribers;
+  const completed = state.completedSurveys;
+  return `
+    <div class="content fade-in">
+      <div class="stats-bar">
+        <div class="stat-pill"><div class="num" style="color:var(--warning)">${surveyed.length}</div><div class="label">Pending</div></div>
+        <div class="stat-pill"><div class="num" style="color:var(--success)">${completed.filter(s=>s.notes?.includes("SURVEY APPROVED")).length}</div><div class="label">Approved</div></div>
+        <div class="stat-pill"><div class="num" style="color:var(--danger)">${completed.filter(s=>s.notes?.includes("SURVEY DECLINED")).length}</div><div class="label">Declined</div></div>
+      </div>
+      <div style="display:flex;gap:6px;padding:8px 16px">
+        <button class="btn btn-sm ${state.surveyTab==="surveyed"?"btn-primary":"btn-cancel"}" data-stab="surveyed" style="flex:1">Queue (${surveyed.length})</button>
+        <button class="btn btn-sm ${state.surveyTab==="completed"?"btn-success":"btn-cancel"}" data-stab="completed" style="flex:1">Completed (${completed.length})</button>
+      </div>
+      <div style="padding:8px 16px"><button class="btn btn-cancel btn-sm" id="refresh-surveys" style="width:100%"><i class="fas fa-sync-alt"></i> Refresh</button></div>
+      ${state.surveyTab==="surveyed" ? renderSurveyedList(surveyed) : renderCompletedSurveyList(completed)}
+    </div>`;
+}
+
+function renderSurveyedList(subs) {
+  if (subs.length===0) return `<div class="empty"><div class="icon"><i class="fas fa-clipboard-check" style="color:var(--text3)"></i></div><div class="msg">No pending surveys. All caught up!</div></div>`;
+  return subs.map((s,i) => `
+    <div class="sub-card fade-in" style="animation-delay:${i*50}ms">
+      <div style="font-size:15px;font-weight:700;color:var(--text)">${s.firstName} ${s.lastName}</div>
+      <div style="font-size:11px;font-family:monospace;color:var(--accent);margin-top:2px">${s.accountNumber}</div>
+      <div style="font-size:12px;color:var(--text2);margin-top:6px"><i class="fas fa-map-marker-alt" style="color:var(--text3);margin-right:4px"></i>${s.address}${s.barangay?", "+s.barangay:""}${s.municipality?", "+s.municipality:""}</div>
+      ${s.plan?`<span style="display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;background:var(--accent);color:#fff;margin-top:8px">${s.plan.name}${s.plan.speed?" · "+s.plan.speed:""}</span>`:""}
+      <div style="font-size:10px;color:var(--text3);margin-top:8px">Applied: ${fmtDate(s.createdAt)}</div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="btn btn-approve btn-sm" data-sub-id="${s.id}" data-result="approved" style="flex:1"><i class="fas fa-check"></i> Approve</button>
+        <button class="btn btn-decline btn-sm" data-sub-id="${s.id}" data-result="declined" style="flex:1"><i class="fas fa-times"></i> Decline</button>
+      </div>
+    </div>`).join("");
+}
+
+function renderCompletedSurveyList(subs) {
+  if (subs.length===0) return `<div class="empty"><div class="icon"><i class="fas fa-inbox" style="color:var(--text3)"></i></div><div class="msg">No completed surveys yet.</div></div>`;
+  return subs.map((s,i) => {
+    const approved = s.notes?.includes("SURVEY APPROVED");
+    const sc = approved?"var(--success)":"var(--danger)";
+    return `
+      <div class="sub-card fade-in" style="animation-delay:${i*50}ms;border-left:3px solid ${sc}">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div style="font-size:14px;font-weight:700;color:var(--text)">${s.firstName} ${s.lastName}</div>
+          <span style="font-size:11px;font-weight:700;padding:3px 10px;border-radius:20px;background:${sc}18;color:${sc}">${approved?"Approved":"Declined"}</span>
+        </div>
+        <div style="font-size:11px;font-family:monospace;color:var(--accent);margin-top:2px">${s.accountNumber}</div>
+        <div style="font-size:12px;color:var(--text2);margin-top:4px"><i class="fas fa-map-marker-alt" style="color:var(--text3);margin-right:4px"></i>${s.address}${s.barangay?", "+s.barangay:""}</div>
+      </div>`;
+  }).join("");
+}
+
+function renderSurveyModal() {
+  const m = state.surveyModal;
+  if (!m) return "";
+  const isApprove = state.surveyResult === "approved";
+  const color = isApprove ? "var(--purple)" : "var(--danger)";
+  const gpsOk = state.surveyLat !== null;
+  return `
+    <div class="modal-overlay" id="modal-overlay">
+      <div class="modal-sheet slide-up">
+        <div class="modal-handle"></div>
+        <div class="modal-header">
+          <h2 style="color:${color}"><i class="fas ${isApprove?"fa-check-circle":"fa-times-circle"}" style="margin-right:6px"></i>${isApprove?"Approve":"Decline"} Survey</h2>
+          <button class="modal-close" id="modal-close"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="modal-body">
+          <div class="detail-grid">
+            <div class="detail-item"><div class="dl">Name</div><div class="dv">${m.firstName} ${m.lastName}</div></div>
+            <div class="detail-item"><div class="dl">Account</div><div class="dv" style="font-family:monospace;color:var(--accent)">${m.accountNumber}</div></div>
+            <div class="detail-item" style="grid-column:1/-1"><div class="dl">Address</div><div class="dv">${m.address}${m.barangay?", "+m.barangay:""}${m.municipality?", "+m.municipality:""}</div></div>
+            <div class="detail-item"><div class="dl">Phone</div><div class="dv">${m.phone||"—"}</div></div>
+            <div class="detail-item"><div class="dl">Plan</div><div class="dv">${m.plan?m.plan.name:"—"}</div></div>
+          </div>
+
+          <div class="gps-banner ${gpsOk?"ok":"wait"}">
+            <i class="fas fa-map-marker-alt"></i>
+            <span>${state.gpsStatus}</span>
+            ${gpsOk?`<span class="coords">${state.surveyLat.toFixed(6)}, ${state.surveyLng.toFixed(6)}</span>`:""}
+          </div>
+
+          <div class="photo-area">
+            <div class="photo-label"><i class="fas fa-camera"></i> Site Photo <span style="color:var(--danger)">(Required)</span></div>
+            ${state.surveyPhotoPreview ? `
+              <div class="photo-preview">
+                <img src="${state.surveyPhotoPreview}" alt="Survey photo">
+                <button class="remove" id="remove-photo"><i class="fas fa-times"></i></button>
+              </div>
+            ` : `
+              <div class="photo-options">
+                <label class="photo-btn"><div class="icon"><i class="fas fa-camera" style="color:var(--accent)"></i></div><div class="text">Take Photo</div><div class="sub">Open camera</div><input type="file" accept="image/*" capture="environment" id="photo-camera"></label>
+                <label class="photo-btn"><div class="icon"><i class="fas fa-images" style="color:var(--accent)"></i></div><div class="text">Gallery</div><div class="sub">Choose image</div><input type="file" accept="image/*" id="photo-gallery"></label>
+              </div>
+            `}
+          </div>
+
+          <div class="form-group"><label>Survey Notes</label><textarea id="survey-notes" placeholder="${isApprove?"Site is accessible, clear LOS to tower...":"Reason for declining..."}">${state.surveyNotes}</textarea></div>
+
+          <div class="btn-group">
+            <button class="btn ${isApprove?"btn-approve":"btn-decline"}" id="submit-survey" ${!state.surveyPhoto||state.surveyLoading?"disabled":""}>${state.surveyLoading?'<span class="spinner"></span>':`<i class="fas ${isApprove?"fa-check":"fa-times"}"></i> ${isApprove?"Approve":"Decline"} & Submit`}</button>
+            <button class="btn btn-cancel" id="cancel-survey">Cancel</button>
+          </div>
+          ${!state.surveyPhoto?'<div style="text-align:center;font-size:11px;color:var(--danger);margin-top:8px"><i class="fas fa-exclamation-triangle"></i> Photo required to submit</div>':""}
+        </div>
+      </div>
+    </div>`;
+}
+
+// ── Profile Tab ──
+function renderProfile() {
+  return `
+    <div class="content fade-in" style="padding:24px 16px">
+      <div style="text-align:center;margin-bottom:24px">
+        <div style="width:64px;height:64px;border-radius:50%;background:var(--accent2);display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:800;color:#fff;margin:0 auto 12px">${initials(state.user?.name)}</div>
+        <div style="font-size:18px;font-weight:700;color:var(--text)">${state.user?.name||"User"}</div>
+        <div style="font-size:12px;color:var(--text3);text-transform:capitalize">${state.user?.role||"Staff"}</div>
+      </div>
+      <div class="detail-grid">
+        <div class="detail-item"><div class="dl">Username</div><div class="dv">${state.user?.username||"—"}</div></div>
+        <div class="detail-item"><div class="dl">Active WOs</div><div class="dv" style="color:var(--amber)">${state.workOrders.filter(w=>!["completed","cancelled"].includes(w.status)).length}</div></div>
+        <div class="detail-item"><div class="dl">Completed</div><div class="dv" style="color:var(--success)">${state.workOrders.filter(w=>w.status==="completed").length}</div></div>
+        <div class="detail-item"><div class="dl">Pending Surveys</div><div class="dv">${state.subscribers.length}</div></div>
+      </div>
+      <button class="btn btn-decline" id="logout-btn2" style="margin-top:16px"><i class="fas fa-sign-out-alt"></i> Sign Out</button>
+    </div>`;
+}
+
+function renderToast() {
+  if (!state.toast) return "";
+  return `<div class="toast ${state.toastType}">${state.toast}</div>`;
+}
+
+// ═══════════════════════════════════════════════════════
+// EVENT BINDING
+// ═══════════════════════════════════════════════════════
+function bindEvents() {
+  // Login
+  $("login-btn")?.addEventListener("click", doLogin);
+  $("login-pass")?.addEventListener("keydown", e=>{ if(e.key==="Enter") doLogin(); });
+  $("login-user")?.addEventListener("keydown", e=>{ if(e.key==="Enter") $("login-pass")?.focus(); });
+
+  // Logout
+  $("logout-btn")?.addEventListener("click", doLogout);
+  $("logout-btn2")?.addEventListener("click", doLogout);
+
+  // Back from WO detail
+  $("back-btn")?.addEventListener("click", () => { state.woDetail=null; state.selectedWO=null; render(); });
+
+  // Bottom nav
+  document.querySelectorAll("[data-nav]").forEach(el => {
+    el.addEventListener("click", () => { state.activeTab=el.dataset.nav; render(); });
+  });
+
+  // WO filter
+  document.querySelectorAll("[data-wofilter]").forEach(el => {
+    el.addEventListener("click", () => { state.woFilter=el.dataset.wofilter; render(); });
+  });
+
+  // WO card click
+  document.querySelectorAll("[data-wo-id]:not([data-task-id]):not([data-mat-id]):not([data-action])").forEach(el => {
+    el.addEventListener("click", () => loadWODetail(parseInt(el.dataset.woId)));
+  });
+
+  // WO detail tabs
+  document.querySelectorAll("[data-dtab]").forEach(el => {
+    el.addEventListener("click", () => { state.woDetailTab=el.dataset.dtab; render(); });
+  });
+
+  // Checklist toggle
+  document.querySelectorAll("[data-task-id]").forEach(el => {
+    el.addEventListener("click", () => {
+      const woId = parseInt(el.dataset.woId);
+      const taskId = parseInt(el.dataset.taskId);
+      const completed = el.dataset.completed === "1";
+      toggleTask(woId, taskId, !completed);
+    });
+  });
+
+  // WO actions
+  document.querySelectorAll("[data-action]").forEach(el => {
+    el.addEventListener("click", e => {
+      e.stopPropagation();
+      const action = el.dataset.action;
+      if (action === "start") updateWOStatus(state.woDetail.id, "in_progress");
+      if (action === "complete") completeWO(state.woDetail.id);
+    });
+  });
+
+  // Materials
+  $("mat-name")?.addEventListener("input", e=>{ state.matName=e.target.value; });
+  $("mat-qty")?.addEventListener("input", e=>{ state.matQty=e.target.value; });
+  $("add-mat")?.addEventListener("click", ()=>addMaterial(state.woDetail.id));
+  document.querySelectorAll(".mat-del").forEach(el => {
+    el.addEventListener("click", e => {
+      e.stopPropagation();
+      deleteMaterial(parseInt(el.dataset.woId), parseInt(el.dataset.matId));
+    });
+  });
+
+  // Signature canvas
+  const sigCanvas = $("sig-canvas");
+  if (sigCanvas) {
+    const ctx = sigCanvas.getContext("2d");
+    ctx.strokeStyle = "#e2e8f0";
+    ctx.lineWidth = 2;
+    ctx.lineCap = "round";
+    let drawing = false;
+    const getPos = (e) => {
+      const rect = sigCanvas.getBoundingClientRect();
+      const t = e.touches ? e.touches[0] : e;
+      return { x: (t.clientX-rect.left)*(sigCanvas.width/rect.width), y: (t.clientY-rect.top)*(sigCanvas.height/rect.height) };
+    };
+    const start = e => { e.preventDefault(); drawing=true; const p=getPos(e); ctx.beginPath(); ctx.moveTo(p.x,p.y); };
+    const draw = e => { if(!drawing)return; e.preventDefault(); const p=getPos(e); ctx.lineTo(p.x,p.y); ctx.stroke(); };
+    const stop = () => { drawing=false; };
+    sigCanvas.addEventListener("mousedown",start);sigCanvas.addEventListener("mousemove",draw);sigCanvas.addEventListener("mouseup",stop);sigCanvas.addEventListener("mouseleave",stop);
+    sigCanvas.addEventListener("touchstart",start);sigCanvas.addEventListener("touchmove",draw);sigCanvas.addEventListener("touchend",stop);
+  }
+  $("clear-sig")?.addEventListener("click", () => {
+    const c=$("sig-canvas"); if(c){const ctx=c.getContext("2d");ctx.clearRect(0,0,c.width,c.height);}
+  });
+  $("save-sig")?.addEventListener("click", () => saveSignature(parseInt($("save-sig").dataset.woId)));
+
+  // Refresh
+  $("refresh-wo")?.addEventListener("click", ()=>{ loadWorkOrders().then(()=>render()); });
+  $("refresh-surveys")?.addEventListener("click", ()=>{ loadSurveys().then(()=>render()); });
+
+  // Survey tabs
+  document.querySelectorAll("[data-stab]").forEach(el => {
+    el.addEventListener("click", () => { state.surveyTab=el.dataset.stab; render(); });
+  });
+
+  // Survey action buttons
+  document.querySelectorAll("[data-result]").forEach(el => {
+    el.addEventListener("click", e => {
+      e.stopPropagation();
+      const subId=parseInt(el.dataset.subId);
+      const sub=state.subscribers.find(s=>s.id===subId);
+      if(sub) openSurvey(sub, el.dataset.result);
+    });
+  });
+
+  // Survey modal
+  $("modal-overlay")?.addEventListener("click", e=>{ if(e.target.id==="modal-overlay"){state.surveyModal=null;render();} });
+  $("modal-close")?.addEventListener("click", ()=>{state.surveyModal=null;render();});
+  $("cancel-survey")?.addEventListener("click", ()=>{state.surveyModal=null;render();});
+  $("submit-survey")?.addEventListener("click", submitSurvey);
+  $("photo-camera")?.addEventListener("change", handlePhoto);
+  $("photo-gallery")?.addEventListener("change", handlePhoto);
+  $("remove-photo")?.addEventListener("click", ()=>{state.surveyPhoto=null;state.surveyPhotoPreview=null;render();});
+  // Drag & drop on photo options
+  const photoOpts = document.querySelector(".photo-options");
+  if(photoOpts){
+    ["dragenter","dragover"].forEach(ev=>photoOpts.addEventListener(ev,e=>{e.preventDefault();e.stopPropagation();photoOpts.style.outline="2px dashed var(--accent)";}));
+    ["dragleave","dragend","drop"].forEach(ev=>photoOpts.addEventListener(ev,e=>{e.preventDefault();e.stopPropagation();photoOpts.style.outline="";}));
+    photoOpts.addEventListener("drop",e=>{
+      const f=Array.from(e.dataTransfer.files).find(x=>x.type.startsWith("image/"));
+      if(f) handlePhoto({target:{files:[f]}});
+    });
+  }
+  $("survey-notes")?.addEventListener("input", e=>{state.surveyNotes=e.target.value;});
+}
+
+// ── Service Worker (PWA) ──
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/osp/sw.js').catch(()=>{});
+}
+
+// Paste image from clipboard into survey photo
+document.addEventListener("paste", e=>{
+  if(!state.surveyModal || state.surveyPhoto) return;
+  if(!e.clipboardData || !e.clipboardData.items) return;
+  for(const item of e.clipboardData.items){
+    if(item.kind==="file" && item.type.startsWith("image/")){
+      const f=item.getAsFile();
+      if(f){ e.preventDefault(); handlePhoto({target:{files:[f]}}); return; }
+    }
+  }
+});
+
+// ── Boot ──
+checkAuth();
+render();
+</script>
+</body>
+</html>

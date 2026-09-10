@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+// ── Secure Fetch Interceptor ─────────────────────────────
+(function(){
+  const _fetch = window.fetch;
+  window.fetch = function(url, opts) {
+    opts = opts || {};
+    const urlStr = typeof url === 'string' ? url : (url.url || '');
+    if (urlStr.startsWith('/api') || urlStr.includes('/api/')) {
+      opts.credentials = 'include';
+      const method = (opts.method || 'GET').toUpperCase();
+      if (['POST','PUT','DELETE','PATCH'].includes(method)) {
+        opts.headers = opts.headers || {};
+        if (!opts.headers['X-CSRF-Token'] && !opts.headers['x-csrf-token']) {
+          const m = document.cookie.match(/j2_csrf=([^;]+)/);
+          if (m) opts.headers['X-CSRF-Token'] = m[1];
+        }
+      }
+    }
+    return _fetch.call(this, url, opts);
+  };
+})();
+</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0f172a">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="/agents/manifest.json">
+<link rel="apple-touch-icon" href="/agents/icon-192.png">
+<title>Netfactory — Sales Agent</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@700;800&display=swap" rel="stylesheet">
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0f172a;--bg2:#1e293b;--card:#1e293b;--border:#334155;
+  --text:#f1f5f9;--text2:#94a3b8;--text3:#64748b;
+  --accent:#8b5cf6;--accent2:#7c3aed;
+  --success:#22c55e;--warning:#f59e0b;--danger:#ef4444;
+  --cyan:#06b6d4;--amber:#f59e0b;
+  --input:#0f172a;--inputBorder:#475569;
+  --shadow:0 4px 24px rgba(0,0,0,.4);
+  --radius:16px;
+}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;-webkit-tap-highlight-color:transparent;overflow-x:hidden}
+input,textarea,select,button{font-family:inherit}
+
+::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--accent2);border-radius:4px}
+@keyframes fadeIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(100%)}to{opacity:1;transform:translateY(0)}}
+@keyframes spin{to{transform:rotate(360deg)}}
+.fade-in{animation:fadeIn .3s ease}.slide-up{animation:slideUp .3s ease}
+
+.app{max-width:480px;margin:0 auto;min-height:100vh;position:relative;display:flex;flex-direction:column}
+
+/* ── Header ── */
+.header{padding:14px 20px;background:var(--bg2);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between}
+.header-logo{display:flex;align-items:center;gap:10px}
+.header-logo h1{font-family:'Space Grotesk',sans-serif;font-size:18px;font-weight:800;background:linear-gradient(135deg,var(--accent),var(--cyan));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.header-logo span{font-size:11px;color:var(--text3);font-weight:500}
+.header-user{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text2)}
+.header-user .avatar{width:32px;height:32px;border-radius:50%;background:var(--accent2);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;color:#fff}
+.logout-btn{background:none;border:none;color:var(--text3);font-size:18px;cursor:pointer;padding:4px;margin-left:6px}
+
+/* ── Bottom Nav ── */
+.bottom-nav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:480px;display:flex;background:var(--bg2);border-top:1px solid var(--border);padding:6px 8px;gap:4px;z-index:50}
+.bottom-nav .nav-item{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:8px 4px;border-radius:12px;border:none;background:transparent;color:var(--text3);font-size:10px;font-weight:600;cursor:pointer;transition:all .2s}
+.bottom-nav .nav-item.active{background:var(--accent);color:#fff}
+.bottom-nav .nav-item i{font-size:16px}
+
+/* ── Content ── */
+.content{flex:1;overflow-y:auto;padding-bottom:80px}
+
+/* ── Stats Bar ── */
+.stats-bar{display:flex;gap:8px;padding:16px 16px 8px;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.stats-bar::-webkit-scrollbar{display:none}
+.stat-pill{flex:0 0 auto;padding:10px 16px;border-radius:14px;background:var(--card);border:1px solid var(--border);text-align:center;min-width:80px}
+.stat-pill .num{font-size:20px;font-weight:800;font-family:'Space Grotesk',sans-serif}
+.stat-pill .label{font-size:9px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-top:2px}
+
+/* ── Cards ── */
+.sub-card{margin:0 16px 12px;border-radius:14px;background:var(--card);border:1px solid var(--border);padding:16px;transition:all .2s;position:relative}
+
+/* ── Section ── */
+.section-title{padding:16px 16px 8px;font-size:12px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:1px;display:flex;align-items:center;gap:8px}
+
+/* ── Empty State ── */
+.empty{padding:60px 20px;text-align:center}
+.empty .icon{font-size:48px;margin-bottom:12px}
+.empty .msg{font-size:14px;color:var(--text2);line-height:1.5}
+
+/* ── Form ── */
+.form-group{margin-bottom:14px}
+.form-group label{font-size:12px;font-weight:600;color:var(--text2);margin-bottom:6px;display:block}
+.form-group label .req{color:var(--danger)}
+.form-group textarea,.form-group input,.form-group select{width:100%;padding:14px;border-radius:12px;border:1px solid var(--inputBorder);background:var(--input);color:var(--text);font-size:14px;outline:none}
+.form-group textarea{resize:vertical;min-height:80px;line-height:1.5}
+.form-group input:focus,.form-group textarea:focus,.form-group select:focus{border-color:var(--accent)}
+.form-group ::placeholder{color:var(--text3)}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+
+/* ── Buttons ── */
+.btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:16px;border-radius:14px;font-size:15px;font-weight:700;border:none;cursor:pointer;transition:all .15s;-webkit-tap-highlight-color:transparent}
+.btn:active{transform:scale(.97)}
+.btn-primary{background:linear-gradient(135deg,var(--accent2),var(--cyan));color:#fff}
+.btn-success{background:var(--success);color:#fff}
+.btn-cancel{background:var(--bg);color:var(--text2);border:1px solid var(--border)}
+.btn-sm{padding:10px 16px;font-size:13px;border-radius:10px;width:auto}
+.btn:disabled{opacity:.5;cursor:default;transform:none}
+
+/* ── Detail Grid ── */
+.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;padding:16px;background:var(--input);border-radius:14px;border:1px solid var(--border)}
+.detail-item .dl{font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.5px}
+.detail-item .dv{font-size:13px;font-weight:500;color:var(--text);margin-top:2px}
+
+/* ── Login ── */
+.login-wrap{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 24px}
+.login-card{width:100%;max-width:360px}
+.login-logo{text-align:center;margin-bottom:32px}
+.login-logo h1{font-family:'Space Grotesk',sans-serif;font-size:28px;font-weight:800;background:linear-gradient(135deg,var(--accent),var(--cyan));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.login-logo p{font-size:13px;color:var(--text3);margin-top:6px}
+
+.spinner{width:20px;height:20px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite;display:inline-block}
+
+.toast{position:fixed;bottom:90px;left:50%;transform:translateX(-50%);padding:12px 24px;border-radius:14px;font-size:13px;font-weight:600;z-index:200;animation:fadeIn .3s ease;max-width:90%;text-align:center}
+.toast.success{background:var(--success);color:#fff}
+.toast.error{background:var(--danger);color:#fff}
+
+/* ── Success Card ── */
+.success-card{text-align:center;padding:32px 20px;background:var(--card);border:1px solid var(--border);border-radius:16px;margin:16px}
+.success-card .check{width:64px;height:64px;border-radius:50%;background:var(--success);display:flex;align-items:center;justify-content:center;margin:0 auto 16px;font-size:28px;color:#fff}
+
+/* ── Status Colors ── */
+.status-prospective{color:#f59e0b}.status-surveyed{color:#60a5fa}.status-approved{color:#a78bfa}
+.status-active{color:#34d399}.status-suspended{color:#f87171}.status-inactive{color:#94a3b8}
+
+/* ── Responsive ── */
+@media(min-width:481px){.app{border-left:1px solid var(--border);border-right:1px solid var(--border)}}
+@media(min-width:768px){body{background:#0b1120}.app{margin-top:20px;margin-bottom:20px;border-radius:20px;overflow:hidden;min-height:calc(100vh - 40px);border:1px solid var(--border)}.bottom-nav{border-radius:0 0 20px 20px}}
+</style>
+</head>
+<body>
+<div class="app" id="app"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════
+// Netfactory — Sales Agent App
+// Customer Signup + Tracking
+// ═══════════════════════════════════════════════════════
+const API = "/api/agents";
+const TOKEN_KEY = "j2_agent_token";
+const USER_KEY = "j2_agent_user";
+
+const STATUS_LABELS = { prospective:'Prospective', surveyed:'Surveyed', approved:'Approved', pending:'Pending', active:'Active', suspended:'Suspended', cancelled:'Cancelled', inactive:'Inactive' };
+
+// ── State ──
+let state = {
+  screen: "login",
+  agent: null,
+  token: null,
+  loading: false,
+  activeTab: "signup", // signup | signups | profile
+  // Signup form
+  form: {},
+  formStep: 1, // 1=personal, 2=address, 3=plan
+  // Data
+  municipalities: [],
+  barangays: [],
+  plans: [],
+  signups: [],
+  signupTotal: 0,
+  signupFilter: "",
+  stats: { total:0, thisMonth:0, byStatus:[] },
+  // Success
+  lastSignup: null,
+  // Toast
+  toast: null,
+  toastType: "success"
+};
+
+// ── Helpers ──
+const $ = id => document.getElementById(id);
+const authHeaders = () => ({ "Content-Type": "application/json", "Authorization": `Bearer ${state.token}` });
+const initials = n => (n||"?").split(" ").map(w=>w[0]).join("").toUpperCase().substring(0,2);
+const fmtDate = d => d ? new Date(d).toLocaleDateString("en-PH",{month:"short",day:"numeric",year:"numeric"}) : "";
+
+function showToast(msg, type="success") {
+  state.toast = msg; state.toastType = type; render();
+  setTimeout(() => { state.toast = null; render(); }, 3000);
+}
+
+function formatPhoneInput(el) {
+  let v = el.value.replace(/\D/g, '');
+  if (v.length > 11) v = v.substring(0, 11);
+  if (v.length >= 5) el.value = `(${v.substring(0,4)}) ${v.substring(4,7)}${v.length>7?" - "+v.substring(7):""}`;
+  else if (v.length >= 1) el.value = `(${v}`;
+  else el.value = '';
+}
+
+// ── Auth ──
+function checkAuth() {
+  const token = localStorage.getItem(TOKEN_KEY);
+  const user = localStorage.getItem(USER_KEY);
+  if (token && user) {
+    state.token = token;
+    state.agent = JSON.parse(user);
+    state.screen = "main";
+    loadData();
+  }
+}
+
+async function doLogin() {
+  const code = $("login-code")?.value?.trim();
+  const pw = $("login-pass")?.value;
+  if (!code || !pw) return;
+  state.loading = true; render();
+  try {
+    const res = await fetch(API + "/login", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({agentCode:code,password:pw}) });
+    const data = await res.json();
+    if (data.error) { showToast(data.error, "error"); }
+    else {
+      state.token = data.token;
+      state.agent = data.agent;
+      localStorage.setItem(TOKEN_KEY, data.token);
+      localStorage.setItem(USER_KEY, JSON.stringify(data.agent));
+      state.screen = "main";
+      loadData();
+    }
+  } catch(e) { showToast("Connection failed","error"); }
+  state.loading = false; render();
+}
+
+function doLogout() {
+  fetch(API + "/logout", { method:"POST" }).catch(()=>{});
+  localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY);
+  state = { ...state, token:null, agent:null, screen:"login", signups:[], stats:{total:0,thisMonth:0,byStatus:[]}, form:{}, formStep:1, lastSignup:null };
+  render();
+}
+
+// ── Data Loading ──
+async function loadData() {
+  state.loading = true; render();
+  await Promise.all([loadFormData(), loadStats(), loadSignups()]);
+  state.loading = false; render();
+}
+
+async function loadFormData() {
+  try {
+    const [covRes, planRes] = await Promise.all([
+      fetch(API + "/coverage"),
+      fetch(API + "/plans")
+    ]);
+    const covData = await covRes.json();
+    const planData = await planRes.json();
+    state.municipalities = covData.coverage || [];
+    state.plans = planData.plans || [];
+  } catch(e) {}
+}
+
+async function loadStats() {
+  try {
+    const res = await fetch(API + "/stats", { headers:authHeaders() });
+    const data = await res.json();
+    if (!data.error) state.stats = data;
+  } catch(e) {}
+}
+
+async function loadSignups() {
+  try {
+    const res = await fetch(API + "/signups?limit=50", { headers:authHeaders() });
+    const data = await res.json();
+    if (!data.error) { state.signups = data.subscribers || []; state.signupTotal = data.total || 0; }
+  } catch(e) {}
+}
+
+// ── Form Actions ──
+function resetForm() {
+  state.form = {};
+  state.formStep = 1;
+  state.lastSignup = null;
+  state.barangays = [];
+}
+
+function selectMunicipality(name) {
+  state.form.municipality = name;
+  const muni = state.municipalities.find(m => m.name === name);
+  state.barangays = muni ? muni.barangays : [];
+  state.form.barangay = "";
+  render();
+}
+
+async function submitApplication() {
+  const f = state.form;
+  if (!f.firstName || !f.lastName || !f.phone || !f.barangay || !f.municipality) {
+    showToast("Fill all required fields", "error");
+    return;
+  }
+
+  state.loading = true; render();
+  try {
+    const cleanPhone = (f.phone || '').replace(/[\s\-()]/g, '');
+    const res = await fetch(API + "/apply", {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        firstName: f.firstName,
+        middleName: f.middleName || null,
+        lastName: f.lastName,
+        email: f.email || null,
+        phone: cleanPhone,
+        address: f.address || '',
+        subdivision: f.subdivision || null,
+        barangay: f.barangay,
+        municipality: f.municipality,
+        planId: f.planId || null,
+        packageId: f.packageId || null,
+        idType: f.idType || null,
+        notes: f.notes || null,
+      })
+    });
+    const data = await res.json();
+    if (data.error) {
+      showToast(data.error, "error");
+    } else {
+      state.lastSignup = data.subscriber;
+      state.formStep = 4; // success
+      // Refresh stats and signups
+      loadStats();
+      loadSignups();
+      // Update local agent stats
+      if (state.agent) state.agent.totalSignups = (state.agent.totalSignups || 0) + 1;
+    }
+  } catch(e) { showToast("Network error", "error"); }
+  state.loading = false; render();
+}
+
+// ═══════════════════════════════════════════════════════
+// RENDER
+// ═══════════════════════════════════════════════════════
+function render() {
+  const app = $("app");
+  if (state.screen === "login") { app.innerHTML = renderLogin(); }
+  else { app.innerHTML = renderHeader() + renderContent() + renderBottomNav() + renderToast(); }
+  bindEvents();
+}
+
+function renderLogin() {
+  return `
+    <div class="login-wrap fade-in">
+      <div class="login-card">
+        <div class="login-logo">
+          <h1>Netfactory</h1>
+          <p><i class="fas fa-user-tie" style="margin-right:4px"></i> Sales Agent Portal</p>
+        </div>
+        <div class="form-group"><label>Agent Code</label><input id="login-code" type="text" placeholder="AGT-0001" autocomplete="username" autocapitalize="characters" style="text-transform:uppercase"></div>
+        <div class="form-group"><label>Password</label><input id="login-pass" type="password" placeholder="Enter password" autocomplete="current-password"></div>
+        <button class="btn btn-primary" id="login-btn" ${state.loading?"disabled":""}>${state.loading?'<span class="spinner"></span>':"Sign In"}</button>
+      </div>
+      ${renderToast()}
+    </div>`;
+}
+
+function renderHeader() {
+  return `
+    <div class="header">
+      <div class="header-logo">
+        <div><h1>Netfactory Agent</h1><span>${state.agent?.agentCode || "Agent"}</span></div>
+      </div>
+      <div class="header-user">
+        <div class="avatar">${initials(state.agent?.fullName)}</div>
+        <button class="logout-btn" id="logout-btn" title="Logout"><i class="fas fa-sign-out-alt"></i></button>
+      </div>
+    </div>`;
+}
+
+function renderBottomNav() {
+  return `
+    <div class="bottom-nav">
+      <button class="nav-item ${state.activeTab==="signup"?"active":""}" data-nav="signup">
+        <i class="fas fa-user-plus"></i>
+        <span>New Signup</span>
+      </button>
+      <button class="nav-item ${state.activeTab==="signups"?"active":""}" data-nav="signups">
+        <i class="fas fa-users"></i>
+        <span>My Signups</span>
+      </button>
+      <button class="nav-item ${state.activeTab==="profile"?"active":""}" data-nav="profile">
+        <i class="fas fa-user-circle"></i>
+        <span>Profile</span>
+      </button>
+    </div>`;
+}
+
+function renderContent() {
+  if (state.activeTab === "signup") return renderSignupForm();
+  if (state.activeTab === "signups") return renderSignupsList();
+  if (state.activeTab === "profile") return renderProfile();
+  return "";
+}
+
+// ── New Signup Form (Multi-Step) ──
+function renderSignupForm() {
+  if (state.formStep === 4) return renderSuccess();
+
+  const stepTitles = ["", "Personal Info", "Address & Location", "Plan & Submit"];
+  const stepIcons = ["", "fa-user", "fa-map-marker-alt", "fa-wifi"];
+
+  return `
+    <div class="content fade-in" style="padding:16px">
+      <!-- Step Indicator -->
+      <div style="display:flex;gap:4px;margin-bottom:20px">
+        ${[1,2,3].map(s => `
+          <div style="flex:1;text-align:center">
+            <div style="height:4px;border-radius:2px;background:${state.formStep>=s?"var(--accent)":"var(--border)"};margin-bottom:6px"></div>
+            <div style="font-size:10px;font-weight:700;color:${state.formStep===s?"var(--accent)":"var(--text3)"}">${stepTitles[s]}</div>
+          </div>
+        `).join("")}
+      </div>
+
+      <div class="section-title" style="padding:0 0 12px"><i class="fas ${stepIcons[state.formStep]}" style="font-size:11px"></i> Step ${state.formStep}: ${stepTitles[state.formStep]}</div>
+
+      ${state.formStep === 1 ? renderStep1() : ""}
+      ${state.formStep === 2 ? renderStep2() : ""}
+      ${state.formStep === 3 ? renderStep3() : ""}
+    </div>`;
+}
+
+function renderStep1() {
+  const f = state.form;
+  return `
+    <div class="form-row">
+      <div class="form-group"><label>First Name <span class="req">*</span></label><input id="f-firstName" type="text" placeholder="Juan" value="${f.firstName||""}"></div>
+      <div class="form-group"><label>Middle Name</label><input id="f-middleName" type="text" placeholder="Santos" value="${f.middleName||""}"></div>
+    </div>
+    <div class="form-group"><label>Last Name <span class="req">*</span></label><input id="f-lastName" type="text" placeholder="dela Cruz" value="${f.lastName||""}"></div>
+    <div class="form-group"><label>Phone Number <span class="req">*</span></label><input id="f-phone" type="tel" placeholder="(09XX) XXX - XXXX" maxlength="18" value="${f.phone||""}"></div>
+    <div class="form-group"><label>Email</label><input id="f-email" type="email" placeholder="juan@email.com" value="${f.email||""}"></div>
+    <div class="form-group"><label>ID Type</label>
+      <select id="f-idType">
+        <option value="">Select ID type...</option>
+        <option value="national_id" ${f.idType==="national_id"?"selected":""}>National ID</option>
+        <option value="drivers_license" ${f.idType==="drivers_license"?"selected":""}>Driver's License</option>
+        <option value="passport" ${f.idType==="passport"?"selected":""}>Passport</option>
+        <option value="voters_id" ${f.idType==="voters_id"?"selected":""}>Voter's ID</option>
+        <option value="philhealth" ${f.idType==="philhealth"?"selected":""}>PhilHealth ID</option>
+        <option value="sss" ${f.idType==="sss"?"selected":""}>SSS ID</option>
+        <option value="postal_id" ${f.idType==="postal_id"?"selected":""}>Postal ID</option>
+        <option value="barangay_id" ${f.idType==="barangay_id"?"selected":""}>Barangay ID</option>
+      </select>
+    </div>
+    <button class="btn btn-primary" id="next-step"><i class="fas fa-arrow-right"></i> Next: Address</button>`;
+}
+
+function renderStep2() {
+  const f = state.form;
+  return `
+    <div class="form-group"><label>Municipality <span class="req">*</span></label>
+      <select id="f-municipality">
+        <option value="">Select municipality...</option>
+        ${state.municipalities.map(m => `<option value="${m.name}" ${f.municipality===m.name?"selected":""}>${m.name}</option>`).join("")}
+      </select>
+    </div>
+    <div class="form-group"><label>Barangay <span class="req">*</span></label>
+      <select id="f-barangay">
+        <option value="">Select barangay...</option>
+        ${state.barangays.map(b => `<option value="${b.name}" ${f.barangay===b.name?"selected":""}>${b.name}</option>`).join("")}
+      </select>
+    </div>
+    <div class="form-group"><label>Street / Purok</label><input id="f-address" type="text" placeholder="Purok 3, Maligaya Street" value="${f.address||""}"></div>
+    <div class="form-group"><label>Subdivision</label><input id="f-subdivision" type="text" placeholder="Optional" value="${f.subdivision||""}"></div>
+    <div style="display:flex;gap:10px;margin-top:8px">
+      <button class="btn btn-cancel" id="prev-step" style="flex:1"><i class="fas fa-arrow-left"></i> Back</button>
+      <button class="btn btn-primary" id="next-step" style="flex:1"><i class="fas fa-arrow-right"></i> Next: Plan</button>
+    </div>`;
+}
+
+function renderStep3() {
+  const f = state.form;
+  return `
+    <div class="form-group"><label>Preferred Plan</label>
+      <select id="f-planId">
+        <option value="">Select plan...</option>
+        ${state.plans.map(p => `<option value="${p.id}" ${f.planId==p.id?"selected":""}>${p.name} (${p.speed_label}) — P${Number(p.price).toLocaleString()}/mo</option>`).join("")}
+      </select>
+    </div>
+    <div class="form-group"><label>Installation Package</label>
+      <select id="f-packageId">
+        <option value="">Select package...</option>
+        <option value="A" ${f.packageId==="A"?"selected":""}>Package A — Standard</option>
+        <option value="B" ${f.packageId==="B"?"selected":""}>Package B — Extended</option>
+        <option value="C" ${f.packageId==="C"?"selected":""}>Package C — Premium</option>
+      </select>
+    </div>
+    <div class="form-group"><label>Notes</label><textarea id="f-notes" placeholder="Additional notes about the customer...">${f.notes||""}</textarea></div>
+
+    <!-- Summary -->
+    <div style="background:var(--input);border:1px solid var(--border);border-radius:14px;padding:16px;margin-bottom:16px">
+      <div style="font-size:12px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px"><i class="fas fa-clipboard-list" style="margin-right:4px"></i> Application Summary</div>
+      <div style="font-size:13px;color:var(--text);line-height:1.8">
+        <div><i class="fas fa-user" style="width:16px;color:var(--text3)"></i> ${f.firstName||""} ${f.middleName||""} ${f.lastName||""}</div>
+        <div><i class="fas fa-phone" style="width:16px;color:var(--text3)"></i> ${f.phone||""}</div>
+        ${f.email?`<div><i class="fas fa-envelope" style="width:16px;color:var(--text3)"></i> ${f.email}</div>`:""}
+        <div><i class="fas fa-map-marker-alt" style="width:16px;color:var(--text3)"></i> ${f.address?f.address+", ":""}${f.barangay||""}, ${f.municipality||""}</div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:10px">
+      <button class="btn btn-cancel" id="prev-step" style="flex:1"><i class="fas fa-arrow-left"></i> Back</button>
+      <button class="btn btn-success" id="submit-app" style="flex:1" ${state.loading?"disabled":""}>${state.loading?'<span class="spinner"></span>':"<i class='fas fa-paper-plane'></i> Submit"}</button>
+    </div>`;
+}
+
+function renderSuccess() {
+  const s = state.lastSignup;
+  return `
+    <div class="content fade-in" style="padding:16px">
+      <div class="success-card">
+        <div class="check"><i class="fas fa-check"></i></div>
+        <div style="font-size:20px;font-weight:800;color:var(--text);margin-bottom:4px">Customer Signed Up!</div>
+        <div style="font-size:13px;color:var(--text2);margin-bottom:16px">Application submitted successfully</div>
+        <div class="detail-grid" style="text-align:left;margin-bottom:0">
+          <div class="detail-item"><div class="dl">Account #</div><div class="dv" style="font-family:monospace;color:var(--cyan)">${s?.accountNumber||""}</div></div>
+          <div class="detail-item"><div class="dl">Status</div><div class="dv" style="color:var(--warning)">Prospective</div></div>
+          <div class="detail-item" style="grid-column:1/-1"><div class="dl">Name</div><div class="dv">${s?.firstName||""} ${s?.lastName||""}</div></div>
+        </div>
+      </div>
+      <button class="btn btn-primary" id="new-signup" style="margin:16px"><i class="fas fa-user-plus"></i> Sign Up Another Customer</button>
+    </div>`;
+}
+
+// ── My Signups List ──
+function renderSignupsList() {
+  const subs = state.signups;
+  return `
+    <div class="content fade-in">
+      <div class="stats-bar">
+        <div class="stat-pill"><div class="num" style="color:var(--accent)">${state.stats.total}</div><div class="label">Total</div></div>
+        <div class="stat-pill"><div class="num" style="color:var(--success)">${state.stats.thisMonth}</div><div class="label">This Month</div></div>
+        ${state.stats.byStatus.map(s => `
+          <div class="stat-pill"><div class="num status-${s.status}">${s.count}</div><div class="label">${s.status}</div></div>
+        `).join("")}
+      </div>
+      <div style="padding:8px 16px"><button class="btn btn-cancel btn-sm" id="refresh-signups" style="width:100%"><i class="fas fa-sync-alt"></i> Refresh</button></div>
+      ${subs.length === 0 ? `<div class="empty"><div class="icon"><i class="fas fa-users" style="color:var(--text3)"></i></div><div class="msg">No signups yet. Start signing up customers!</div></div>` :
+        subs.map((s,i) => {
+          const sc = s.status==="active"?"var(--success)":s.status==="prospective"?"var(--warning)":s.status==="surveyed"?"var(--cyan)":s.status==="approved"?"var(--accent)":"var(--text3)";
+          return `
+            <div class="sub-card fade-in" style="animation-delay:${i*50}ms;border-left:3px solid ${sc}">
+              <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px">
+                <div>
+                  <div style="font-size:14px;font-weight:700;color:var(--text)">${s.first_name} ${s.last_name}</div>
+                  <div style="font-size:11px;font-family:monospace;color:var(--cyan);margin-top:2px">${s.account_number}</div>
+                </div>
+                <span style="font-size:10px;font-weight:700;padding:3px 10px;border-radius:8px;background:${sc}18;color:${sc};text-transform:capitalize">${s.status}</span>
+              </div>
+              <div style="font-size:12px;color:var(--text2)"><i class="fas fa-map-marker-alt" style="width:14px;color:var(--text3);font-size:10px"></i> ${s.barangay_name||""}, ${s.municipality_name||""}</div>
+              <div style="font-size:11px;color:var(--text3);margin-top:4px"><i class="fas fa-phone" style="width:14px;font-size:10px"></i> ${s.phone}</div>
+              ${s.plan?`<div style="font-size:11px;color:var(--accent);margin-top:4px"><i class="fas fa-wifi" style="width:14px;font-size:10px"></i> ${s.plan.name} (${s.plan.speed_label})</div>`:""}
+              <div style="font-size:10px;color:var(--text3);margin-top:4px">${fmtDate(s.created_at)}</div>
+            </div>`;
+        }).join("")
+      }
+    </div>`;
+}
+
+// ── Profile Tab ──
+function renderProfile() {
+  const a = state.agent;
+  return `
+    <div class="content fade-in" style="padding:24px 16px">
+      <div style="text-align:center;margin-bottom:24px">
+        <div style="width:64px;height:64px;border-radius:50%;background:var(--accent2);display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:800;color:#fff;margin:0 auto 12px">${initials(a?.fullName)}</div>
+        <div style="font-size:18px;font-weight:700;color:var(--text)">${a?.fullName||"Agent"}</div>
+        <div style="font-size:13px;font-family:monospace;color:var(--accent);margin-top:4px">${a?.agentCode||""}</div>
+      </div>
+      <div class="detail-grid">
+        <div class="detail-item"><div class="dl">Phone</div><div class="dv">${a?.phone||""}</div></div>
+        <div class="detail-item"><div class="dl">Email</div><div class="dv">${a?.email||""}</div></div>
+        <div class="detail-item"><div class="dl">Area</div><div class="dv">${a?.areaAssigned||"Not set"}</div></div>
+        <div class="detail-item"><div class="dl">Commission</div><div class="dv" style="color:var(--success)">${a?.commissionRate||0}%</div></div>
+        <div class="detail-item"><div class="dl">Total Signups</div><div class="dv" style="color:var(--accent)">${a?.totalSignups||0}</div></div>
+        <div class="detail-item"><div class="dl">This Month</div><div class="dv" style="color:var(--warning)">${state.stats.thisMonth}</div></div>
+      </div>
+      <button class="btn btn-cancel" id="logout-btn2" style="margin-top:16px"><i class="fas fa-sign-out-alt"></i> Sign Out</button>
+    </div>`;
+}
+
+function renderToast() {
+  if (!state.toast) return "";
+  return `<div class="toast ${state.toastType}">${state.toast}</div>`;
+}
+
+// ═══════════════════════════════════════════════════════
+// EVENT BINDING
+// ═══════════════════════════════════════════════════════
+function bindEvents() {
+  // Login
+  $("login-btn")?.addEventListener("click", doLogin);
+  $("login-pass")?.addEventListener("keydown", e=>{ if(e.key==="Enter") doLogin(); });
+  $("login-code")?.addEventListener("keydown", e=>{ if(e.key==="Enter") $("login-pass")?.focus(); });
+
+  // Logout
+  $("logout-btn")?.addEventListener("click", doLogout);
+  $("logout-btn2")?.addEventListener("click", doLogout);
+
+  // Bottom nav
+  document.querySelectorAll("[data-nav]").forEach(el => {
+    el.addEventListener("click", () => { state.activeTab=el.dataset.nav; render(); });
+  });
+
+  // Phone format
+  $("f-phone")?.addEventListener("input", e => formatPhoneInput(e.target));
+
+  // Save form fields on input
+  ["firstName","middleName","lastName","phone","email","address","subdivision","notes"].forEach(f => {
+    const el = $("f-"+f);
+    if (el) el.addEventListener("input", e => { state.form[f] = e.target.value; });
+  });
+  ["municipality","barangay","planId","packageId","idType"].forEach(f => {
+    const el = $("f-"+f);
+    if (el) el.addEventListener("change", e => {
+      if (f === "municipality") { selectMunicipality(e.target.value); return; }
+      state.form[f] = e.target.value;
+    });
+  });
+
+  // Step navigation
+  $("next-step")?.addEventListener("click", () => {
+    if (state.formStep === 1) {
+      if (!state.form.firstName || !state.form.lastName || !state.form.phone) {
+        showToast("First name, last name, and phone are required", "error"); return;
+      }
+    }
+    if (state.formStep === 2) {
+      if (!state.form.municipality || !state.form.barangay) {
+        showToast("Municipality and barangay are required", "error"); return;
+      }
+    }
+    state.formStep++;
+    render();
+  });
+  $("prev-step")?.addEventListener("click", () => { state.formStep--; render(); });
+
+  // Submit
+  $("submit-app")?.addEventListener("click", submitApplication);
+
+  // New signup after success
+  $("new-signup")?.addEventListener("click", () => { resetForm(); render(); });
+
+  // Refresh signups
+  $("refresh-signups")?.addEventListener("click", () => {
+    Promise.all([loadStats(), loadSignups()]).then(() => render());
+  });
+}
+
+// ── Service Worker (PWA) ──
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/agents/sw.js').catch(()=>{});
+}
+
+// ── Boot ──
+checkAuth();
+render();
+</script>
+</body>
+</html>

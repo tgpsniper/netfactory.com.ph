@@ -1,0 +1,2924 @@
+// ============================================================
+// NETFACTORY NETWORK & DATA SOLUTION — GIS Infrastructure Routes
+// /api/admin/map/*
+// FOC Routes, Closures, NAPs
+// ============================================================
+const express = require('express');
+const router = express.Router();
+const multer = require('multer');
+const path   = require('path');
+const fs     = require('fs');
+const crypto = require('crypto');
+
+// Auth middleware — reuse the admin auth from existing setup
+const adminAuth = () => {
+  return async (req, res, next) => {
+    try {
+      const token = req.headers.authorization?.split(' ')[1];
+      if (!token) return res.status(401).json({ error: 'No token provided' });
+
+      const jwt = require('jsonwebtoken');
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      // Reject guest tokens — admin routes require real admin credentials
+      if (decoded.guestCode) return res.status(403).json({ error: 'Admin access required' });
+      req.userId = decoded.id || decoded.userId;
+      req.userRole = 'admin';
+      next();
+    } catch (err) {
+      return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+  };
+};
+
+// Admin or Guest-with-tag-permission — for POST routes that taggers can use
+const adminOrTagger = () => {
+  return async (req, res, next) => {
+    try {
+      const token = req.headers.authorization?.split(' ')[1];
+      if (!token) return res.status(401).json({ error: 'No token provided' });
+
+      const jwt = require('jsonwebtoken');
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+      if (decoded.guestCode) {
+        if (decoded.permissions !== 'view_tag') {
+          return res.status(403).json({ error: 'Tagging permission required' });
+        }
+        req.userId = null;
+        req.userRole = 'guest';
+        req.guestCode = decoded.guestCode;
+        req.guestPermissions = decoded.permissions;
+      } else {
+        req.userId = decoded.id || decoded.userId;
+        req.userRole = 'admin';
+      }
+      next();
+    } catch (err) {
+      return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+  };
+};
+
+// Guest or Admin auth — accepts admin JWT OR guest JWT (from share links)
+const adminOrGuest = () => {
+  return async (req, res, next) => {
+    try {
+      const token = req.headers.authorization?.split(' ')[1];
+      if (!token) return res.status(401).json({ error: 'No token provided' });
+
+      const jwt = require('jsonwebtoken');
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+      if (decoded.guestCode) {
+        // Guest token — set limited context
+        req.userId = null;
+        req.userRole = 'guest';
+        req.guestCode = decoded.guestCode;
+        req.guestPermissions = decoded.permissions || 'view';
+      } else {
+        // Admin token
+        req.userId = decoded.id || decoded.userId;
+        req.userRole = 'admin';
+      }
+      next();
+    } catch (err) {
+      return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+  };
+};
+
+
+// ════════════════════════════════════════════════════════════
+// FOC ROUTES (Fiber Optic Cable — polylines)
+// ════════════════════════════════════════════════════════════
+
+// GET /api/admin/map/foc-routes
+router.get('/foc-routes', adminOrGuest(), async (req, res) => {
+  try {
+    const routes = await req.prisma.$queryRaw`
+      SELECT fr.id, fr.name, fr.type, fr.cable_type, fr.cable_size, fr.length_meters,
+             fr.coordinates, fr.color, fr.municipality, fr.barangay, fr.notes, fr.status,
+             fr.created_at, fr.updated_at,
+             (SELECT COUNT(*)::int FROM foc_strands fs
+               WHERE fs.foc_route_id = fr.id
+                 AND (fs.status != 'available' OR fs.destination_type IS NOT NULL)) AS used_strands
+      FROM foc_routes fr
+      ORDER BY fr.name ASC
+    `;
+
+    res.json({
+      routes: routes.map(r => ({
+        id: r.id,
+        name: r.name,
+        type: r.type,
+        cableType: r.cable_type,
+        cableSize: r.cable_size,
+        length: r.length_meters ? Number(r.length_meters) : null,
+        usedStrands: Number(r.used_strands || 0),
+        coordinates: typeof r.coordinates === 'string' ? JSON.parse(r.coordinates) : r.coordinates,
+        color: r.color,
+        municipality: r.municipality,
+        barangay: r.barangay,
+        notes: r.notes,
+        status: r.status,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at
+      }))
+    });
+  } catch (err) {
+    console.error('FOC routes fetch error:', err);
+    res.status(500).json({ error: 'Failed to load FOC routes' });
+  }
+});
+
+// POST /api/admin/map/foc-routes
+router.post('/foc-routes', adminOrTagger(), async (req, res) => {
+  try {
+    const { name, type, cableType, cableSize, length, coordinates, color, municipality, barangay, notes } = req.body;
+
+    if (!name || !coordinates || !Array.isArray(coordinates) || coordinates.length < 2) {
+      return res.status(400).json({ error: 'Name and at least 2 coordinate points are required' });
+    }
+
+    // Enforce unique route name (case-insensitive + trimmed)
+    const dupe = await req.prisma.$queryRaw`
+      SELECT id FROM foc_routes WHERE LOWER(TRIM(name)) = LOWER(TRIM(${name})) LIMIT 1`;
+    if (dupe.length) {
+      return res.status(409).json({ error: `A FOC route named "${String(name).trim()}" already exists` });
+    }
+
+    const validTypes = ['aerial', 'underground'];
+    const routeType = validTypes.includes(type) ? type : 'aerial';
+
+    const result = await req.prisma.$queryRaw`
+      INSERT INTO foc_routes (name, type, cable_type, cable_size, length_meters, coordinates, color, municipality, barangay, notes, created_by)
+      VALUES (${name}, ${routeType}, ${cableType || null}, ${cableSize ? parseInt(cableSize) : null},
+              ${length ? parseFloat(length) : null}, ${JSON.stringify(coordinates)}::jsonb,
+              ${color || null}, ${municipality || null}, ${barangay || null}, ${notes || null}, ${req.userId})
+      RETURNING id, name, created_at
+    `;
+
+    console.log(`📍 FOC route created: ${name} (${coordinates.length} points, ${routeType})`);
+
+    // Auto-generate strands
+    if (cableSize) {
+      await generateStrands(req.prisma, result[0].id, cableSize);
+      console.log(`   └─ Generated ${cableSize} strands with fiber color codes`);
+    }
+
+    res.status(201).json({
+      message: 'FOC route created',
+      route: { id: result[0].id, name: result[0].name, createdAt: result[0].created_at }
+    });
+  } catch (err) {
+    console.error('FOC route create error:', err);
+    res.status(500).json({ error: 'Failed to create FOC route' });
+  }
+});
+
+// PUT /api/admin/map/foc-routes/:id
+router.put('/foc-routes/:id', adminAuth(), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const { name, type, cableType, cableSize, length, coordinates, color, municipality, barangay, notes, status } = req.body;
+
+    // Enforce unique route name (case-insensitive + trimmed), ignoring this same route
+    if (name !== undefined) {
+      const dupe = await req.prisma.$queryRaw`
+        SELECT id FROM foc_routes WHERE LOWER(TRIM(name)) = LOWER(TRIM(${name})) AND id <> ${id} LIMIT 1`;
+      if (dupe.length) {
+        return res.status(409).json({ error: `A FOC route named "${String(name).trim()}" already exists` });
+      }
+    }
+
+    const fields = [];
+    const values = [];
+    let paramIdx = 1;
+
+    if (name !== undefined) { fields.push(`name = $${paramIdx++}`); values.push(name); }
+    if (type !== undefined) { fields.push(`type = $${paramIdx++}`); values.push(type); }
+    if (cableType !== undefined) { fields.push(`cable_type = $${paramIdx++}`); values.push(cableType); }
+    if (cableSize !== undefined) { fields.push(`cable_size = $${paramIdx++}`); values.push(parseInt(cableSize)); }
+    if (length !== undefined) { fields.push(`length_meters = $${paramIdx++}`); values.push(parseFloat(length)); }
+    if (coordinates !== undefined) { fields.push(`coordinates = $${paramIdx++}::jsonb`); values.push(JSON.stringify(coordinates)); }
+    if (color !== undefined) { fields.push(`color = $${paramIdx++}`); values.push(color); }
+    if (municipality !== undefined) { fields.push(`municipality = $${paramIdx++}`); values.push(municipality); }
+    if (barangay !== undefined) { fields.push(`barangay = $${paramIdx++}`); values.push(barangay); }
+    if (notes !== undefined) { fields.push(`notes = $${paramIdx++}`); values.push(notes); }
+    if (status !== undefined) { fields.push(`status = $${paramIdx++}`); values.push(status); }
+    fields.push(`updated_at = NOW()`);
+
+    if (fields.length <= 1) return res.status(400).json({ error: 'No fields to update' });
+
+    values.push(id);
+    const sql = `UPDATE foc_routes SET ${fields.join(', ')} WHERE id = $${paramIdx} RETURNING id, name`;
+    const result = await req.prisma.$queryRawUnsafe(sql, ...values);
+
+    if (result.length === 0) return res.status(404).json({ error: 'FOC route not found' });
+
+    res.json({ message: 'FOC route updated', route: result[0] });
+  } catch (err) {
+    console.error('FOC route update error:', err);
+    res.status(500).json({ error: 'Failed to update FOC route' });
+  }
+});
+
+// DELETE /api/admin/map/foc-routes/:id
+router.delete('/foc-routes/:id', adminAuth(), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    
+    // Check for assigned strands
+    const usedStrands = await req.prisma.$queryRaw`
+      SELECT strand_number, status, destination_label 
+      FROM foc_strands WHERE foc_route_id = ${id} AND (status != 'available' OR destination_type IS NOT NULL)
+      ORDER BY strand_number
+    `;
+    if (usedStrands.length > 0) {
+      const strandNums = usedStrands.map(s => 'S' + s.strand_number).join(', ');
+      return res.status(400).json({ 
+        error: `Cannot delete FOC route. ${usedStrands.length} strand(s) have active assignments (${strandNums}). Remove all assignments first.` 
+      });
+    }
+
+    // Check for attached NAPs / Closures (legacy direct FK) and
+    // closure_connections (Side A/B/C attachments). Any of these block the delete.
+    const attachedNaps = await req.prisma.$queryRaw`SELECT name FROM naps WHERE foc_route_id = ${id}`;
+    const attachedClosures = await req.prisma.$queryRaw`SELECT name FROM closures WHERE foc_route_id = ${id}`;
+    const attachedConns = await req.prisma.$queryRaw`
+      SELECT c.name AS closure_name, cc.side
+      FROM closure_connections cc
+      JOIN closures c ON c.id = cc.closure_id
+      WHERE cc.connection_type = 'foc_route' AND cc.ref_id = ${id}
+      ORDER BY c.name, cc.side
+    `;
+    if (attachedNaps.length > 0 || attachedClosures.length > 0 || attachedConns.length > 0) {
+      const items = [
+        ...attachedNaps.map(n => 'NAP: ' + n.name),
+        ...attachedClosures.map(c => 'Closure: ' + c.name),
+        ...attachedConns.map(r => 'Closure: ' + r.closure_name + ' (Side ' + r.side + ')')
+      ];
+      return res.status(400).json({
+        error: `Cannot delete FOC route. Still attached to: ${items.join(', ')}. Detach from each closure's Connections tab first.`
+      });
+    }
+
+    const result = await req.prisma.$queryRaw`DELETE FROM foc_routes WHERE id = ${id} RETURNING id, name`;
+    if (result.length === 0) return res.status(404).json({ error: 'FOC route not found' });
+    res.json({ message: `FOC route "${result[0].name}" deleted` });
+  } catch (err) {
+    console.error('FOC route delete error:', err);
+    res.status(500).json({ error: 'Failed to delete FOC route' });
+  }
+});
+
+
+// ════════════════════════════════════════════════════════════
+// CLOSURES (Splice Enclosures — point markers)
+// ════════════════════════════════════════════════════════════
+
+// GET /api/admin/map/closures
+router.get('/closures', adminOrGuest(), async (req, res) => {
+  try {
+    // The denormalized seal_* columns on closures hold the CURRENT seal so
+    // the GIS marker hover/info card can show it without a JOIN per closure.
+    const closures = await req.prisma.$queryRaw`
+      SELECT c.id, c.name, c.type, c.capacity, c.used_capacity,
+             c.latitude, c.longitude, c.municipality, c.barangay,
+             c.pole_number, c.foc_route_id, c.notes, c.status,
+             c.seal_number, c.seal_date, c.seal_state,
+             c.is_lcp, c.lcp_total_ports, c.lcp_used_ports, c.site_id,
+             c.created_at, c.updated_at,
+             f.name AS foc_route_name
+      FROM closures c
+      LEFT JOIN foc_routes f ON f.id = c.foc_route_id
+      ORDER BY c.name ASC
+    `;
+
+    res.json({
+      closures: closures.map(c => ({
+        id: c.id,
+        name: c.name,
+        type: c.type,
+        capacity: c.capacity,
+        usedCapacity: c.used_capacity,
+        lat: Number(c.latitude),
+        lng: Number(c.longitude),
+        municipality: c.municipality,
+        barangay: c.barangay,
+        poleNumber: c.pole_number,
+        focRouteId: c.foc_route_id,
+        focRouteName: c.foc_route_name,
+        notes: c.notes,
+        status: c.status,
+        sealNumber: c.seal_number,
+        sealDate: c.seal_date,
+        sealState: c.seal_state,
+        isLcp: !!c.is_lcp,
+        lcpTotalPorts: c.lcp_total_ports,
+        lcpUsedPorts: c.lcp_used_ports,
+        siteId: c.site_id,
+        createdAt: c.created_at,
+        updatedAt: c.updated_at
+      }))
+    });
+  } catch (err) {
+    console.error('Closures fetch error:', err);
+    res.status(500).json({ error: 'Failed to load closures' });
+  }
+});
+
+// POST /api/admin/map/closures
+router.post('/closures', adminOrTagger(), async (req, res) => {
+  try {
+    const { name, type, capacity, lat, lng, municipality, barangay, poleNumber, focRouteId, notes, isLcp, lcpTotalPorts } = req.body;
+
+    if (!name || lat === undefined || lng === undefined) {
+      return res.status(400).json({ error: 'Name, lat, and lng are required' });
+    }
+
+    const validTypes = ['inline', 'branching', 'terminal', 'maintenance_loop'];
+    const closureType = validTypes.includes(type) ? type : 'inline';
+    const lcpFlag = !!isLcp;
+    const lcpPorts = lcpFlag ? (lcpTotalPorts ? parseInt(lcpTotalPorts) : 8) : 8;
+
+    const result = await req.prisma.$queryRaw`
+      INSERT INTO closures (name, type, capacity, latitude, longitude, municipality, barangay, pole_number, foc_route_id, notes, is_lcp, lcp_total_ports, created_by)
+      VALUES (${name}, ${closureType}, ${capacity ? parseInt(capacity) : 24},
+              ${parseFloat(lat)}, ${parseFloat(lng)},
+              ${municipality || null}, ${barangay || null}, ${poleNumber || null},
+              ${focRouteId ? parseInt(focRouteId) : null}, ${notes || null},
+              ${lcpFlag}, ${lcpPorts}, ${req.userId})
+      RETURNING id, name, created_at
+    `;
+
+    // When the closure acts as an LCP/NAP, auto-generate its subscriber ports.
+    if (lcpFlag) {
+      await generateClosurePorts(req.prisma, result[0].id, lcpPorts);
+      console.log(`   └─ Generated ${lcpPorts} LCP/NAP port records`);
+    }
+
+    console.log(`📍 Closure created: ${name} at ${lat}, ${lng}${lcpFlag ? ' (LCP/NAP)' : ''}`);
+
+    res.status(201).json({
+      message: 'Closure created',
+      closure: { id: result[0].id, name: result[0].name, createdAt: result[0].created_at }
+    });
+  } catch (err) {
+    console.error('Closure create error:', err);
+    res.status(500).json({ error: 'Failed to create closure' });
+  }
+});
+
+// PUT /api/admin/map/closures/:id
+router.put('/closures/:id', adminAuth(), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const { name, type, capacity, usedCapacity, lat, lng, municipality, barangay, poleNumber, focRouteId, notes, status, isLcp, lcpTotalPorts } = req.body;
+
+    const fields = [];
+    const values = [];
+    let paramIdx = 1;
+
+    if (name !== undefined) { fields.push(`name = $${paramIdx++}`); values.push(name); }
+    if (type !== undefined) { fields.push(`type = $${paramIdx++}`); values.push(type); }
+    if (capacity !== undefined) { fields.push(`capacity = $${paramIdx++}`); values.push(parseInt(capacity)); }
+    if (usedCapacity !== undefined) { fields.push(`used_capacity = $${paramIdx++}`); values.push(parseInt(usedCapacity)); }
+    if (lat !== undefined) { fields.push(`latitude = $${paramIdx++}`); values.push(parseFloat(lat)); }
+    if (lng !== undefined) { fields.push(`longitude = $${paramIdx++}`); values.push(parseFloat(lng)); }
+    if (municipality !== undefined) { fields.push(`municipality = $${paramIdx++}`); values.push(municipality); }
+    if (barangay !== undefined) { fields.push(`barangay = $${paramIdx++}`); values.push(barangay); }
+    if (poleNumber !== undefined) { fields.push(`pole_number = $${paramIdx++}`); values.push(poleNumber); }
+    if (focRouteId !== undefined) { fields.push(`foc_route_id = $${paramIdx++}`); values.push(focRouteId ? parseInt(focRouteId) : null); }
+    if (notes !== undefined) { fields.push(`notes = $${paramIdx++}`); values.push(notes); }
+    if (status !== undefined) { fields.push(`status = $${paramIdx++}`); values.push(status); }
+    if (isLcp !== undefined) { fields.push(`is_lcp = $${paramIdx++}`); values.push(!!isLcp); }
+    if (lcpTotalPorts !== undefined) { fields.push(`lcp_total_ports = $${paramIdx++}`); values.push(parseInt(lcpTotalPorts)); }
+    fields.push(`updated_at = NOW()`);
+
+    if (fields.length <= 1) return res.status(400).json({ error: 'No fields to update' });
+
+    values.push(id);
+    const sql = `UPDATE closures SET ${fields.join(', ')} WHERE id = $${paramIdx} RETURNING id, name`;
+    const result = await req.prisma.$queryRawUnsafe(sql, ...values);
+
+    if (result.length === 0) return res.status(404).json({ error: 'Closure not found' });
+
+    // ── When enabling LCP/NAP, generate ports if none exist yet ──
+    if (isLcp === true) {
+      const cur = await req.prisma.$queryRaw`SELECT COUNT(*)::int AS count FROM closure_ports WHERE closure_id = ${id}`;
+      if (cur[0].count === 0) {
+        const ports = lcpTotalPorts !== undefined ? parseInt(lcpTotalPorts) : 8;
+        await generateClosurePorts(req.prisma, id, ports);
+      }
+    }
+
+    // ── Sync closure_ports when lcpTotalPorts changes (mirrors NAP port sync) ──
+    if (lcpTotalPorts !== undefined) {
+      const newTotal = parseInt(lcpTotalPorts);
+      const existing = await req.prisma.$queryRaw`SELECT id, port_number, status, subscriber_id, strand_id FROM closure_ports WHERE closure_id = ${id} ORDER BY port_number`;
+      const currentCount = existing.length;
+
+      if (newTotal < currentCount) {
+        const portsAbove = existing.filter(p => p.port_number > newTotal);
+        const usedAbove = portsAbove.filter(p => p.status !== 'available' || p.subscriber_id || p.strand_id);
+        if (usedAbove.length > 0) {
+          const portNums = usedAbove.map(p => 'Port ' + p.port_number).join(', ');
+          return res.status(400).json({ error: `Cannot reduce to ${newTotal} ports. ${usedAbove.length} port(s) above that limit have active assignments (${portNums}). Remove assignments first.` });
+        }
+        const toRemove = portsAbove.map(p => p.id);
+        if (toRemove.length > 0) {
+          await req.prisma.$executeRawUnsafe(`DELETE FROM closure_ports WHERE id = ANY($1::int[])`, toRemove);
+        }
+      } else if (newTotal > currentCount) {
+        for (let i = currentCount + 1; i <= newTotal; i++) {
+          await req.prisma.$executeRawUnsafe(`INSERT INTO closure_ports (closure_id, port_number, status) VALUES ($1, $2, 'available') ON CONFLICT DO NOTHING`, id, i);
+        }
+      }
+      await req.prisma.$executeRawUnsafe(`UPDATE closures SET lcp_used_ports = (SELECT COUNT(*) FROM closure_ports WHERE closure_id = $1 AND status = 'used') WHERE id = $1`, id);
+    }
+
+    res.json({ message: 'Closure updated', closure: result[0] });
+  } catch (err) {
+    console.error('Closure update error:', err);
+    res.status(500).json({ error: 'Failed to update closure' });
+  }
+});
+
+// DELETE /api/admin/map/closures/:id
+router.delete('/closures/:id', adminAuth(), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    
+    // Check for attached NAPs
+    const attachedNaps = await req.prisma.$queryRaw`SELECT name FROM naps WHERE closure_id = ${id}`;
+    if (attachedNaps.length > 0) {
+      const names = attachedNaps.map(n => n.name).join(', ');
+      return res.status(400).json({ 
+        error: `Cannot delete closure. Still attached to NAP(s): ${names}. Detach them first.` 
+      });
+    }
+
+    // Check for strands referencing this closure
+    const linkedStrands = await req.prisma.$queryRaw`
+      SELECT s.strand_number, f.name AS foc_name FROM foc_strands s
+      JOIN foc_routes f ON f.id = s.foc_route_id
+      WHERE s.destination_type = 'closure' AND s.destination_id = ${id}
+    `;
+    if (linkedStrands.length > 0) {
+      const refs = linkedStrands.map(s => s.foc_name + ' S' + s.strand_number).join(', ');
+      return res.status(400).json({
+        error: `Cannot delete closure. Referenced by strand(s): ${refs}. Remove assignments first.`
+      });
+    }
+
+    // Check for assigned LCP/NAP ports (closure_ports cascade-deletes, but block if in use)
+    const usedClosurePorts = await req.prisma.$queryRaw`
+      SELECT port_number FROM closure_ports
+      WHERE closure_id = ${id} AND (status != 'available' OR subscriber_id IS NOT NULL OR strand_id IS NOT NULL)
+      ORDER BY port_number
+    `;
+    if (usedClosurePorts.length > 0) {
+      const portNums = usedClosurePorts.map(p => 'Port ' + p.port_number).join(', ');
+      return res.status(400).json({
+        error: `Cannot delete closure. ${usedClosurePorts.length} LCP/NAP port(s) have active assignments (${portNums}). Remove all assignments first.`
+      });
+    }
+
+    const result = await req.prisma.$queryRaw`DELETE FROM closures WHERE id = ${id} RETURNING id, name`;
+    if (result.length === 0) return res.status(404).json({ error: 'Closure not found' });
+    res.json({ message: `Closure "${result[0].name}" deleted` });
+  } catch (err) {
+    console.error('Closure delete error:', err);
+    res.status(500).json({ error: 'Failed to delete closure' });
+  }
+});
+
+
+// ════════════════════════════════════════════════════════════
+// CLOSURE SEAL HISTORY
+// ════════════════════════════════════════════════════════════
+// Each closure tracks a seal (tamper indicator) lifecycle. Every time the
+// seal is placed or replaced we record a row in closure_seals with the
+// reason. The denormalized seal_* columns on closures hold the CURRENT
+// seal so simple GETs don't need a join.
+
+// GET /api/admin/map/closures/:id/seals — history (newest first)
+router.get('/closures/:id/seals', adminOrGuest(), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const rows = await req.prisma.$queryRaw`
+      SELECT s.id, s.seal_number, s.seal_date, s.seal_state, s.reason,
+             s.previous_seal_number, s.created_by, s.created_at,
+             a.name AS created_by_name
+      FROM closure_seals s
+      LEFT JOIN admin_users a ON a.id = s.created_by
+      WHERE s.closure_id = ${id}
+      ORDER BY COALESCE(s.seal_date, s.created_at::date) DESC, s.created_at DESC
+    `;
+    res.json({
+      seals: rows.map(r => ({
+        id: Number(r.id),
+        sealNumber: r.seal_number,
+        sealDate: r.seal_date,
+        sealState: r.seal_state,
+        reason: r.reason,
+        previousSealNumber: r.previous_seal_number,
+        createdBy: r.created_by ? Number(r.created_by) : null,
+        createdByName: r.created_by_name,
+        createdAt: r.created_at
+      }))
+    });
+  } catch (err) {
+    console.error('Closure seals fetch error:', err);
+    res.status(500).json({ error: 'Failed to load seal history' });
+  }
+});
+
+// POST /api/admin/map/closures/:id/seals — record a new seal event
+router.post('/closures/:id/seals', adminAuth(), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const { sealNumber, sealDate, sealState, reason } = req.body;
+    if (!sealState || !['new','replaced'].includes(sealState)) {
+      return res.status(400).json({ error: 'sealState must be "new" or "replaced"' });
+    }
+    if (sealState === 'replaced' && !reason) {
+      return res.status(400).json({ error: 'A reason is required when replacing a seal' });
+    }
+    // Carry forward the previous seal number for audit context.
+    const cur = await req.prisma.$queryRaw`SELECT seal_number FROM closures WHERE id = ${id}`;
+    if (cur.length === 0) return res.status(404).json({ error: 'Closure not found' });
+    const previousSealNumber = cur[0].seal_number || null;
+    const inserted = await req.prisma.$queryRaw`
+      INSERT INTO closure_seals (closure_id, seal_number, seal_date, seal_state, reason, previous_seal_number, created_by)
+      VALUES (${id}, ${sealNumber || null}, ${sealDate ? new Date(sealDate) : null}, ${sealState}, ${reason || null}, ${previousSealNumber}, ${req.userId || null})
+      RETURNING id, created_at
+    `;
+    // Sync the denormalized current-seal fields on the closure.
+    await req.prisma.$queryRaw`
+      UPDATE closures
+      SET seal_number = ${sealNumber || null},
+          seal_date = ${sealDate ? new Date(sealDate) : null},
+          seal_state = ${sealState},
+          updated_at = NOW()
+      WHERE id = ${id}
+    `;
+    res.status(201).json({
+      message: 'Seal recorded',
+      seal: { id: Number(inserted[0].id), createdAt: inserted[0].created_at, previousSealNumber }
+    });
+  } catch (err) {
+    console.error('Closure seal create error:', err);
+    res.status(500).json({ error: 'Failed to record seal' });
+  }
+});
+
+// ════════════════════════════════════════════════════════════
+// NAPs (Network Access Points — point markers with ports)
+// ════════════════════════════════════════════════════════════
+
+// GET /api/admin/map/naps
+router.get('/naps', adminOrGuest(), async (req, res) => {
+  try {
+    const naps = await req.prisma.$queryRaw`
+      SELECT n.id, n.name, n.type, n.total_ports, n.used_ports,
+             n.latitude, n.longitude, n.municipality, n.barangay,
+             n.pole_number, n.foc_route_id, n.closure_id, n.notes, n.status,
+             n.olt, n.pon, n.access_core, n.nap_core,
+             n.is_lcp_port, n.lcp_nap_id, n.site_id,
+             n.created_at, n.updated_at,
+             f.name AS foc_route_name,
+             c.name AS closure_name,
+             ln.name AS lcp_nap_name
+      FROM naps n
+      LEFT JOIN foc_routes f ON f.id = n.foc_route_id
+      LEFT JOIN closures c ON c.id = n.closure_id
+      LEFT JOIN naps ln ON ln.id = n.lcp_nap_id
+      ORDER BY n.name ASC
+    `;
+
+    res.json({
+      naps: naps.map(n => ({
+        id: n.id,
+        name: n.name,
+        type: n.type,
+        totalPorts: n.total_ports,
+        usedPorts: n.used_ports,
+        lat: n.latitude !== null ? Number(n.latitude) : null,
+        lng: n.longitude !== null ? Number(n.longitude) : null,
+        municipality: n.municipality,
+        barangay: n.barangay,
+        poleNumber: n.pole_number,
+        focRouteId: n.foc_route_id,
+        focRouteName: n.foc_route_name,
+        closureId: n.closure_id,
+        closureName: n.closure_name,
+        notes: n.notes,
+        status: n.status,
+        olt: n.olt,
+        pon: n.pon,
+        accessCore: n.access_core,
+        napCore: n.nap_core,
+        isLcpPort: !!n.is_lcp_port,
+        lcpNapId: n.lcp_nap_id,
+        lcpNapName: n.lcp_nap_name,
+        siteId: n.site_id,
+        createdAt: n.created_at,
+        updatedAt: n.updated_at
+      }))
+    });
+  } catch (err) {
+    console.error('NAPs fetch error:', err);
+    res.status(500).json({ error: 'Failed to load NAPs' });
+  }
+});
+
+// POST /api/admin/map/naps
+router.post('/naps', adminOrTagger(), async (req, res) => {
+  try {
+    const { name, type, totalPorts, lat, lng, municipality, barangay, poleNumber, focRouteId, closureId, notes, olt, pon, accessCore, napCore, isLcpPort, lcpNapId } = req.body;
+
+    if (!name || lat === undefined || lng === undefined) {
+      return res.status(400).json({ error: 'Name, lat, and lng are required' });
+    }
+
+    // 'splitter' kept for backward compat — labelled as "NAP/Splitter" in the UI.
+    // 'fat' and 'fdt' kept for any historical rows; new entries use the four-option set.
+    const validTypes = ['splitter', 'nap', 'nap_closure', 'closure', 'loop', 'fat', 'fdt'];
+    const napType = validTypes.includes(type) ? type : 'splitter';
+    const ports = totalPorts ? parseInt(totalPorts) : 8;
+    const validNapCores = ['Blue', 'Orange', 'Green', 'Brown'];
+    const napCoreVal = napCore && validNapCores.includes(napCore) ? napCore : null;
+
+    const lcpFlag = !!isLcpPort;
+    const lcpId = lcpFlag && lcpNapId ? parseInt(lcpNapId) : null;
+    const result = await req.prisma.$queryRaw`
+      INSERT INTO naps (name, type, total_ports, latitude, longitude, municipality, barangay, pole_number, foc_route_id, closure_id, notes, olt, pon, access_core, nap_core, is_lcp_port, lcp_nap_id, created_by)
+      VALUES (${name}, ${napType}, ${ports},
+              ${parseFloat(lat)}, ${parseFloat(lng)},
+              ${municipality || null}, ${barangay || null}, ${poleNumber || null},
+              ${focRouteId ? parseInt(focRouteId) : null}, ${closureId ? parseInt(closureId) : null},
+              ${notes || null},
+              ${olt || null}, ${pon || null}, ${accessCore || null}, ${napCoreVal},
+              ${lcpFlag}, ${lcpId},
+              ${req.userId})
+      RETURNING id, name, created_at
+    `;
+
+    console.log(`📍 NAP created: ${name} (${ports} ports) at ${lat}, ${lng}`);
+
+    // Auto-generate ports
+    await generatePorts(req.prisma, result[0].id, ports);
+    console.log(`   └─ Generated ${ports} port records`);
+
+    res.status(201).json({
+      message: 'NAP created',
+      nap: { id: result[0].id, name: result[0].name, createdAt: result[0].created_at }
+    });
+  } catch (err) {
+    console.error('NAP create error:', err);
+    res.status(500).json({ error: 'Failed to create NAP' });
+  }
+});
+
+// PUT /api/admin/map/naps/:id
+router.put('/naps/:id', adminAuth(), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const { name, type, totalPorts, usedPorts, lat, lng, municipality, barangay, poleNumber, focRouteId, closureId, notes, status, olt, pon, accessCore, napCore, isLcpPort, lcpNapId } = req.body;
+
+    const fields = [];
+    const values = [];
+    let paramIdx = 1;
+
+    if (name !== undefined) { fields.push(`name = $${paramIdx++}`); values.push(name); }
+    if (type !== undefined) { fields.push(`type = $${paramIdx++}`); values.push(type); }
+    if (totalPorts !== undefined) { fields.push(`total_ports = $${paramIdx++}`); values.push(parseInt(totalPorts)); }
+    if (usedPorts !== undefined) { fields.push(`used_ports = $${paramIdx++}`); values.push(parseInt(usedPorts)); }
+    if (lat !== undefined) { fields.push(`latitude = $${paramIdx++}`); values.push(parseFloat(lat)); }
+    if (lng !== undefined) { fields.push(`longitude = $${paramIdx++}`); values.push(parseFloat(lng)); }
+    if (municipality !== undefined) { fields.push(`municipality = $${paramIdx++}`); values.push(municipality); }
+    if (barangay !== undefined) { fields.push(`barangay = $${paramIdx++}`); values.push(barangay); }
+    if (poleNumber !== undefined) { fields.push(`pole_number = $${paramIdx++}`); values.push(poleNumber); }
+    if (focRouteId !== undefined) { fields.push(`foc_route_id = $${paramIdx++}`); values.push(focRouteId ? parseInt(focRouteId) : null); }
+    if (closureId !== undefined) { fields.push(`closure_id = $${paramIdx++}`); values.push(closureId ? parseInt(closureId) : null); }
+    if (notes !== undefined) { fields.push(`notes = $${paramIdx++}`); values.push(notes); }
+    if (status !== undefined) { fields.push(`status = $${paramIdx++}`); values.push(status); }
+    if (olt !== undefined) { fields.push(`olt = $${paramIdx++}`); values.push(olt || null); }
+    if (pon !== undefined) { fields.push(`pon = $${paramIdx++}`); values.push(pon || null); }
+    if (accessCore !== undefined) { fields.push(`access_core = $${paramIdx++}`); values.push(accessCore || null); }
+    if (napCore !== undefined) {
+      const validNapCores = ['Blue', 'Orange', 'Green', 'Brown'];
+      const v = napCore && validNapCores.includes(napCore) ? napCore : null;
+      fields.push(`nap_core = $${paramIdx++}`); values.push(v);
+    }
+    if (isLcpPort !== undefined) { fields.push(`is_lcp_port = $${paramIdx++}`); values.push(!!isLcpPort); }
+    if (lcpNapId !== undefined) { fields.push(`lcp_nap_id = $${paramIdx++}`); values.push(lcpNapId ? parseInt(lcpNapId) : null); }
+    fields.push(`updated_at = NOW()`);
+
+    if (fields.length <= 1) return res.status(400).json({ error: 'No fields to update' });
+
+    values.push(id);
+    const sql = `UPDATE naps SET ${fields.join(', ')} WHERE id = $${paramIdx} RETURNING id, name`;
+    const result = await req.prisma.$queryRawUnsafe(sql, ...values);
+
+    if (result.length === 0) return res.status(404).json({ error: 'NAP not found' });
+
+    // ── Sync nap_ports when totalPorts changes ──
+    if (totalPorts !== undefined) {
+      const newTotal = parseInt(totalPorts);
+      const existing = await req.prisma.$queryRaw`SELECT id, port_number, status, subscriber_id, strand_id FROM nap_ports WHERE nap_id = ${id} ORDER BY port_number`;
+      const currentCount = existing.length;
+
+      if (newTotal < currentCount) {
+        // Check if any ports above newTotal have data
+        const portsAbove = existing.filter(p => p.port_number > newTotal);
+        const usedAbove = portsAbove.filter(p => p.status !== 'available' || p.subscriber_id || p.strand_id);
+        
+        if (usedAbove.length > 0) {
+          const portNums = usedAbove.map(p => 'Port ' + p.port_number).join(', ');
+          return res.status(400).json({ 
+            error: `Cannot reduce to ${newTotal} ports. ${usedAbove.length} port(s) above that limit have active assignments (${portNums}). Remove assignments first.` 
+          });
+        }
+
+        // Safe to remove — all ports above newTotal are available
+        const toRemove = portsAbove.map(p => p.id);
+        if (toRemove.length > 0) {
+          await req.prisma.$executeRawUnsafe(
+            `DELETE FROM nap_ports WHERE id = ANY($1::int[])`,
+            toRemove
+          );
+          console.log(`   └─ Removed ${toRemove.length} excess ports from NAP #${id}`);
+        }
+      } else if (newTotal > currentCount) {
+        // Add new ports
+        for (let i = currentCount + 1; i <= newTotal; i++) {
+          await req.prisma.$executeRawUnsafe(
+            `INSERT INTO nap_ports (nap_id, port_number, status) VALUES ($1, $2, 'available') ON CONFLICT DO NOTHING`,
+            id, i
+          );
+        }
+        console.log(`   └─ Added ${newTotal - currentCount} new ports to NAP #${id}`);
+      }
+
+      // Recount used_ports
+      await req.prisma.$executeRawUnsafe(
+        `UPDATE naps SET used_ports = (SELECT COUNT(*) FROM nap_ports WHERE nap_id = $1 AND status = 'used') WHERE id = $1`,
+        id
+      );
+    }
+
+    res.json({ message: 'NAP updated', nap: result[0] });
+  } catch (err) {
+    console.error('NAP update error:', err);
+    res.status(500).json({ error: 'Failed to update NAP' });
+  }
+});
+
+// DELETE /api/admin/map/naps/:id
+router.delete('/naps/:id', adminAuth(), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    
+    // Check for assigned ports
+    const usedPorts = await req.prisma.$queryRaw`
+      SELECT port_number, status, subscriber_label, strand_id 
+      FROM nap_ports WHERE nap_id = ${id} AND (status != 'available' OR subscriber_id IS NOT NULL OR strand_id IS NOT NULL)
+      ORDER BY port_number
+    `;
+    if (usedPorts.length > 0) {
+      const portNums = usedPorts.map(p => 'Port ' + p.port_number).join(', ');
+      return res.status(400).json({ 
+        error: `Cannot delete NAP. ${usedPorts.length} port(s) have active assignments (${portNums}). Remove all assignments first.` 
+      });
+    }
+
+    const result = await req.prisma.$queryRaw`DELETE FROM naps WHERE id = ${id} RETURNING id, name`;
+    if (result.length === 0) return res.status(404).json({ error: 'NAP not found' });
+    res.json({ message: `NAP "${result[0].name}" deleted` });
+  } catch (err) {
+    console.error('NAP delete error:', err);
+    res.status(500).json({ error: 'Failed to delete NAP' });
+  }
+});
+
+
+// ════════════════════════════════════════════════════════════
+// GIS STATS — Summary counts for the panel
+// ════════════════════════════════════════════════════════════
+
+// GET /api/admin/map/stats
+router.get('/stats', adminOrGuest(), async (req, res) => {
+  try {
+    const [focCount, closureCount, napCount, napPorts] = await Promise.all([
+      req.prisma.$queryRaw`SELECT COUNT(*)::int AS count FROM foc_routes WHERE status = 'active'`,
+      req.prisma.$queryRaw`SELECT COUNT(*)::int AS count FROM closures WHERE status = 'active'`,
+      req.prisma.$queryRaw`SELECT COUNT(*)::int AS count FROM naps WHERE status = 'active'`,
+      req.prisma.$queryRaw`SELECT COALESCE(SUM(total_ports),0)::int AS total, COALESCE(SUM(used_ports),0)::int AS used FROM naps WHERE status = 'active'`,
+    ]);
+
+    res.json({
+      focRoutes: focCount[0].count,
+      closures: closureCount[0].count,
+      naps: napCount[0].count,
+      totalPorts: napPorts[0].total,
+      usedPorts: napPorts[0].used,
+      availablePorts: napPorts[0].total - napPorts[0].used
+    });
+  } catch (err) {
+    console.error('GIS stats error:', err);
+    res.status(500).json({ error: 'Failed to load GIS stats' });
+  }
+});
+
+
+// ════════════════════════════════════════════════════════════
+// FOC STRANDS — Individual core management
+// ════════════════════════════════════════════════════════════
+
+// Standard 12-color fiber code
+const FIBER_COLORS = ['blue','orange','green','brown','slate','white','red','black','yellow','violet','rose','aqua'];
+
+function getStrandColor(strandNum) {
+  return FIBER_COLORS[(strandNum - 1) % 12];
+}
+function getTubeNumber(strandNum) {
+  return Math.ceil(strandNum / 12);
+}
+function getTubeColor(tubeNum) {
+  return FIBER_COLORS[(tubeNum - 1) % 12];
+}
+
+// Auto-generate strands for a FOC route
+async function generateStrands(prisma, focRouteId, cableSize) {
+  const count = parseInt(cableSize) || 12;
+  const values = [];
+  for (let i = 1; i <= count; i++) {
+    values.push(`(${focRouteId}, ${i}, '${getStrandColor(i)}', ${getTubeNumber(i)}, '${getTubeColor(getTubeNumber(i))}', 'available')`);
+  }
+  if (values.length > 0) {
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO foc_strands (foc_route_id, strand_number, color_code, tube_number, tube_color, status)
+       VALUES ${values.join(',')}
+       ON CONFLICT (foc_route_id, strand_number) DO NOTHING`
+    );
+  }
+  return count;
+}
+
+// GET /api/admin/map/foc-routes/:id/strands
+router.get('/foc-routes/:id/strands', adminOrGuest(), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    
+    // Get route info
+    const route = await req.prisma.$queryRaw`SELECT id, name, cable_size FROM foc_routes WHERE id = ${id}`;
+    if (route.length === 0) return res.status(404).json({ error: 'FOC route not found' });
+
+    // Check if strands exist, auto-generate if not
+    const existing = await req.prisma.$queryRaw`SELECT COUNT(*)::int AS count FROM foc_strands WHERE foc_route_id = ${id}`;
+    if (existing[0].count === 0 && route[0].cable_size) {
+      await generateStrands(req.prisma, id, route[0].cable_size);
+    }
+
+    const strands = await req.prisma.$queryRaw`
+      SELECT id, strand_number, color_code, tube_number, tube_color,
+             status, destination_type, destination_id, destination_label, notes
+      FROM foc_strands WHERE foc_route_id = ${id}
+      ORDER BY strand_number ASC
+    `;
+
+    // Summary
+    const summary = { total: strands.length, available: 0, used: 0, reserved: 0, damaged: 0 };
+    strands.forEach(s => { if (summary[s.status] !== undefined) summary[s.status]++; });
+
+    res.json({
+      routeId: id,
+      routeName: route[0].name,
+      cableSize: route[0].cable_size,
+      summary,
+      strands: strands.map(s => ({
+        id: s.id,
+        number: s.strand_number,
+        color: s.color_code,
+        tube: s.tube_number,
+        tubeColor: s.tube_color,
+        status: s.status,
+        destType: s.destination_type,
+        destId: s.destination_id,
+        destLabel: s.destination_label,
+        notes: s.notes
+      }))
+    });
+  } catch (err) {
+    console.error('Strands fetch error:', err);
+    res.status(500).json({ error: 'Failed to load strands' });
+  }
+});
+
+// PUT /api/admin/map/strands/:id — Update a single strand (with cascading)
+router.put('/strands/:id', adminAuth(), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const { status, destinationType, destinationId, destinationLabel, notes } = req.body;
+
+    // Auto-set status to 'used' if assigning a destination
+    const finalStatus = (destinationType && destinationId) ? 'used' : (status || null);
+
+    const result = await req.prisma.$queryRaw`
+      UPDATE foc_strands SET
+        status = COALESCE(${finalStatus}, status),
+        destination_type = ${destinationType || null},
+        destination_id = ${destinationId ? parseInt(destinationId) : null},
+        destination_label = ${destinationLabel || null},
+        notes = ${notes !== undefined ? notes : null},
+        updated_at = NOW()
+      WHERE id = ${id}
+      RETURNING id, strand_number, foc_route_id, color_code, tube_number
+    `;
+    if (result.length === 0) return res.status(404).json({ error: 'Strand not found' });
+
+    const strand = result[0];
+    const focRoute = await req.prisma.$queryRaw`SELECT id, name, cable_size FROM foc_routes WHERE id = ${strand.foc_route_id}`;
+    const focName = focRoute.length > 0 ? focRoute[0].name : 'Unknown';
+    const focCableSize = focRoute.length > 0 ? focRoute[0].cable_size : '?';
+
+    // ── CASCADE: NAP port ──
+    // If destination is NAP + port selected (destinationLabel contains "Port X")
+    if (destinationType === 'nap' && destinationId) {
+      const napId = parseInt(destinationId);
+      
+      // Parse port ID from destinationLabel if present (format: "p123" prefix from frontend)
+      const portMatch = destinationLabel && destinationLabel.match(/Port (\d+)/);
+      
+      if (portMatch) {
+        const portNumber = parseInt(portMatch[1]);
+        // Update the specific NAP port
+        await req.prisma.$executeRawUnsafe(
+          `UPDATE nap_ports SET 
+            status = 'used',
+            strand_id = $1,
+            notes = COALESCE(notes, '') || CASE WHEN notes IS NOT NULL AND notes != '' THEN '; ' ELSE '' END || $2,
+            updated_at = NOW()
+          WHERE nap_id = $3 AND port_number = $4 AND status = 'available'`,
+          id,
+          'Auto-linked: ' + focName + ' (' + focCableSize + 'C) S' + strand.strand_number + ' ' + strand.color_code,
+          napId,
+          portNumber
+        );
+        // Update NAP used_ports count
+        await req.prisma.$executeRawUnsafe(
+          `UPDATE naps SET used_ports = (SELECT COUNT(*) FROM nap_ports WHERE nap_id = $1 AND status = 'used'), foc_route_id = COALESCE(foc_route_id, $2) WHERE id = $1`,
+          napId, strand.foc_route_id
+        );
+        console.log(`   └─ Auto-linked: Strand S${strand.strand_number} → NAP port ${portNumber} (NAP #${napId})`);
+      }
+    }
+
+    // ── CASCADE: FOC strand-to-strand ──
+    if (destinationType === 'foc' && destinationId) {
+      const destFocId = parseInt(destinationId);
+      // Parse strand ID from destinationLabel if present (format: "s123" prefix from frontend)
+      const strandMatch = destinationLabel && destinationLabel.match(/S(\d+)/);
+      
+      if (strandMatch) {
+        const destStrandNum = parseInt(strandMatch[1]);
+        // Update the destination strand to point back
+        await req.prisma.$executeRawUnsafe(
+          `UPDATE foc_strands SET 
+            status = 'used',
+            destination_type = 'foc',
+            destination_id = $1,
+            destination_label = $2,
+            updated_at = NOW()
+          WHERE foc_route_id = $3 AND strand_number = $4 AND status = 'available'`,
+          strand.foc_route_id,
+          focName + ' (' + focCableSize + 'C) → S' + strand.strand_number + ' (' + strand.color_code + ', T' + strand.tube_number + ')',
+          destFocId,
+          destStrandNum
+        );
+        console.log(`   └─ Auto-linked: Strand S${strand.strand_number} ↔ Dest FOC #${destFocId} S${destStrandNum}`);
+      }
+    }
+
+    // ── CASCADE: Clear old links if destination removed ──
+    if (!destinationType && !destinationId) {
+      // Get old strand data to clean up
+      // (strand was already updated, but we can check if there were old links in nap_ports)
+      await req.prisma.$executeRawUnsafe(
+        `UPDATE nap_ports SET status = 'available', strand_id = NULL, updated_at = NOW() WHERE strand_id = $1`,
+        id
+      );
+      // Recount NAP used_ports for any affected NAPs
+      await req.prisma.$executeRawUnsafe(
+        `UPDATE naps SET used_ports = (SELECT COUNT(*) FROM nap_ports WHERE nap_id = naps.id AND status = 'used')
+         WHERE id IN (SELECT DISTINCT nap_id FROM nap_ports WHERE strand_id IS NULL)`
+      );
+    }
+
+    res.json({ message: 'Strand updated', strand: strand });
+  } catch (err) {
+    console.error('Strand update error:', err);
+    res.status(500).json({ error: 'Failed to update strand' });
+  }
+});
+
+// PUT /api/admin/map/strands/bulk — Bulk update strands
+router.put('/strands/bulk', adminAuth(), async (req, res) => {
+  try {
+    const { strandIds, status, destinationType, destinationId, destinationLabel } = req.body;
+    if (!strandIds || !Array.isArray(strandIds) || strandIds.length === 0) {
+      return res.status(400).json({ error: 'strandIds array required' });
+    }
+
+    const ids = strandIds.map(i => parseInt(i));
+    await req.prisma.$executeRawUnsafe(
+      `UPDATE foc_strands SET
+        status = COALESCE($1, status),
+        destination_type = $2,
+        destination_id = $3,
+        destination_label = $4,
+        updated_at = NOW()
+      WHERE id = ANY($5::int[])`,
+      status || null, destinationType || null,
+      destinationId ? parseInt(destinationId) : null,
+      destinationLabel || null, ids
+    );
+
+    res.json({ message: `${ids.length} strands updated` });
+  } catch (err) {
+    console.error('Bulk strand update error:', err);
+    res.status(500).json({ error: 'Failed to bulk update strands' });
+  }
+});
+
+
+// ════════════════════════════════════════════════════════════
+// NAP PORTS — Individual port management
+// ════════════════════════════════════════════════════════════
+
+// Auto-generate ports for a NAP
+async function generatePorts(prisma, napId, totalPorts) {
+  const count = parseInt(totalPorts) || 8;
+  const values = [];
+  for (let i = 1; i <= count; i++) {
+    values.push(`(${napId}, ${i}, 'available')`);
+  }
+  if (values.length > 0) {
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO nap_ports (nap_id, port_number, status)
+       VALUES ${values.join(',')}
+       ON CONFLICT (nap_id, port_number) DO NOTHING`
+    );
+  }
+  return count;
+}
+
+// GET /api/admin/map/naps/:id/ports
+router.get('/naps/:id/ports', adminOrGuest(), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    
+    const nap = await req.prisma.$queryRaw`SELECT id, name, total_ports FROM naps WHERE id = ${id}`;
+    if (nap.length === 0) return res.status(404).json({ error: 'NAP not found' });
+
+    // Auto-generate if empty
+    const existing = await req.prisma.$queryRaw`SELECT COUNT(*)::int AS count FROM nap_ports WHERE nap_id = ${id}`;
+    if (existing[0].count === 0 && nap[0].total_ports) {
+      await generatePorts(req.prisma, id, nap[0].total_ports);
+    }
+
+    const ports = await req.prisma.$queryRaw`
+      SELECT p.id, p.port_number, p.status, p.subscriber_id, p.subscriber_label,
+             p.strand_id, p.notes,
+             s.strand_number, s.color_code AS strand_color, s.foc_route_id,
+             f.name AS foc_route_name
+      FROM nap_ports p
+      LEFT JOIN foc_strands s ON s.id = p.strand_id
+      LEFT JOIN foc_routes f ON f.id = s.foc_route_id
+      WHERE p.nap_id = ${id}
+      ORDER BY p.port_number ASC
+    `;
+
+    const summary = { total: ports.length, available: 0, used: 0, reserved: 0, damaged: 0 };
+    ports.forEach(p => { if (summary[p.status] !== undefined) summary[p.status]++; });
+
+    res.json({
+      napId: id,
+      napName: nap[0].name,
+      totalPorts: nap[0].total_ports,
+      summary,
+      ports: ports.map(p => ({
+        id: p.id,
+        number: p.port_number,
+        status: p.status,
+        subscriberId: p.subscriber_id,
+        subscriberLabel: p.subscriber_label,
+        strandId: p.strand_id,
+        strandNumber: p.strand_number,
+        strandColor: p.strand_color,
+        focRouteId: p.foc_route_id,
+        focRouteName: p.foc_route_name,
+        notes: p.notes
+      }))
+    });
+  } catch (err) {
+    console.error('NAP ports fetch error:', err);
+    res.status(500).json({ error: 'Failed to load ports' });
+  }
+});
+
+// PUT /api/admin/map/ports/:id — Update a single port (with cascading)
+router.put('/ports/:id', adminAuth(), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const { status, subscriberId, subscriberLabel, strandId, notes } = req.body;
+
+    // Coerce strandId: blank / 0 / negative / non-numeric → null (FK is nullable).
+    // This prevents `strand_id = 0` FK violations when the user clears the field.
+    const sidNum = parseInt(strandId);
+    const sidFinal = (Number.isFinite(sidNum) && sidNum > 0) ? sidNum : null;
+
+    // If a strand was supplied, verify it exists — fail with a friendly 400 instead
+    // of letting Postgres throw a generic 23503.
+    if (sidFinal !== null) {
+      const exists = await req.prisma.$queryRaw`SELECT 1 AS ok FROM foc_strands WHERE id = ${sidFinal} LIMIT 1`;
+      if (exists.length === 0) {
+        return res.status(400).json({ error: `Strand ID ${sidFinal} does not exist. Use the strand picker.` });
+      }
+    }
+
+    // Auto-set status to 'used' if assigning a subscriber
+    const finalStatus = subscriberId ? 'used' : (status || null);
+
+    const result = await req.prisma.$queryRaw`
+      UPDATE nap_ports SET
+        status = COALESCE(${finalStatus}, status),
+        subscriber_id = ${subscriberId ? parseInt(subscriberId) : null},
+        subscriber_label = ${subscriberLabel || null},
+        strand_id = ${sidFinal},
+        notes = ${notes !== undefined ? notes : null},
+        updated_at = NOW()
+      WHERE id = ${id}
+      RETURNING id, port_number, nap_id, strand_id
+    `;
+    if (result.length === 0) return res.status(404).json({ error: 'Port not found' });
+
+    const port = result[0];
+    const napId = port.nap_id;
+
+    // Update NAP used_ports count
+    await req.prisma.$executeRawUnsafe(
+      `UPDATE naps SET used_ports = (SELECT COUNT(*) FROM nap_ports WHERE nap_id = $1 AND status = 'used') WHERE id = $1`,
+      napId
+    );
+
+    // ── CASCADE: Update linked strand with subscriber info ──
+    if (port.strand_id && subscriberId && subscriberLabel) {
+      // Get NAP name
+      const nap = await req.prisma.$queryRaw`SELECT name FROM naps WHERE id = ${napId}`;
+      const napName = nap.length > 0 ? nap[0].name : 'NAP';
+      
+      // Update the strand destination label to include subscriber
+      await req.prisma.$executeRawUnsafe(
+        `UPDATE foc_strands SET 
+          destination_label = $1,
+          updated_at = NOW()
+        WHERE id = $2`,
+        napName + ' Port ' + port.port_number + ' → ' + subscriberLabel,
+        port.strand_id
+      );
+      console.log(`   └─ Auto-updated: Strand #${port.strand_id} label → ${subscriberLabel}`);
+    }
+
+    // ── CASCADE: Clear strand link if port freed ──
+    if (!subscriberId && finalStatus === 'available' && port.strand_id) {
+      // Don't clear the strand, but note port is freed
+      console.log(`   └─ Port ${port.port_number} freed, strand #${port.strand_id} still linked`);
+    }
+
+    res.json({ message: 'Port updated', port: port });
+  } catch (err) {
+    console.error('Port update error:', err);
+    res.status(500).json({ error: 'Failed to update port' });
+  }
+});
+
+
+// ════════════════════════════════════════════════════════════
+// CLOSURE LCP/NAP PORTS — a closure flagged is_lcp gets a port array
+// (splitter + subscriber drops) mirroring NAP ports.
+// ════════════════════════════════════════════════════════════
+
+async function generateClosurePorts(prisma, closureId, totalPorts) {
+  const count = parseInt(totalPorts) || 8;
+  const values = [];
+  for (let i = 1; i <= count; i++) values.push(`(${closureId}, ${i}, 'available')`);
+  if (values.length > 0) {
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO closure_ports (closure_id, port_number, status)
+       VALUES ${values.join(',')}
+       ON CONFLICT (closure_id, port_number) DO NOTHING`
+    );
+  }
+  return count;
+}
+
+// GET /api/admin/map/closures/:id/ports
+router.get('/closures/:id/ports', adminOrGuest(), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const closure = await req.prisma.$queryRaw`SELECT id, name, is_lcp, lcp_total_ports FROM closures WHERE id = ${id}`;
+    if (closure.length === 0) return res.status(404).json({ error: 'Closure not found' });
+
+    // Auto-generate if LCP enabled but ports empty
+    const existing = await req.prisma.$queryRaw`SELECT COUNT(*)::int AS count FROM closure_ports WHERE closure_id = ${id}`;
+    if (existing[0].count === 0 && closure[0].is_lcp && closure[0].lcp_total_ports) {
+      await generateClosurePorts(req.prisma, id, closure[0].lcp_total_ports);
+    }
+
+    const ports = await req.prisma.$queryRaw`
+      SELECT p.id, p.port_number, p.status, p.subscriber_id, p.subscriber_label,
+             p.strand_id, p.notes,
+             s.strand_number, s.color_code AS strand_color, s.foc_route_id,
+             f.name AS foc_route_name
+      FROM closure_ports p
+      LEFT JOIN foc_strands s ON s.id = p.strand_id
+      LEFT JOIN foc_routes f ON f.id = s.foc_route_id
+      WHERE p.closure_id = ${id}
+      ORDER BY p.port_number ASC
+    `;
+
+    const summary = { total: ports.length, available: 0, used: 0, reserved: 0, damaged: 0 };
+    ports.forEach(p => { if (summary[p.status] !== undefined) summary[p.status]++; });
+
+    res.json({
+      closureId: id,
+      closureName: closure[0].name,
+      isLcp: !!closure[0].is_lcp,
+      totalPorts: closure[0].lcp_total_ports,
+      summary,
+      ports: ports.map(p => ({
+        id: p.id,
+        number: p.port_number,
+        status: p.status,
+        subscriberId: p.subscriber_id,
+        subscriberLabel: p.subscriber_label,
+        strandId: p.strand_id,
+        strandNumber: p.strand_number,
+        strandColor: p.strand_color,
+        focRouteId: p.foc_route_id,
+        focRouteName: p.foc_route_name,
+        notes: p.notes
+      }))
+    });
+  } catch (err) {
+    console.error('Closure ports fetch error:', err);
+    res.status(500).json({ error: 'Failed to load closure ports' });
+  }
+});
+
+// PUT /api/admin/map/closure-ports/:id — Update a single closure port
+router.put('/closure-ports/:id', adminAuth(), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const { status, subscriberId, subscriberLabel, strandId, notes } = req.body;
+
+    const sidNum = parseInt(strandId);
+    const sidFinal = (Number.isFinite(sidNum) && sidNum > 0) ? sidNum : null;
+    if (sidFinal !== null) {
+      const exists = await req.prisma.$queryRaw`SELECT 1 AS ok FROM foc_strands WHERE id = ${sidFinal} LIMIT 1`;
+      if (exists.length === 0) return res.status(400).json({ error: `Strand ID ${sidFinal} does not exist. Use the strand picker.` });
+    }
+    const finalStatus = subscriberId ? 'used' : (status || null);
+
+    const result = await req.prisma.$queryRaw`
+      UPDATE closure_ports SET
+        status = COALESCE(${finalStatus}, status),
+        subscriber_id = ${subscriberId ? parseInt(subscriberId) : null},
+        subscriber_label = ${subscriberLabel || null},
+        strand_id = ${sidFinal},
+        notes = ${notes !== undefined ? notes : null},
+        updated_at = NOW()
+      WHERE id = ${id}
+      RETURNING id, port_number, closure_id, strand_id
+    `;
+    if (result.length === 0) return res.status(404).json({ error: 'Port not found' });
+    const port = result[0];
+
+    await req.prisma.$executeRawUnsafe(
+      `UPDATE closures SET lcp_used_ports = (SELECT COUNT(*) FROM closure_ports WHERE closure_id = $1 AND status = 'used') WHERE id = $1`,
+      port.closure_id
+    );
+
+    // Cascade subscriber label onto linked strand (same as NAP)
+    if (port.strand_id && subscriberId && subscriberLabel) {
+      const cl = await req.prisma.$queryRaw`SELECT name FROM closures WHERE id = ${port.closure_id}`;
+      const clName = cl.length > 0 ? cl[0].name : 'Closure';
+      await req.prisma.$executeRawUnsafe(
+        `UPDATE foc_strands SET destination_label = $1, updated_at = NOW() WHERE id = $2`,
+        clName + ' Port ' + port.port_number + ' → ' + subscriberLabel,
+        port.strand_id
+      );
+    }
+
+    res.json({ message: 'Port updated', port });
+  } catch (err) {
+    console.error('Closure port update error:', err);
+    res.status(500).json({ error: 'Failed to update closure port' });
+  }
+});
+
+
+// ════════════════════════════════════════════════════════════
+// ODF PORTS — an Optical Distribution Frame (network_element type
+// 'odf') gets a termination/patch port array, mirroring closures.
+// ════════════════════════════════════════════════════════════
+
+async function generateOdfPorts(prisma, odfId, totalPorts) {
+  const count = parseInt(totalPorts) || 0;
+  const values = [];
+  for (let i = 1; i <= count; i++) values.push(`(${odfId}, ${i}, 'available')`);
+  if (values.length > 0) {
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO odf_ports (odf_id, port_number, status)
+       VALUES ${values.join(',')}
+       ON CONFLICT (odf_id, port_number) DO NOTHING`
+    );
+  }
+  return count;
+}
+
+// GET /api/admin/map/elements/:id/ports — ports of an ODF
+router.get('/elements/:id/ports', adminOrGuest(), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const odf = await req.prisma.$queryRaw`SELECT id, name, type, port_count FROM network_elements WHERE id = ${id}`;
+    if (odf.length === 0) return res.status(404).json({ error: 'Element not found' });
+    if (odf[0].type !== 'odf') return res.status(400).json({ error: 'Ports are only managed for ODF elements' });
+
+    // Auto-generate on first open if a port count is set but no ports exist yet
+    const existing = await req.prisma.$queryRaw`SELECT COUNT(*)::int AS count FROM odf_ports WHERE odf_id = ${id}`;
+    if (existing[0].count === 0 && odf[0].port_count) {
+      await generateOdfPorts(req.prisma, id, odf[0].port_count);
+    }
+
+    const ports = await req.prisma.$queryRaw`
+      SELECT p.id, p.port_number, p.status, p.subscriber_id, p.subscriber_label,
+             p.strand_id, p.notes,
+             s.strand_number, s.color_code AS strand_color, s.foc_route_id,
+             f.name AS foc_route_name
+      FROM odf_ports p
+      LEFT JOIN foc_strands s ON s.id = p.strand_id
+      LEFT JOIN foc_routes f ON f.id = s.foc_route_id
+      WHERE p.odf_id = ${id}
+      ORDER BY p.port_number ASC
+    `;
+
+    const summary = { total: ports.length, available: 0, used: 0, reserved: 0, damaged: 0 };
+    ports.forEach(p => { if (summary[p.status] !== undefined) summary[p.status]++; });
+
+    res.json({
+      odfId: id,
+      odfName: odf[0].name,
+      totalPorts: odf[0].port_count,
+      summary,
+      ports: ports.map(p => ({
+        id: p.id,
+        number: p.port_number,
+        status: p.status,
+        subscriberId: p.subscriber_id,
+        subscriberLabel: p.subscriber_label,
+        strandId: p.strand_id,
+        strandNumber: p.strand_number,
+        strandColor: p.strand_color,
+        focRouteId: p.foc_route_id,
+        focRouteName: p.foc_route_name,
+        notes: p.notes
+      }))
+    });
+  } catch (err) {
+    console.error('ODF ports fetch error:', err);
+    res.status(500).json({ error: 'Failed to load ODF ports' });
+  }
+});
+
+// PUT /api/admin/map/odf-ports/:id — update a single ODF port
+router.put('/odf-ports/:id', adminAuth(), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const { status, subscriberId, subscriberLabel, strandId, notes } = req.body;
+
+    const sidNum = parseInt(strandId);
+    const sidFinal = (Number.isFinite(sidNum) && sidNum > 0) ? sidNum : null;
+    if (sidFinal !== null) {
+      const exists = await req.prisma.$queryRaw`SELECT 1 AS ok FROM foc_strands WHERE id = ${sidFinal} LIMIT 1`;
+      if (exists.length === 0) return res.status(400).json({ error: `Strand ID ${sidFinal} does not exist. Use the strand picker.` });
+    }
+    const finalStatus = subscriberId ? 'used' : (status || null);
+
+    const result = await req.prisma.$queryRaw`
+      UPDATE odf_ports SET
+        status = COALESCE(${finalStatus}, status),
+        subscriber_id = ${subscriberId ? parseInt(subscriberId) : null},
+        subscriber_label = ${subscriberLabel || null},
+        strand_id = ${sidFinal},
+        notes = ${notes !== undefined ? notes : null},
+        updated_at = NOW()
+      WHERE id = ${id}
+      RETURNING id, port_number, odf_id, strand_id
+    `;
+    if (result.length === 0) return res.status(404).json({ error: 'Port not found' });
+    const port = result[0];
+
+    // Cascade the ODF name + port onto the linked strand's destination label (same as closure/NAP)
+    if (port.strand_id && subscriberId && subscriberLabel) {
+      const odf = await req.prisma.$queryRaw`SELECT name FROM network_elements WHERE id = ${port.odf_id}`;
+      const odfName = odf.length > 0 ? odf[0].name : 'ODF';
+      await req.prisma.$executeRawUnsafe(
+        `UPDATE foc_strands SET destination_label = $1, updated_at = NOW() WHERE id = $2`,
+        odfName + ' Port ' + port.port_number + ' → ' + subscriberLabel,
+        port.strand_id
+      );
+    }
+
+    res.json({ message: 'Port updated', port });
+  } catch (err) {
+    console.error('ODF port update error:', err);
+    res.status(500).json({ error: 'Failed to update ODF port' });
+  }
+});
+
+// ════════════════════════════════════════════════════════════
+// ODF ROLES — an ODF is a passive frame that can also take on
+// multiple roles (termination / splitter-LCP / splice / NAP),
+// each optionally linked to an FOC route.
+// ════════════════════════════════════════════════════════════
+
+const VALID_ODF_ROLES = ['termination', 'splitter', 'splice', 'nap'];
+
+// GET /api/admin/map/elements/:id/roles
+router.get('/elements/:id/roles', adminOrGuest(), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const roles = await req.prisma.$queryRaw`
+      SELECT r.id, r.role, r.label, r.foc_route_id, f.name AS foc_route_name, r.config
+      FROM odf_roles r LEFT JOIN foc_routes f ON f.id = r.foc_route_id
+      WHERE r.odf_id = ${id} ORDER BY r.id`;
+    res.json({ odfId: id, roles: roles.map(r => ({
+      id: r.id, role: r.role, label: r.label,
+      focRouteId: r.foc_route_id, focRouteName: r.foc_route_name, config: r.config,
+    })) });
+  } catch (err) {
+    console.error('ODF roles fetch error:', err);
+    res.status(500).json({ error: 'Failed to load ODF roles' });
+  }
+});
+
+// PUT /api/admin/map/elements/:id/roles — replace the ODF's role set
+// Body: { roles: [{ role, label?, focRouteId?, config? }] }
+router.put('/elements/:id/roles', adminAuth(), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const el = await req.prisma.$queryRaw`SELECT id, type FROM network_elements WHERE id = ${id}`;
+    if (el.length === 0) return res.status(404).json({ error: 'Element not found' });
+    if (el[0].type !== 'odf') return res.status(400).json({ error: 'Roles are only managed for ODF elements' });
+
+    const incoming = Array.isArray(req.body.roles) ? req.body.roles : [];
+    for (const r of incoming) {
+      if (!VALID_ODF_ROLES.includes(r.role)) {
+        return res.status(400).json({ error: `Invalid role "${r.role}". Must be: ${VALID_ODF_ROLES.join(', ')}` });
+      }
+    }
+    // Replace-all: clear then re-insert (deduped by role)
+    await req.prisma.$executeRawUnsafe(`DELETE FROM odf_roles WHERE odf_id = $1`, id);
+    const seen = new Set();
+    for (const r of incoming) {
+      if (seen.has(r.role)) continue;
+      seen.add(r.role);
+      const focId = r.focRouteId ? parseInt(r.focRouteId) : null;
+      const cfg = r.config ? JSON.stringify(r.config) : null;
+      await req.prisma.$executeRawUnsafe(
+        `INSERT INTO odf_roles (odf_id, role, label, foc_route_id, config) VALUES ($1, $2, $3, $4, $5::jsonb)`,
+        id, r.role, r.label || null, focId, cfg
+      );
+    }
+    res.json({ message: 'Roles updated', count: seen.size });
+  } catch (err) {
+    console.error('ODF roles update error:', err);
+    res.status(500).json({ error: 'Failed to update ODF roles' });
+  }
+});
+
+// ════════════════════════════════════════════════════════════
+// SITES — a physical location (cabinet/pole/handhole/POP) that
+// consolidates multiple infrastructure units (closures, NAPs,
+// ODFs/elements). Each unit carries a nullable site_id.
+// ════════════════════════════════════════════════════════════
+
+const SITE_MEMBER_TABLES = { closure: 'closures', nap: 'naps', element: 'network_elements' };
+
+// GET /api/admin/map/sites — list with member counts
+router.get('/sites', adminOrGuest(), async (req, res) => {
+  try {
+    const rows = await req.prisma.$queryRaw`
+      SELECT s.id, s.name, s.site_type, s.lat, s.lng, s.pole_number, s.notes, s.status,
+             s.created_at, s.updated_at,
+             (SELECT COUNT(*)::int FROM closures c WHERE c.site_id = s.id) AS closure_count,
+             (SELECT COUNT(*)::int FROM naps n WHERE n.site_id = s.id) AS nap_count,
+             (SELECT COUNT(*)::int FROM network_elements e WHERE e.site_id = s.id) AS element_count
+      FROM sites s ORDER BY s.created_at DESC`;
+    res.json({ sites: rows.map(s => ({
+      id: s.id, name: s.name, siteType: s.site_type,
+      lat: s.lat != null ? parseFloat(s.lat) : null, lng: s.lng != null ? parseFloat(s.lng) : null,
+      poleNumber: s.pole_number, notes: s.notes, status: s.status || 'active',
+      memberCount: (s.closure_count || 0) + (s.nap_count || 0) + (s.element_count || 0),
+      closureCount: s.closure_count, napCount: s.nap_count, elementCount: s.element_count,
+      createdAt: s.created_at, updatedAt: s.updated_at,
+    })) });
+  } catch (err) {
+    console.error('Sites fetch error:', err);
+    res.status(500).json({ error: 'Failed to load sites' });
+  }
+});
+
+// GET /api/admin/map/sites/:id — site + its member units
+router.get('/sites/:id', adminOrGuest(), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const s = await req.prisma.$queryRaw`SELECT * FROM sites WHERE id = ${id}`;
+    if (s.length === 0) return res.status(404).json({ error: 'Site not found' });
+    const closures = await req.prisma.$queryRaw`SELECT id, name, type, latitude AS lat, longitude AS lng FROM closures WHERE site_id = ${id} ORDER BY name`;
+    const naps = await req.prisma.$queryRaw`SELECT id, name, type, total_ports, latitude AS lat, longitude AS lng FROM naps WHERE site_id = ${id} ORDER BY name`;
+    const elements = await req.prisma.$queryRaw`SELECT id, name, type, port_count, lat, lng FROM network_elements WHERE site_id = ${id} ORDER BY name`;
+    const members = [
+      ...closures.map(c => ({ memberType: 'closure', id: c.id, name: c.name, subType: c.type, lat: c.lat != null ? parseFloat(c.lat) : null, lng: c.lng != null ? parseFloat(c.lng) : null })),
+      ...naps.map(n => ({ memberType: 'nap', id: n.id, name: n.name, subType: n.type, ports: n.total_ports, lat: n.lat != null ? parseFloat(n.lat) : null, lng: n.lng != null ? parseFloat(n.lng) : null })),
+      ...elements.map(e => ({ memberType: 'element', id: e.id, name: e.name, subType: e.type, ports: e.port_count, lat: e.lat != null ? parseFloat(e.lat) : null, lng: e.lng != null ? parseFloat(e.lng) : null })),
+    ];
+    res.json({
+      site: { id: s[0].id, name: s[0].name, siteType: s[0].site_type,
+        lat: s[0].lat != null ? parseFloat(s[0].lat) : null, lng: s[0].lng != null ? parseFloat(s[0].lng) : null,
+        poleNumber: s[0].pole_number, notes: s[0].notes, status: s[0].status || 'active' },
+      members,
+    });
+  } catch (err) {
+    console.error('Site detail error:', err);
+    res.status(500).json({ error: 'Failed to load site' });
+  }
+});
+
+// POST /api/admin/map/sites — create
+router.post('/sites', adminOrTagger(), async (req, res) => {
+  try {
+    const { name, siteType, lat, lng, poleNumber, notes } = req.body;
+    if (!name) return res.status(400).json({ error: 'Name is required' });
+    if (lat == null || lng == null) return res.status(400).json({ error: 'Coordinates (lat, lng) are required' });
+    const result = await req.prisma.$queryRaw`
+      INSERT INTO sites (name, site_type, lat, lng, pole_number, notes, status, created_at, updated_at)
+      VALUES (${name}, ${siteType || 'cabinet'}, ${parseFloat(lat)}, ${parseFloat(lng)},
+              ${poleNumber || null}, ${notes || null}, 'active', NOW(), NOW())
+      RETURNING id, created_at`;
+    res.status(201).json({ message: 'Site created', site: { id: result[0].id, name } });
+  } catch (err) {
+    console.error('Site create error:', err);
+    res.status(500).json({ error: 'Failed to create site' });
+  }
+});
+
+// PUT /api/admin/map/sites/:id — update
+router.put('/sites/:id', adminAuth(), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const { name, siteType, lat, lng, poleNumber, notes, status } = req.body;
+    const fields = []; const vals = [];
+    if (name !== undefined)       { fields.push('name = $' + (vals.length + 1)); vals.push(name); }
+    if (siteType !== undefined)   { fields.push('site_type = $' + (vals.length + 1)); vals.push(siteType); }
+    if (lat !== undefined)        { fields.push('lat = $' + (vals.length + 1)); vals.push(parseFloat(lat)); }
+    if (lng !== undefined)        { fields.push('lng = $' + (vals.length + 1)); vals.push(parseFloat(lng)); }
+    if (poleNumber !== undefined) { fields.push('pole_number = $' + (vals.length + 1)); vals.push(poleNumber || null); }
+    if (notes !== undefined)      { fields.push('notes = $' + (vals.length + 1)); vals.push(notes || null); }
+    if (status !== undefined)     { fields.push('status = $' + (vals.length + 1)); vals.push(status); }
+    fields.push('updated_at = NOW()');
+    if (fields.length <= 1) return res.status(400).json({ error: 'No fields to update' });
+    vals.push(id);
+    await req.prisma.$queryRawUnsafe(`UPDATE sites SET ${fields.join(', ')} WHERE id = $${vals.length}`, ...vals);
+    res.json({ message: 'Site updated' });
+  } catch (err) {
+    console.error('Site update error:', err);
+    res.status(500).json({ error: 'Failed to update site' });
+  }
+});
+
+// DELETE /api/admin/map/sites/:id — delete (members are detached via ON DELETE SET NULL)
+router.delete('/sites/:id', adminAuth(), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const chk = await req.prisma.$queryRaw`SELECT id FROM sites WHERE id = ${id}`;
+    if (!chk.length) return res.status(404).json({ error: 'Site not found' });
+    await req.prisma.$queryRaw`DELETE FROM sites WHERE id = ${id}`;
+    res.json({ message: 'Site deleted' });
+  } catch (err) {
+    console.error('Site delete error:', err);
+    res.status(500).json({ error: 'Failed to delete site' });
+  }
+});
+
+// POST /api/admin/map/sites/:id/members — attach a unit  Body: { memberType, memberId }
+router.post('/sites/:id/members', adminAuth(), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const { memberType, memberId } = req.body;
+    const table = SITE_MEMBER_TABLES[memberType];
+    if (!table) return res.status(400).json({ error: 'Invalid memberType. Use: closure, nap, element' });
+    const site = await req.prisma.$queryRaw`SELECT id FROM sites WHERE id = ${id}`;
+    if (!site.length) return res.status(404).json({ error: 'Site not found' });
+    const r = await req.prisma.$executeRawUnsafe(`UPDATE ${table} SET site_id = $1 WHERE id = $2`, id, parseInt(memberId));
+    if (!r) return res.status(404).json({ error: 'Member not found' });
+    res.json({ message: 'Member attached' });
+  } catch (err) {
+    console.error('Site attach member error:', err);
+    res.status(500).json({ error: 'Failed to attach member' });
+  }
+});
+
+// DELETE /api/admin/map/sites/:id/members/:memberType/:memberId — detach a unit
+router.delete('/sites/:id/members/:memberType/:memberId', adminAuth(), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const table = SITE_MEMBER_TABLES[req.params.memberType];
+    if (!table) return res.status(400).json({ error: 'Invalid memberType' });
+    await req.prisma.$executeRawUnsafe(`UPDATE ${table} SET site_id = NULL WHERE id = $1 AND site_id = $2`, parseInt(req.params.memberId), id);
+    res.json({ message: 'Member detached' });
+  } catch (err) {
+    console.error('Site detach member error:', err);
+    res.status(500).json({ error: 'Failed to detach member' });
+  }
+});
+
+// ════════════════════════════════════════════════════════════
+// SUBSCRIBER-PORT MAPPING — Quick lookup for info cards
+// ════════════════════════════════════════════════════════════
+
+// GET /api/admin/map/subscriber-ports
+router.get('/subscriber-ports', adminOrGuest(), async (req, res) => {
+  try {
+    const mappings = await req.prisma.$queryRaw`
+      SELECT p.subscriber_id, p.port_number, p.status AS port_status,
+             p.strand_id, p.subscriber_label,
+             n.id AS nap_id, n.name AS nap_name, n.type AS nap_type,
+             s.strand_number, s.color_code AS strand_color, s.tube_number,
+             f.id AS foc_route_id, f.name AS foc_route_name, f.cable_size AS foc_cable_size
+      FROM nap_ports p
+      JOIN naps n ON n.id = p.nap_id
+      LEFT JOIN foc_strands s ON s.id = p.strand_id
+      LEFT JOIN foc_routes f ON f.id = s.foc_route_id
+      WHERE p.subscriber_id IS NOT NULL
+      ORDER BY n.name, p.port_number
+    `;
+    res.json({ mappings: mappings.map(m => ({
+      subscriberId: m.subscriber_id,
+      subscriberLabel: m.subscriber_label,
+      portNumber: m.port_number,
+      napId: m.nap_id,
+      napName: m.nap_name,
+      napType: m.nap_type,
+      strandId: m.strand_id,
+      strandNumber: m.strand_number,
+      strandColor: m.strand_color,
+      tubeNumber: m.tube_number,
+      focRouteId: m.foc_route_id,
+      focRouteName: m.foc_route_name,
+      focCableSize: m.foc_cable_size
+    }))});
+  } catch (err) {
+    console.error('Subscriber-ports error:', err);
+    res.status(500).json({ error: 'Failed to load subscriber-port mappings' });
+  }
+});
+
+
+// ════════════════════════════════════════════════════════════
+// INVENTORY — Cable & Port availability summary
+// ════════════════════════════════════════════════════════════
+
+// GET /api/admin/map/inventory
+router.get('/inventory', adminOrGuest(), async (req, res) => {
+  try {
+    // FOC cable inventory with strand counts
+    const focInventory = await req.prisma.$queryRaw`
+      SELECT f.id, f.name, f.type, f.cable_size, f.cable_type, f.length_meters, f.status,
+             f.municipality, f.barangay,
+             COUNT(s.id)::int AS total_strands,
+             COUNT(s.id) FILTER (WHERE s.status = 'available')::int AS available_strands,
+             COUNT(s.id) FILTER (WHERE s.status = 'used')::int AS used_strands,
+             COUNT(s.id) FILTER (WHERE s.status = 'reserved')::int AS reserved_strands,
+             COUNT(s.id) FILTER (WHERE s.status = 'damaged')::int AS damaged_strands
+      FROM foc_routes f
+      LEFT JOIN foc_strands s ON s.foc_route_id = f.id
+      GROUP BY f.id
+      ORDER BY f.name ASC
+    `;
+
+    // NAP inventory with port counts  
+    const napInventory = await req.prisma.$queryRaw`
+      SELECT n.id, n.name, n.type, n.total_ports, n.status,
+             n.municipality, n.barangay,
+             f.name AS foc_route_name, f.cable_size AS foc_cable_size,
+             COUNT(p.id)::int AS tracked_ports,
+             COUNT(p.id) FILTER (WHERE p.status = 'available')::int AS available_ports,
+             COUNT(p.id) FILTER (WHERE p.status = 'used')::int AS used_ports,
+             COUNT(p.id) FILTER (WHERE p.status = 'reserved')::int AS reserved_ports,
+             COUNT(p.id) FILTER (WHERE p.status = 'damaged')::int AS damaged_ports
+      FROM naps n
+      LEFT JOIN nap_ports p ON p.nap_id = n.id
+      LEFT JOIN foc_routes f ON f.id = n.foc_route_id
+      GROUP BY n.id, f.name, f.cable_size
+      ORDER BY n.name ASC
+    `;
+
+    // Closure inventory
+    const closureInventory = await req.prisma.$queryRaw`
+      SELECT c.id, c.name, c.type, c.capacity, c.used_capacity, c.status,
+             c.municipality, c.barangay,
+             f.name AS foc_route_name, f.cable_size AS foc_cable_size
+      FROM closures c
+      LEFT JOIN foc_routes f ON f.id = c.foc_route_id
+      ORDER BY c.name ASC
+    `;
+
+    // Totals
+    const totals = {
+      focRoutes: focInventory.length,
+      totalStrands: focInventory.reduce((s, f) => s + f.total_strands, 0),
+      availableStrands: focInventory.reduce((s, f) => s + f.available_strands, 0),
+      naps: napInventory.length,
+      totalPorts: napInventory.reduce((s, n) => s + (n.total_ports || 0), 0),
+      availablePorts: napInventory.reduce((s, n) => s + n.available_ports, 0),
+      closures: closureInventory.length
+    };
+
+    res.json({
+      totals,
+      focRoutes: focInventory.map(f => ({
+        id: f.id, name: f.name, type: f.type,
+        cableSize: f.cable_size, cableType: f.cable_type,
+        length: f.length_meters ? Number(f.length_meters) : null,
+        status: f.status, municipality: f.municipality, barangay: f.barangay,
+        totalStrands: f.total_strands, availableStrands: f.available_strands,
+        usedStrands: f.used_strands, reservedStrands: f.reserved_strands,
+        damagedStrands: f.damaged_strands
+      })),
+      naps: napInventory.map(n => ({
+        id: n.id, name: n.name, type: n.type,
+        totalPorts: n.total_ports, status: n.status,
+        municipality: n.municipality, barangay: n.barangay,
+        focRouteName: n.foc_route_name, focCableSize: n.foc_cable_size,
+        availablePorts: n.available_ports, usedPorts: n.used_ports,
+        reservedPorts: n.reserved_ports, damagedPorts: n.damaged_ports
+      })),
+      closures: closureInventory.map(c => ({
+        id: c.id, name: c.name, type: c.type,
+        capacity: c.capacity, usedCapacity: c.used_capacity,
+        availableCapacity: c.capacity - c.used_capacity,
+        status: c.status, municipality: c.municipality, barangay: c.barangay,
+        focRouteName: c.foc_route_name, focCableSize: c.foc_cable_size
+      }))
+    });
+  } catch (err) {
+    console.error('Inventory error:', err);
+    res.status(500).json({ error: 'Failed to load inventory' });
+  }
+});
+
+
+// ============================================================
+// CLOSURE CONNECTIONS — GET / POST / DELETE                  
+// closure_connections_PATCHED                               
+// ============================================================
+
+// GET /api/admin/map/closures/:id/connections
+// GET /api/admin/map/closures/connections-bulk
+// Returns connections for all closures in one call, keyed by
+// closure_id. Used by the GIS map to populate hover tooltips
+// without N+1 round-trips.
+router.get('/closures/connections-bulk', adminOrGuest(), async (req, res) => {
+  try {
+    const rows = await req.prisma.$queryRaw`
+      SELECT cc.id, cc.closure_id, cc.side, cc.sort_order,
+             cc.connection_type, cc.ref_id, cc.ref_name,
+             cc.fiber_count, cc.core_start, cc.core_end,
+             CASE
+               WHEN cc.connection_type = 'foc_route' THEN f.name
+               WHEN cc.connection_type = 'nap'       THEN n.name
+               ELSE NULL
+             END AS resolved_name,
+             CASE
+               WHEN cc.connection_type = 'foc_route' THEN f.cable_size::text
+               ELSE NULL
+             END AS foc_cable_size,
+             CASE
+               WHEN cc.connection_type = 'nap' THEN n.total_ports::text
+               ELSE NULL
+             END AS nap_ports
+      FROM closure_connections cc
+      LEFT JOIN foc_routes f ON cc.connection_type = 'foc_route' AND cc.ref_id = f.id
+      LEFT JOIN naps n       ON cc.connection_type = 'nap'       AND cc.ref_id = n.id
+      ORDER BY cc.closure_id ASC, cc.side ASC, cc.sort_order ASC, cc.id ASC
+    `;
+    const byClosure = {};
+    for (const r of rows) {
+      const cid = r.closure_id;
+      if (!byClosure[cid]) byClosure[cid] = [];
+      byClosure[cid].push({
+        id: r.id, side: r.side, sortOrder: r.sort_order,
+        connectionType: r.connection_type, refId: r.ref_id,
+        refName: r.ref_name || r.resolved_name || '',
+        fiberCount: r.fiber_count, coreStart: r.core_start, coreEnd: r.core_end,
+        focCableSize: r.foc_cable_size, napPorts: r.nap_ports,
+      });
+    }
+    res.json({ byClosure });
+  } catch (err) {
+    console.error('Closure bulk-connections fetch error:', err);
+    res.status(500).json({ error: 'Failed to load closure connections' });
+  }
+});
+
+router.get('/closures/:id/connections', adminOrGuest(), async (req, res) => {
+  try {
+    const closureId = parseInt(req.params.id);
+
+    const closure = await req.prisma.$queryRaw`
+      SELECT c.id, c.name, c.type, c.capacity, c.used_capacity,
+             c.latitude, c.longitude, c.pole_number, c.municipality,
+             c.barangay, c.foc_route_id, c.status, c.notes,
+             f.name AS foc_route_name, f.cable_size AS foc_cable_size
+      FROM closures c
+      LEFT JOIN foc_routes f ON f.id = c.foc_route_id
+      WHERE c.id = ${closureId}
+    `;
+    if (!closure.length) return res.status(404).json({ error: 'Closure not found' });
+
+    const connections = await req.prisma.$queryRaw`
+      SELECT cc.id, cc.closure_id, cc.side, cc.sort_order,
+             cc.connection_type, cc.ref_id, cc.ref_name,
+             cc.fiber_count, cc.core_start, cc.core_end, cc.notes,
+             cc.created_at,
+             CASE
+               WHEN cc.connection_type = 'foc_route' THEN f.name
+               WHEN cc.connection_type = 'nap'       THEN n.name
+               ELSE NULL
+             END AS resolved_name,
+             CASE
+               WHEN cc.connection_type = 'foc_route' THEN f.cable_size::text
+               ELSE NULL
+             END AS foc_cable_size,
+             CASE
+               WHEN cc.connection_type = 'nap' THEN n.total_ports::text
+               ELSE NULL
+             END AS nap_ports
+      FROM closure_connections cc
+      LEFT JOIN foc_routes f ON cc.connection_type = 'foc_route' AND cc.ref_id = f.id
+      LEFT JOIN naps n       ON cc.connection_type = 'nap'       AND cc.ref_id = n.id
+      WHERE cc.closure_id = ${closureId}
+      ORDER BY cc.side ASC, cc.sort_order ASC, cc.id ASC
+    `;
+
+    const c = closure[0];
+    res.json({
+      closure: {
+        id: c.id, name: c.name, type: c.type,
+        capacity: c.capacity, usedCapacity: c.used_capacity,
+        lat: Number(c.latitude), lng: Number(c.longitude),
+        poleNumber: c.pole_number, municipality: c.municipality,
+        barangay: c.barangay, focRouteId: c.foc_route_id,
+        focRouteName: c.foc_route_name, focCableSize: c.foc_cable_size,
+        status: c.status, notes: c.notes
+      },
+      connections: connections.map(cc => ({
+        id: cc.id, side: cc.side, sortOrder: cc.sort_order,
+        connectionType: cc.connection_type, refId: cc.ref_id,
+        refName: cc.ref_name || cc.resolved_name || '',
+        fiberCount: cc.fiber_count, coreStart: cc.core_start,
+        coreEnd: cc.core_end, notes: cc.notes, createdAt: cc.created_at,
+        focCableSize: cc.foc_cable_size, napPorts: cc.nap_ports
+      }))
+    });
+  } catch (err) {
+    console.error('Closure connections fetch error:', err);
+    res.status(500).json({ error: 'Failed to load closure connections' });
+  }
+});
+
+// POST /api/admin/map/closures/:id/connections
+router.post('/closures/:id/connections', adminAuth(), async (req, res) => {
+  try {
+    const closureId = parseInt(req.params.id);
+    const { side, connectionType, refId, refName, fiberCount, coreStart, coreEnd, notes } = req.body;
+
+    if (!side || !['A', 'B', 'C'].includes(side)) {
+      return res.status(400).json({ error: 'Side must be A, B, or C' });
+    }
+    const validTypes = ['foc_route', 'nap', 'drop_fiber', 'olt', 'splice', 'custom'];
+    if (!connectionType || !validTypes.includes(connectionType)) {
+      return res.status(400).json({ error: 'Invalid connection type' });
+    }
+    // Block reusing the same foc_route on multiple sides of a single closure.
+    // Same FOC ref_id on different sides means the "sides" share physical
+    // strands, which produces self-splices and visually duplicated columns.
+    if (connectionType === 'foc_route' && refId) {
+      const dup = await req.prisma.$queryRaw`
+        SELECT side FROM closure_connections
+        WHERE closure_id = ${closureId} AND connection_type = 'foc_route' AND ref_id = ${parseInt(refId)}
+        LIMIT 1
+      `;
+      if (dup.length > 0) {
+        return res.status(409).json({ error: 'This FOC route is already attached to this closure on Side ' + dup[0].side + '. A single FOC route cannot be on two sides — use a different cable for the lateral.' });
+      }
+    }
+
+    // Get current max sort_order for this side
+    const maxOrder = await req.prisma.$queryRaw`
+      SELECT COALESCE(MAX(sort_order), -1)::int AS max_ord
+      FROM closure_connections WHERE closure_id = ${closureId} AND side = ${side}
+    `;
+    const nextOrder = (maxOrder[0]?.max_ord ?? -1) + 1;
+
+    // Resolve ref_name if refId given
+    let resolvedName = refName || null;
+    if (refId && !resolvedName) {
+      if (connectionType === 'foc_route') {
+        const r = await req.prisma.$queryRaw`SELECT name FROM foc_routes WHERE id = ${parseInt(refId)}`;
+        if (r.length) resolvedName = r[0].name;
+      } else if (connectionType === 'nap') {
+        const r = await req.prisma.$queryRaw`SELECT name FROM naps WHERE id = ${parseInt(refId)}`;
+        if (r.length) resolvedName = r[0].name;
+      }
+    }
+
+    const result = await req.prisma.$queryRaw`
+      INSERT INTO closure_connections
+        (closure_id, side, sort_order, connection_type, ref_id, ref_name, fiber_count, core_start, core_end, notes)
+      VALUES
+        (${closureId}, ${side}, ${nextOrder}, ${connectionType},
+         ${refId ? parseInt(refId) : null}, ${resolvedName},
+         ${fiberCount ? parseInt(fiberCount) : null},
+         ${coreStart ? parseInt(coreStart) : null},
+         ${coreEnd   ? parseInt(coreEnd)   : null},
+         ${notes || null})
+      RETURNING id, side, connection_type, ref_name, fiber_count, core_start, core_end
+    `;
+
+    console.log(`🔌 Closure connection added: Closure ${closureId} Side ${side} → ${connectionType} ${resolvedName || ''}`);
+
+    res.status(201).json({ message: 'Connection added', connection: result[0] });
+  } catch (err) {
+    console.error('Closure connection add error:', err);
+    res.status(500).json({ error: 'Failed to add connection' });
+  }
+});
+
+// DELETE /api/admin/map/closures/:id/connections/:connId
+router.delete('/closures/:id/connections/:connId', adminAuth(), async (req, res) => {
+  try {
+    const closureId = parseInt(req.params.id);
+    const connId    = parseInt(req.params.connId);
+
+    const result = await req.prisma.$queryRaw`
+      DELETE FROM closure_connections
+      WHERE id = ${connId} AND closure_id = ${closureId}
+      RETURNING id, side, connection_type, ref_name
+    `;
+    if (!result.length) return res.status(404).json({ error: 'Connection not found' });
+
+    console.log(`🗑 Closure connection removed: ${result[0].connection_type} ${result[0].ref_name || ''}`);
+    res.json({ message: 'Connection removed' });
+  } catch (err) {
+    console.error('Closure connection delete error:', err);
+    res.status(500).json({ error: 'Failed to remove connection' });
+  }
+});
+
+// ════════════════════════════════════════════════════════════
+// NETWORK ELEMENTS (Headend, Node, Data Center)
+// ════════════════════════════════════════════════════════════
+
+const VALID_ELEMENT_TYPES = ['headend', 'node', 'data_center', 'odf'];
+
+// GET all network elements (optionally filter by type)
+router.get('/elements', adminOrGuest(), async (req, res) => {
+  try {
+    const typeFilter = req.query.type;
+    const whereClause = typeFilter && VALID_ELEMENT_TYPES.includes(typeFilter)
+      ? `WHERE ne.type = '${typeFilter}'` : `WHERE ne.type IN ('headend','node','data_center','odf')`;
+    const rows = await req.prisma.$queryRawUnsafe(`
+      SELECT ne.id, ne.name, ne.type, ne.brand, ne.model, ne.ip_address,
+             ne.port_count, ne.pole_number,
+             ne.lat AS latitude, ne.lng AS longitude,
+             ne.upstream_provider, ne.notes, ne.status,
+             ne.created_at, ne.updated_at, ne.site_id,
+             ne.foc_route_id, fr.name AS foc_route_name,
+             (SELECT json_agg(json_build_object('id', rr.id, 'role', rr.role, 'label', rr.label,
+                     'focRouteId', rr.foc_route_id, 'focRouteName', rf.name, 'config', rr.config) ORDER BY rr.id)
+              FROM odf_roles rr LEFT JOIN foc_routes rf ON rf.id = rr.foc_route_id
+              WHERE rr.odf_id = ne.id) AS roles
+      FROM network_elements ne
+      LEFT JOIN foc_routes fr ON ne.foc_route_id = fr.id
+      ${whereClause}
+      ORDER BY ne.created_at DESC
+    `);
+    const elements = rows.map(r => ({
+      id: r.id, name: r.name, type: r.type,
+      brand: r.brand, model: r.model, ipAddress: r.ip_address,
+      portCount: r.port_count, poleNumber: r.pole_number,
+      lat: parseFloat(r.latitude), lng: parseFloat(r.longitude),
+      upstreamProvider: r.upstream_provider,
+      notes: r.notes, status: r.status || 'active',
+      focRouteId: r.foc_route_id, focRouteName: r.foc_route_name,
+      roles: r.roles || [], siteId: r.site_id,
+      createdAt: r.created_at, updatedAt: r.updated_at,
+    }));
+    res.json({ elements });
+  } catch (err) {
+    console.error('Network elements fetch error:', err);
+    res.status(500).json({ error: 'Failed to fetch network elements' });
+  }
+});
+
+// POST create network element
+router.post('/elements', adminOrTagger(), async (req, res) => {
+  try {
+    const { name, type, brand, model, ipAddress, portCount, poleNumber,
+            lat, lng, upstreamProvider, focRouteId, notes } = req.body;
+    if (!name || !type) return res.status(400).json({ error: 'Name and type are required' });
+    if (!VALID_ELEMENT_TYPES.includes(type)) return res.status(400).json({ error: 'Invalid type. Must be: ' + VALID_ELEMENT_TYPES.join(', ') });
+    if (lat == null || lng == null) return res.status(400).json({ error: 'Coordinates (lat, lng) are required' });
+    const result = await req.prisma.$queryRaw`
+      INSERT INTO network_elements (name, type, brand, model, ip_address, port_count,
+        pole_number, lat, lng, upstream_provider, foc_route_id, notes, status, created_at, updated_at)
+      VALUES (${name}, ${type}, ${brand || null}, ${model || null}, ${ipAddress || null},
+        ${portCount ? parseInt(portCount) : null}, ${poleNumber || null},
+        ${parseFloat(lat)}, ${parseFloat(lng)}, ${upstreamProvider || null},
+        ${focRouteId ? parseInt(focRouteId) : null}, ${notes || null},
+        'active', NOW(), NOW())
+      RETURNING id, created_at
+    `;
+    // An ODF is a patch/termination frame — seed its port array so it can be managed like a closure/NAP.
+    if (type === 'odf' && portCount && parseInt(portCount) > 0) {
+      await generateOdfPorts(req.prisma, result[0].id, parseInt(portCount));
+    }
+    console.log(`📍 Network element created: ${type} "${name}" at ${lat}, ${lng}`);
+    res.status(201).json({ message: 'Element created', element: { id: result[0].id, name, type, createdAt: result[0].created_at } });
+  } catch (err) {
+    console.error('Network element create error:', err);
+    res.status(500).json({ error: 'Failed to create element' });
+  }
+});
+
+// PUT update network element
+router.put('/elements/:id', adminAuth(), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const { name, type, brand, model, ipAddress, portCount, poleNumber,
+            lat, lng, upstreamProvider, focRouteId, notes, status } = req.body;
+    if (type && !VALID_ELEMENT_TYPES.includes(type)) return res.status(400).json({ error: 'Invalid type' });
+    const fields = []; const vals = [];
+    if (name !== undefined)     { fields.push('name = $' + (vals.length + 1)); vals.push(name); }
+    if (type !== undefined)     { fields.push('type = $' + (vals.length + 1)); vals.push(type); }
+    if (brand !== undefined)    { fields.push('brand = $' + (vals.length + 1)); vals.push(brand || null); }
+    if (model !== undefined)    { fields.push('model = $' + (vals.length + 1)); vals.push(model || null); }
+    if (ipAddress !== undefined){ fields.push('ip_address = $' + (vals.length + 1)); vals.push(ipAddress || null); }
+    if (portCount !== undefined){ fields.push('port_count = $' + (vals.length + 1)); vals.push(portCount ? parseInt(portCount) : null); }
+    if (poleNumber !== undefined){ fields.push('pole_number = $' + (vals.length + 1)); vals.push(poleNumber || null); }
+    if (lat !== undefined)      { fields.push('lat = $' + (vals.length + 1)); vals.push(parseFloat(lat)); }
+    if (lng !== undefined)      { fields.push('lng = $' + (vals.length + 1)); vals.push(parseFloat(lng)); }
+    if (upstreamProvider !== undefined){ fields.push('upstream_provider = $' + (vals.length + 1)); vals.push(upstreamProvider || null); }
+    if (focRouteId !== undefined){ fields.push('foc_route_id = $' + (vals.length + 1)); vals.push(focRouteId ? parseInt(focRouteId) : null); }
+    if (notes !== undefined)    { fields.push('notes = $' + (vals.length + 1)); vals.push(notes || null); }
+    if (status !== undefined)   { fields.push('status = $' + (vals.length + 1)); vals.push(status); }
+    fields.push('updated_at = NOW()');
+    if (fields.length <= 1) return res.status(400).json({ error: 'No fields to update' });
+    vals.push(id);
+    await req.prisma.$queryRawUnsafe(`UPDATE network_elements SET ${fields.join(', ')} WHERE id = $${vals.length}`, ...vals);
+
+    // Keep an ODF's port array in sync with its port count (add new, trim unused tail — never drop a used port).
+    const el = await req.prisma.$queryRaw`SELECT type, port_count FROM network_elements WHERE id = ${id}`;
+    if (el.length && el[0].type === 'odf' && portCount !== undefined) {
+      const target = parseInt(el[0].port_count) || 0;
+      const existing = await req.prisma.$queryRaw`SELECT port_number, status FROM odf_ports WHERE odf_id = ${id} ORDER BY port_number`;
+      const have = existing.length;
+      if (target > have) {
+        for (let i = have + 1; i <= target; i++) {
+          await req.prisma.$executeRawUnsafe(`INSERT INTO odf_ports (odf_id, port_number, status) VALUES ($1, $2, 'available') ON CONFLICT DO NOTHING`, id, i);
+        }
+      } else if (target < have) {
+        const removable = existing.filter(p => p.port_number > target && p.status === 'available').map(p => p.port_number);
+        if (removable.length) {
+          await req.prisma.$executeRawUnsafe(`DELETE FROM odf_ports WHERE odf_id = $1 AND port_number = ANY($2::int[])`, id, removable);
+        }
+      }
+    }
+    res.json({ message: 'Element updated' });
+  } catch (err) {
+    console.error('Network element update error:', err);
+    res.status(500).json({ error: 'Failed to update element' });
+  }
+});
+
+// DELETE network element
+router.delete('/elements/:id', adminAuth(), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const check = await req.prisma.$queryRaw`SELECT id, name FROM network_elements WHERE id = ${id}`;
+    if (!check.length) return res.status(404).json({ error: 'Element not found' });
+    await req.prisma.$queryRaw`DELETE FROM network_elements WHERE id = ${id}`;
+    console.log(`🗑 Network element deleted: ${check[0].name}`);
+    res.json({ message: 'Element deleted' });
+  } catch (err) {
+    console.error('Network element delete error:', err);
+    res.status(500).json({ error: 'Failed to delete element' });
+  }
+});
+
+// ════════════════════════════════════════════════════════════
+// GIS PHOTOS (geotagged photos with notes)
+// ════════════════════════════════════════════════════════════
+
+const gisPhotoStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = path.join(__dirname, '../../uploads/gis-photos');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    cb(null, `gis_${Date.now()}_${Math.random().toString(36).slice(2)}${ext}`);
+  }
+});
+const gisPhotoUpload = multer({ storage: gisPhotoStorage, limits: { fileSize: 10 * 1024 * 1024 } });
+
+// GET /api/admin/map/photos — list all
+router.get('/photos', adminOrGuest(), async (req, res) => {
+  try {
+    const rows = await req.prisma.$queryRaw`
+      SELECT id, title, notes, latitude, longitude, filename, original_name,
+             file_type, file_size, category, uploaded_by, created_at
+      FROM gis_photos ORDER BY created_at DESC
+    `;
+    const photos = rows.map(r => ({
+      ...r,
+      id: Number(r.id),
+      latitude: parseFloat(r.latitude),
+      longitude: parseFloat(r.longitude),
+      file_size: r.file_size ? Number(r.file_size) : null,
+      url: `/uploads/gis-photos/${r.filename}`
+    }));
+    res.json({ photos });
+  } catch (err) {
+    console.error('GIS photos fetch error:', err);
+    res.status(500).json({ error: 'Failed to load photos' });
+  }
+});
+
+// POST /api/admin/map/photos — upload photo with coordinates
+const exifr = require('exifr');
+const tesseract = require('node-tesseract-ocr');
+
+// Extract lat/lng from GPS Map Camera watermark text via OCR
+async function extractCoordsFromWatermark(filePath) {
+  try {
+    const text = await tesseract.recognize(filePath, { lang: 'eng', oem: 1, psm: 6 });
+    // Match patterns like: Lat 14.625218° Long 120.461208°
+    // or: Lat 14.625218 Long 120.461208
+    // or: 14.625218°N 120.461208°E
+    // or: Lat: 14.625218, Long: 120.461208
+    let lat = null, lng = null;
+    const patterns = [
+      /Lat[:\s]*([+-]?\d+\.\d+)[°]?\s*(?:Long|Lon|Lng)[:\s]*([+-]?\d+\.\d+)/i,
+      /(\d{1,3}\.\d{4,})\s*°?\s*[NS]?\s*[,\s]+\s*(\d{1,3}\.\d{4,})\s*°?\s*[EW]?/,
+      /latitude[:\s]*([+-]?\d+\.\d+)[°]?\s*longitude[:\s]*([+-]?\d+\.\d+)/i,
+    ];
+    for (const pat of patterns) {
+      const m = text.match(pat);
+      if (m) {
+        lat = parseFloat(m[1]);
+        lng = parseFloat(m[2]);
+        if (!isNaN(lat) && !isNaN(lng)) break;
+      }
+    }
+    return (lat && lng) ? { latitude: lat, longitude: lng, source: 'ocr' } : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// POST /api/admin/map/extract-gps — upload photo, extract GPS, return coords, delete file
+router.post('/extract-gps', adminAuth(), gisPhotoUpload.single('photo'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No photo' });
+    let lat = null, lng = null, source = null;
+
+    // Try EXIF
+    try {
+      const gps = await exifr.gps(req.file.path);
+      if (gps && gps.latitude && gps.longitude) {
+        lat = gps.latitude; lng = gps.longitude; source = 'exif';
+      }
+    } catch (_) {}
+
+    // Try OCR
+    if (!source) {
+      const ocr = await extractCoordsFromWatermark(req.file.path);
+      if (ocr) { lat = ocr.latitude; lng = ocr.longitude; source = 'ocr'; }
+    }
+
+    // Clean up temp file
+    try { fs.unlinkSync(req.file.path); } catch (_) {}
+
+    if (source) {
+      res.json({ latitude: lat, longitude: lng, source });
+    } else {
+      res.json({ latitude: null, longitude: null, source: null });
+    }
+  } catch (err) {
+    if (req.file) try { fs.unlinkSync(req.file.path); } catch (_) {}
+    res.status(500).json({ error: 'GPS extraction failed' });
+  }
+});
+
+router.post('/photos', adminOrTagger(), gisPhotoUpload.single('photo'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No photo uploaded' });
+    const { title, notes, category } = req.body;
+    let lat = parseFloat(req.body.latitude);
+    let lng = parseFloat(req.body.longitude);
+    let gpsSource = 'manual';
+
+    // Fallback 1: EXIF GPS extraction
+    if (isNaN(lat) || isNaN(lng)) {
+      try {
+        const gps = await exifr.gps(req.file.path);
+        if (gps && gps.latitude && gps.longitude) {
+          lat = gps.latitude;
+          lng = gps.longitude;
+          gpsSource = 'exif';
+        }
+      } catch (exifErr) { /* no EXIF data */ }
+    }
+
+    // Fallback 2: OCR watermark extraction (GPS Map Camera, etc.)
+    if (isNaN(lat) || isNaN(lng)) {
+      const ocr = await extractCoordsFromWatermark(req.file.path);
+      if (ocr) {
+        lat = ocr.latitude;
+        lng = ocr.longitude;
+        gpsSource = 'ocr';
+      }
+    }
+
+    if (isNaN(lat) || isNaN(lng)) return res.status(400).json({ error: 'No coordinates found. Photo has no EXIF GPS and no readable GPS watermark. Please enter coordinates manually.' });
+
+    const rows = await req.prisma.$queryRaw`
+      INSERT INTO gis_photos (title, notes, latitude, longitude, filename, original_name, file_type, file_size, uploaded_by, category)
+      VALUES (${title || null}, ${notes || null}, ${lat}, ${lng}, ${req.file.filename}, ${req.file.originalname}, ${req.file.mimetype}, ${req.file.size}, ${req.userId}, ${category || 'general'})
+      RETURNING id
+    `;
+    res.status(201).json({
+      message: 'Photo uploaded',
+      photo: {
+        id: Number(rows[0].id),
+        title, notes, latitude: lat, longitude: lng,
+        filename: req.file.filename,
+        original_name: req.file.originalname,
+        url: `/uploads/gis-photos/${req.file.filename}`,
+        category: category || 'general',
+        gpsSource
+      }
+    });
+  } catch (err) {
+    console.error('GIS photo upload error:', err);
+    res.status(500).json({ error: 'Upload failed' });
+  }
+});
+
+// PUT /api/admin/map/photos/:id — update title/notes/category/coordinates
+router.put('/photos/:id', adminAuth(), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const { title, notes, category, lat, lng } = req.body;
+    // If only lat/lng sent (move operation)
+    if (lat !== undefined && lng !== undefined && title === undefined) {
+      await req.prisma.$queryRaw`
+        UPDATE gis_photos SET latitude = ${parseFloat(lat)}, longitude = ${parseFloat(lng)}, updated_at = NOW()
+        WHERE id = ${id}
+      `;
+    } else {
+      await req.prisma.$queryRaw`
+        UPDATE gis_photos SET title = ${title || null}, notes = ${notes || null},
+          category = ${category || 'general'}, updated_at = NOW()
+        WHERE id = ${id}
+      `;
+    }
+    res.json({ message: 'Photo updated' });
+  } catch (err) {
+    console.error('GIS photo update error:', err);
+    res.status(500).json({ error: 'Update failed' });
+  }
+});
+
+// DELETE /api/admin/map/photos/:id
+router.delete('/photos/:id', adminAuth(), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const rows = await req.prisma.$queryRaw`
+      SELECT filename FROM gis_photos WHERE id = ${id}
+    `;
+    if (!rows.length) return res.status(404).json({ error: 'Photo not found' });
+    const filePath = path.join(__dirname, '../../uploads/gis-photos', rows[0].filename);
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    await req.prisma.$queryRaw`DELETE FROM gis_photos WHERE id = ${id}`;
+    res.json({ message: 'Photo deleted' });
+  } catch (err) {
+    console.error('GIS photo delete error:', err);
+    res.status(500).json({ error: 'Delete failed' });
+  }
+});
+
+module.exports = router;
+
+// ── CLOSURE SPLICES API ─────────────────────────────────────
+// closure_splices_PATCHED
+
+// GET /api/admin/map/closures/:id/splices
+router.get('/closures/:id/splices', adminOrGuest(), async (req, res) => {
+  try {
+    const closureId = parseInt(req.params.id);
+
+    const splices = await req.prisma.$queryRaw`
+      SELECT cs.id, cs.a_conn_id, cs.a_strand_id, cs.b_conn_id, cs.b_strand_id, cs.notes,
+             sa.strand_number AS a_number, sa.color_code AS a_color,
+             sb.strand_number AS b_number, sb.color_code AS b_color
+      FROM closure_splices cs
+      LEFT JOIN foc_strands sa ON sa.id = cs.a_strand_id
+      LEFT JOIN foc_strands sb ON sb.id = cs.b_strand_id
+      WHERE cs.closure_id = ${closureId}
+      ORDER BY sa.strand_number ASC
+    `;
+
+    const connsA = await req.prisma.$queryRaw`
+      SELECT cc.id AS conn_id, cc.ref_id, cc.ref_name, cc.connection_type,
+             f.name AS foc_name, f.cable_size
+      FROM closure_connections cc
+      LEFT JOIN foc_routes f ON f.id = cc.ref_id AND cc.connection_type = 'foc_route'
+      WHERE cc.closure_id = ${closureId} AND cc.side = 'A'
+      ORDER BY cc.sort_order
+    `;
+
+    const connsB = await req.prisma.$queryRaw`
+      SELECT cc.id AS conn_id, cc.ref_id, cc.ref_name, cc.connection_type,
+             f.name AS foc_name, f.cable_size
+      FROM closure_connections cc
+      LEFT JOIN foc_routes f ON f.id = cc.ref_id AND cc.connection_type = 'foc_route'
+      WHERE cc.closure_id = ${closureId} AND cc.side = 'B'
+      ORDER BY cc.sort_order
+    `;
+
+    const connsC = await req.prisma.$queryRaw`
+      SELECT cc.id AS conn_id, cc.ref_id, cc.ref_name, cc.connection_type,
+             f.name AS foc_name, f.cable_size
+      FROM closure_connections cc
+      LEFT JOIN foc_routes f ON f.id = cc.ref_id AND cc.connection_type = 'foc_route'
+      WHERE cc.closure_id = ${closureId} AND cc.side = 'C'
+      ORDER BY cc.sort_order
+    `;
+
+    // For any strand on any side, look up ALL splices that involve it
+    // (a strand may participate in multiple splices, e.g. Side B as both
+    // pass-through from A and tap to C). Map<id, Array<{splice, role}>>.
+    const strandToSplice = new Map();
+    splices.forEach(s => {
+      if (s.a_strand_id) {
+        const arr = strandToSplice.get(Number(s.a_strand_id)) || [];
+        arr.push({ splice: s, role: 'a' });
+        strandToSplice.set(Number(s.a_strand_id), arr);
+      }
+      if (s.b_strand_id) {
+        const arr = strandToSplice.get(Number(s.b_strand_id)) || [];
+        arr.push({ splice: s, role: 'b' });
+        strandToSplice.set(Number(s.b_strand_id), arr);
+      }
+    });
+
+    // Side-agnostic strand loader. Looks up each strand's splice via the
+    // global strandToSplice map (works regardless of which side is "a"/"b"
+    // in the splice row).
+    async function loadConnStrands(conn) {
+      if (conn.connection_type !== 'foc_route' || !conn.ref_id) {
+        if (conn.connection_type === 'nap') {
+          const napSplices = await req.prisma.$queryRaw`SELECT nap_port_number, id as splice_id FROM closure_splices WHERE closure_id = ${closureId} AND b_conn_id = ${parseInt(conn.conn_id)} AND nap_port_number IS NOT NULL`;
+          const portSplices = {};
+          napSplices.forEach(sp => { portSplices[Number(sp.nap_port_number)] = { spliceId: Number(sp.splice_id) }; });
+          return { connId: conn.conn_id, connectionType: 'nap', refName: conn.ref_name, napPorts: parseInt(conn.cable_size)||8, portSplices, strands: [] };
+        }
+        return { connId: conn.conn_id, connectionType: conn.connection_type, refName: conn.ref_name, strands: [] };
+      }
+      const strands = await req.prisma.$queryRaw`
+        SELECT id, strand_number AS number, color_code AS color, tube_number AS tube,
+               tube_color AS "tubeColor", status, destination_label AS "destLabel"
+        FROM foc_strands
+        WHERE foc_route_id = ${parseInt(conn.ref_id)}
+        ORDER BY strand_number
+      `;
+      return {
+        connId: conn.conn_id, connectionType: conn.connection_type,
+        refId: Number(conn.ref_id), refName: conn.foc_name || conn.ref_name,
+        cableSize: Number(conn.cable_size || 0),
+        strands: strands.map(s => {
+          const ents = strandToSplice.get(Number(s.id)) || [];
+          const base = { ...s, id: Number(s.id), number: Number(s.number), tube: Number(s.tube) };
+          if (ents.length === 0) return { ...base, spliceId: null, splices: [] };
+          const peers = ents.map(ent => {
+            const sp = ent.splice;
+            const isA = ent.role === 'a';
+            return {
+              spliceId:          Number(sp.id),
+              splicedToStrandId: isA ? (sp.b_strand_id ? Number(sp.b_strand_id) : null) : Number(sp.a_strand_id),
+              splicedToNumber:   sp.nap_port_number ? null : Number(isA ? sp.b_number : sp.a_number),
+              splicedToNapPort:  sp.nap_port_number ? Number(sp.nap_port_number) : null,
+              splicedToColor:    isA ? sp.b_color : sp.a_color,
+              splicedToConnId:   isA ? (sp.b_conn_id ? Number(sp.b_conn_id) : null) : Number(sp.a_conn_id)
+            };
+          });
+          // Legacy single-peer fields point to the first splice (for back-compat)
+          return { ...base, ...peers[0], splices: peers };
+        })
+      };
+    }
+
+    const sideA = await Promise.all(connsA.map(c => loadConnStrands(c)));
+    const sideB = await Promise.all(connsB.map(c => loadConnStrands(c)));
+    const sideC = await Promise.all(connsC.map(c => loadConnStrands(c)));
+
+    res.json({
+      splices: splices.map(s => ({
+        id: Number(s.id),
+        aConnId: s.a_conn_id ? Number(s.a_conn_id) : null,
+        aStrandId: Number(s.a_strand_id),
+        bConnId: s.b_conn_id ? Number(s.b_conn_id) : null,
+        bStrandId: Number(s.b_strand_id),
+        notes: s.notes
+      })),
+      sideA, sideB, sideC
+    });
+  } catch (err) {
+    console.error('Splices fetch error:', err);
+    res.status(500).json({ error: 'Failed to load splices' });
+  }
+});
+
+// POST /api/admin/map/closures/:id/splices
+router.post('/closures/:id/splices', adminAuth(), async (req, res) => {
+  try {
+    const closureId = parseInt(req.params.id);
+    let { aConnId, aStrandId, bConnId, bStrandId, bNapPort, notes } = req.body;
+    if (!aStrandId || (!bStrandId && !bNapPort)) return res.status(400).json({ error: 'aStrandId and either bStrandId or bNapPort required' });
+    // Reject self-splices (a strand spliced to itself). This happens when two
+    // closure_connections on different sides reference the same foc_route, so
+    // the "two sides" actually share the same physical strand.
+    if (bStrandId && parseInt(aStrandId) === parseInt(bStrandId)) {
+      return res.status(400).json({ error: 'Cannot splice a fiber to itself. The two sides appear to share the same FOC route — use a different cable for the lateral.' });
+    }
+    // Auto-swap a/b sides to avoid uq_splice_a / uq_splice_b conflicts when one
+    // strand is already in another splice. This lets a single Side B fiber
+    // participate in both an A↔B and a B↔C splice (a "branch" / pass-through tap).
+    if (!bNapPort && bStrandId) {
+      const aStr = parseInt(aStrandId), bStr = parseInt(bStrandId);
+      const aOnA = await req.prisma.$queryRaw`SELECT 1 FROM closure_splices WHERE closure_id = ${closureId} AND a_strand_id = ${aStr} LIMIT 1`;
+      const bOnB = await req.prisma.$queryRaw`SELECT 1 FROM closure_splices WHERE closure_id = ${closureId} AND b_strand_id = ${bStr} LIMIT 1`;
+      // If a_strand conflicts on a-side OR b_strand conflicts on b-side, swap.
+      if (aOnA.length > 0 || bOnB.length > 0) {
+        // Verify swap is safe (no conflict on the other side either)
+        const aOnB = await req.prisma.$queryRaw`SELECT 1 FROM closure_splices WHERE closure_id = ${closureId} AND b_strand_id = ${aStr} LIMIT 1`;
+        const bOnA = await req.prisma.$queryRaw`SELECT 1 FROM closure_splices WHERE closure_id = ${closureId} AND a_strand_id = ${bStr} LIMIT 1`;
+        if (aOnB.length === 0 && bOnA.length === 0) {
+          [aConnId, bConnId] = [bConnId, aConnId];
+          [aStrandId, bStrandId] = [bStrandId, aStrandId];
+        }
+      }
+    }
+    const result = await req.prisma.$queryRaw`
+      INSERT INTO closure_splices (closure_id, a_conn_id, a_strand_id, b_conn_id, b_strand_id, notes, nap_port_number)
+      VALUES (${closureId}, ${aConnId ? parseInt(aConnId) : null}, ${parseInt(aStrandId)},
+              ${bConnId ? parseInt(bConnId) : null}, ${bNapPort ? null : parseInt(bStrandId)}, ${notes || null},
+              ${bNapPort ? parseInt(bNapPort) : null})
+      RETURNING id
+    `;
+    // Update strand statuses to 'used'
+    if (aStrandId) await req.prisma.$queryRaw`UPDATE foc_strands SET status = 'used' WHERE id = ${parseInt(aStrandId)}`;
+    if (bStrandId && !bNapPort) await req.prisma.$queryRaw`UPDATE foc_strands SET status = 'used' WHERE id = ${parseInt(bStrandId)}`;
+    // Update NAP port status + link strand when splicing to NAP
+    if (bNapPort && bConnId) {
+      const napConn = await req.prisma.$queryRaw`SELECT ref_id, (SELECT name FROM naps WHERE id = cc.ref_id) AS nap_name FROM closure_connections cc WHERE id = ${parseInt(bConnId)}`;
+      if (napConn[0]) {
+        const napId = napConn[0].ref_id;
+        const napName = napConn[0].nap_name;
+        await req.prisma.$queryRaw`UPDATE nap_ports SET status = 'used', strand_id = ${parseInt(aStrandId)} WHERE nap_id = ${napId} AND port_number = ${parseInt(bNapPort)}`;
+        // Update naps.used_ports counter
+        await req.prisma.$queryRaw`UPDATE naps SET used_ports = (SELECT COUNT(*) FROM nap_ports WHERE nap_id = ${napId} AND status = 'used') WHERE id = ${napId}`;
+        // Set destination on the A strand
+        await req.prisma.$queryRaw`UPDATE foc_strands SET destination_type = 'nap', destination_id = ${napId}, destination_label = ${napName + ' Port ' + bNapPort} WHERE id = ${parseInt(aStrandId)}`;
+      }
+    } else if (bStrandId && aStrandId) {
+      // Get route names for destination labels
+      const aInfo = await req.prisma.$queryRaw`SELECT fr.name AS route_name, fs.strand_number FROM foc_strands fs JOIN foc_routes fr ON fs.foc_route_id = fr.id WHERE fs.id = ${parseInt(aStrandId)}`;
+      const bInfo = await req.prisma.$queryRaw`SELECT fr.name AS route_name, fs.strand_number FROM foc_strands fs JOIN foc_routes fr ON fs.foc_route_id = fr.id WHERE fs.id = ${parseInt(bStrandId)}`;
+      if (aInfo[0] && bInfo[0]) {
+        await req.prisma.$queryRaw`UPDATE foc_strands SET destination_type = 'foc', destination_id = ${parseInt(bStrandId)}, destination_label = ${bInfo[0].route_name + ' F' + bInfo[0].strand_number} WHERE id = ${parseInt(aStrandId)}`;
+        await req.prisma.$queryRaw`UPDATE foc_strands SET destination_type = 'foc', destination_id = ${parseInt(aStrandId)}, destination_label = ${aInfo[0].route_name + ' F' + aInfo[0].strand_number} WHERE id = ${parseInt(bStrandId)}`;
+      }
+    }
+    await req.prisma.$queryRaw`UPDATE closures SET used_capacity = (SELECT COUNT(*) FROM closure_splices WHERE closure_id = ${closureId}) WHERE id = ${closureId}`;
+    res.status(201).json({ message: 'Splice created', spliceId: Number(result[0].id) });
+  } catch (err) {
+    if (err.message && err.message.includes('unique')) return res.status(409).json({ error: 'Fiber already spliced' });
+    console.error('Splice create error:', err);
+    res.status(500).json({ error: 'Failed to create splice' });
+  }
+});
+
+// DELETE /api/admin/map/closures/:id/splices/:spliceId
+router.delete('/closures/:id/splices/:spliceId', adminAuth(), async (req, res) => {
+  try {
+    // Fetch strand IDs before deleting
+    const spliceRow = await req.prisma.$queryRaw`SELECT a_strand_id, b_strand_id, nap_port_number, b_conn_id FROM closure_splices WHERE id = ${parseInt(req.params.spliceId)}`;
+    const sp = spliceRow[0] || {};
+    await req.prisma.$queryRaw`
+      DELETE FROM closure_splices
+      WHERE id = ${parseInt(req.params.spliceId)} AND closure_id = ${parseInt(req.params.id)}
+    `;
+    // Reset strand statuses back to 'available' — but only if the strand has
+    // no other splice rows referencing it (a strand may participate in multiple
+    // splices, e.g. Side B passing A↔B and tapping B↔C).
+    const stillSpliced = async (strandId) => {
+      const r = await req.prisma.$queryRaw`SELECT 1 FROM closure_splices WHERE a_strand_id = ${strandId} OR b_strand_id = ${strandId} LIMIT 1`;
+      return r.length > 0;
+    };
+    if (sp.a_strand_id && !(await stillSpliced(sp.a_strand_id))) await req.prisma.$queryRaw`UPDATE foc_strands SET status = 'available' WHERE id = ${sp.a_strand_id}`;
+    if (sp.b_strand_id && !(await stillSpliced(sp.b_strand_id))) await req.prisma.$queryRaw`UPDATE foc_strands SET status = 'available' WHERE id = ${sp.b_strand_id}`;
+    // Reset NAP port if this was a NAP splice
+    if (sp.nap_port_number && sp.b_conn_id) {
+      const napConn = await req.prisma.$queryRaw`SELECT ref_id FROM closure_connections WHERE id = ${sp.b_conn_id}`;
+      if (napConn[0]) {
+        const napId = napConn[0].ref_id;
+        await req.prisma.$queryRaw`UPDATE nap_ports SET status = 'available', strand_id = NULL WHERE nap_id = ${napId} AND port_number = ${sp.nap_port_number}`;
+        // Update naps.used_ports counter
+        await req.prisma.$queryRaw`UPDATE naps SET used_ports = (SELECT COUNT(*) FROM nap_ports WHERE nap_id = ${napId} AND status = 'used') WHERE id = ${napId}`;
+      }
+    }
+    // Clear destination labels on strands — same conditional as status reset.
+    if (sp.a_strand_id && !(await stillSpliced(sp.a_strand_id))) await req.prisma.$queryRaw`UPDATE foc_strands SET destination_type = NULL, destination_id = NULL, destination_label = NULL WHERE id = ${sp.a_strand_id}`;
+    if (sp.b_strand_id && !(await stillSpliced(sp.b_strand_id))) await req.prisma.$queryRaw`UPDATE foc_strands SET destination_type = NULL, destination_id = NULL, destination_label = NULL WHERE id = ${sp.b_strand_id}`;
+    await req.prisma.$queryRaw`UPDATE closures SET used_capacity = (SELECT COUNT(*) FROM closure_splices WHERE closure_id = ${parseInt(req.params.id)}) WHERE id = ${parseInt(req.params.id)}`;
+    res.json({ message: 'Splice removed' });
+  } catch (err) {
+    console.error('Splice delete error:', err);
+    res.status(500).json({ error: 'Failed to remove splice' });
+  }
+});
+
+// ── NAP ATTACHMENTS API ─────────────────────────────────────
+// NAP_ATTACHMENTS_PATCHED
+
+const napStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = path.join(__dirname, '../../uploads/nap');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    cb(null, `nap_${req.params.id}_${Date.now()}_${Math.random().toString(36).slice(2)}${ext}`);
+  }
+});
+const napUpload = multer({ storage: napStorage, limits: { fileSize: 10 * 1024 * 1024 } });
+
+// GET /api/admin/map/naps/:id  (single NAP)
+router.get('/naps/:id', adminOrGuest(), async (req, res) => {
+  try {
+    const rows = await req.prisma.$queryRaw`
+      SELECT n.*, f.name AS foc_route_name, c.name AS closure_name
+      FROM naps n
+      LEFT JOIN foc_routes f ON f.id = n.foc_route_id
+      LEFT JOIN closures c ON c.id = n.closure_id
+      WHERE n.id = ${parseInt(req.params.id)}
+    `;
+    if (!rows.length) return res.status(404).json({ error: 'NAP not found' });
+    res.json({ nap: rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load NAP' });
+  }
+});
+
+// GET /api/admin/map/naps/:id/attachments
+router.get('/naps/:id/attachments', adminOrGuest(), async (req, res) => {
+  try {
+    const rows = await req.prisma.$queryRaw`
+      SELECT id, nap_id, filename, original_name, file_type, file_size, created_at
+      FROM nap_attachments WHERE nap_id = ${parseInt(req.params.id)}
+      ORDER BY created_at DESC
+    `;
+    const files = rows.map(r => ({
+      ...r,
+      id: Number(r.id),
+      nap_id: Number(r.nap_id),
+      file_size: r.file_size ? Number(r.file_size) : null,
+      url: `/uploads/nap/${r.filename}`
+    }));
+    res.json({ files });
+  } catch (err) {
+    console.error('NAP attachments fetch error:', err);
+    res.status(500).json({ error: 'Failed to load attachments' });
+  }
+});
+
+// POST /api/admin/map/naps/:id/attachments
+router.post('/naps/:id/attachments', adminAuth(), napUpload.array('files', 10), async (req, res) => {
+  try {
+    if (!req.files || req.files.length === 0) return res.status(400).json({ error: 'No files uploaded' });
+    const napId = parseInt(req.params.id);
+    const saved = [];
+    for (const file of req.files) {
+      const rows = await req.prisma.$queryRaw`
+        INSERT INTO nap_attachments (nap_id, filename, original_name, file_type, file_size, file_path)
+        VALUES (${napId}, ${file.filename}, ${file.originalname}, ${file.mimetype}, ${file.size}, ${file.path})
+        RETURNING id
+      `;
+      saved.push({ id: Number(rows[0].id), filename: file.filename, original_name: file.originalname, url: `/uploads/nap/${file.filename}` });
+    }
+    res.status(201).json({ message: 'Files uploaded', files: saved });
+  } catch (err) {
+    console.error('NAP attachment upload error:', err);
+    res.status(500).json({ error: 'Upload failed' });
+  }
+});
+
+// DELETE /api/admin/map/naps/:id/attachments/:fileId
+router.delete('/naps/:id/attachments/:fileId', adminAuth(), async (req, res) => {
+  try {
+    const rows = await req.prisma.$queryRaw`
+      SELECT filename FROM nap_attachments
+      WHERE id = ${parseInt(req.params.fileId)} AND nap_id = ${parseInt(req.params.id)}
+    `;
+    if (!rows.length) return res.status(404).json({ error: 'Attachment not found' });
+    const filePath = path.join(__dirname, '../../uploads/nap', rows[0].filename);
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    await req.prisma.$queryRaw`
+      DELETE FROM nap_attachments WHERE id = ${parseInt(req.params.fileId)} AND nap_id = ${parseInt(req.params.id)}
+    `;
+    res.json({ message: 'Attachment deleted' });
+  } catch (err) {
+    console.error('NAP attachment delete error:', err);
+    res.status(500).json({ error: 'Delete failed' });
+  }
+});
+
+// ════════════════════════════════════════════════════════════
+// INFRASTRUCTURE PHOTOS (generic for closure, nap, headend, node, data_center)
+// ════════════════════════════════════════════════════════════
+
+const infraPhotoStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = path.join(__dirname, '../../uploads/gis-photos');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    cb(null, `infra_${Date.now()}_${Math.random().toString(36).slice(2)}${ext}`);
+  }
+});
+const infraPhotoUpload = multer({ storage: infraPhotoStorage, limits: { fileSize: 10 * 1024 * 1024 } });
+
+const VALID_ENTITY_TYPES = ['closure', 'nap', 'headend', 'node', 'data_center'];
+
+// GET /api/admin/map/infra-photos/:entityType/:entityId
+router.get('/infra-photos/:entityType/:entityId', adminOrGuest(), async (req, res) => {
+  try {
+    const { entityType, entityId } = req.params;
+    if (!VALID_ENTITY_TYPES.includes(entityType)) return res.status(400).json({ error: 'Invalid entity type' });
+    const rows = await req.prisma.$queryRaw`
+      SELECT id, entity_type, entity_id, filename, original_name, file_type, file_size,
+             caption, latitude, longitude, gps_source, created_at
+      FROM infrastructure_photos
+      WHERE entity_type = ${entityType} AND entity_id = ${parseInt(entityId)}
+      ORDER BY created_at DESC
+    `;
+    const photos = rows.map(r => ({
+      ...r,
+      id: Number(r.id),
+      entity_id: Number(r.entity_id),
+      file_size: r.file_size ? Number(r.file_size) : null,
+      latitude: r.latitude ? parseFloat(r.latitude) : null,
+      longitude: r.longitude ? parseFloat(r.longitude) : null,
+      url: `/uploads/gis-photos/${r.filename}`
+    }));
+    res.json({ photos });
+  } catch (err) {
+    console.error('Infra photos fetch error:', err);
+    res.status(500).json({ error: 'Failed to load photos' });
+  }
+});
+
+// POST /api/admin/map/infra-photos/:entityType/:entityId
+// Same GPS extraction as Geo Photo: manual → EXIF → OCR watermark
+router.post('/infra-photos/:entityType/:entityId', adminOrTagger(), infraPhotoUpload.array('photos', 10), async (req, res) => {
+  try {
+    const { entityType, entityId } = req.params;
+    if (!VALID_ENTITY_TYPES.includes(entityType)) return res.status(400).json({ error: 'Invalid entity type' });
+    if (!req.files || req.files.length === 0) return res.status(400).json({ error: 'No photos uploaded' });
+
+    const saved = [];
+    for (const file of req.files) {
+      const caption = req.body.caption || null;
+      let lat = parseFloat(req.body.latitude);
+      let lng = parseFloat(req.body.longitude);
+      let gpsSource = ((!isNaN(lat)) && (!isNaN(lng))) ? 'manual' : null;
+
+      // EXIF GPS extraction
+      if (!gpsSource) {
+        try {
+          const gps = await exifr.gps(file.path);
+          if (gps && gps.latitude && gps.longitude) {
+            lat = gps.latitude;
+            lng = gps.longitude;
+            gpsSource = 'exif';
+          }
+        } catch (exifErr) { /* no EXIF data */ }
+      }
+
+      // OCR watermark extraction (GPS Map Camera, etc.)
+      if (!gpsSource) {
+        const ocr = await extractCoordsFromWatermark(file.path);
+        if (ocr) {
+          lat = ocr.latitude;
+          lng = ocr.longitude;
+          gpsSource = 'ocr';
+        }
+      }
+
+      const finalLat = (!isNaN(lat)) ? lat : null;
+      const finalLng = (!isNaN(lng)) ? lng : null;
+
+      const rows = await req.prisma.$queryRaw`
+        INSERT INTO infrastructure_photos (entity_type, entity_id, filename, original_name, file_type, file_size, caption, latitude, longitude, gps_source, uploaded_by)
+        VALUES (${entityType}, ${parseInt(entityId)}, ${file.filename}, ${file.originalname}, ${file.mimetype}, ${file.size}, ${caption}, ${finalLat}, ${finalLng}, ${gpsSource}, ${req.userId})
+        RETURNING id
+      `;
+      saved.push({
+        id: Number(rows[0].id),
+        filename: file.filename,
+        original_name: file.originalname,
+        url: `/uploads/gis-photos/${file.filename}`,
+        latitude: finalLat,
+        longitude: finalLng,
+        gpsSource
+      });
+    }
+    console.log(`📸 ${saved.length} photo(s) uploaded for ${entityType} #${entityId}`);
+    res.status(201).json({ message: 'Photos uploaded', photos: saved });
+  } catch (err) {
+    console.error('Infra photo upload error:', err);
+    res.status(500).json({ error: 'Upload failed' });
+  }
+});
+
+// DELETE /api/admin/map/infra-photos/:id
+router.delete('/infra-photos/:id', adminAuth(), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const rows = await req.prisma.$queryRaw`
+      SELECT filename FROM infrastructure_photos WHERE id = ${id}
+    `;
+    if (!rows.length) return res.status(404).json({ error: 'Photo not found' });
+    const filePath = path.join(__dirname, '../../uploads/gis-photos', rows[0].filename);
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    await req.prisma.$queryRaw`DELETE FROM infrastructure_photos WHERE id = ${id}`;
+    res.json({ message: 'Photo deleted' });
+  } catch (err) {
+    console.error('Infra photo delete error:', err);
+    res.status(500).json({ error: 'Delete failed' });
+  }
+});
+
+
+// ════════════════════════════════════════════════════════════
+// SHARE LINK MANAGEMENT (admin only)
+// ════════════════════════════════════════════════════════════
+
+function generateCode() {
+  return crypto.randomBytes(4).toString('hex').toUpperCase(); // 8-char hex
+}
+
+// POST /api/admin/map/share-links — generate a share link
+router.post('/share-links', adminAuth(), async (req, res) => {
+  try {
+    const { label, permissions, expiresInDays } = req.body;
+    const perm = ['view', 'view_tag'].includes(permissions) ? permissions : 'view_tag';
+    const days = Math.min(Math.max(parseInt(expiresInDays) || 7, 1), 90);
+    const code = generateCode();
+    const expiresAt = new Date(Date.now() + days * 86400000);
+
+    await req.prisma.$queryRaw`
+      INSERT INTO gis_share_tokens (code, label, permissions, created_by, expires_at)
+      VALUES (${code}, ${label || null}, ${perm}, ${req.userId}, ${expiresAt})
+    `;
+
+    res.json({
+      code,
+      label: label || null,
+      permissions: perm,
+      expiresAt: expiresAt.toISOString(),
+      shareUrl: `/gis/?code=${code}`,
+    });
+  } catch (err) {
+    console.error('Share link create error:', err);
+    res.status(500).json({ error: 'Failed to create share link' });
+  }
+});
+
+// GET /api/admin/map/share-links — list all share links
+router.get('/share-links', adminAuth(), async (req, res) => {
+  try {
+    const links = await req.prisma.$queryRaw`
+      SELECT t.*, u.username AS created_by_name
+      FROM gis_share_tokens t
+      LEFT JOIN admin_users u ON u.id = t.created_by
+      ORDER BY t.created_at DESC
+    `;
+    res.json({ links });
+  } catch (err) {
+    console.error('Share links list error:', err);
+    res.status(500).json({ error: 'Failed to list share links' });
+  }
+});
+
+// DELETE /api/admin/map/share-links/:id — revoke a share link
+router.delete('/share-links/:id', adminAuth(), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    await req.prisma.$queryRaw`
+      UPDATE gis_share_tokens SET is_active = false WHERE id = ${id}
+    `;
+    res.json({ message: 'Share link revoked' });
+  } catch (err) {
+    console.error('Share link revoke error:', err);
+    res.status(500).json({ error: 'Failed to revoke share link' });
+  }
+});
+
+// POST /api/admin/map/validate-code — public endpoint to validate a share code
+// (no auth required — this is how guests get their JWT)
+router.post('/validate-code', async (req, res) => {
+  try {
+    const { code } = req.body;
+    if (!code) return res.status(400).json({ error: 'Code is required' });
+
+    const rows = await req.prisma.$queryRaw`
+      SELECT * FROM gis_share_tokens
+      WHERE code = ${code.toUpperCase()} AND is_active = true AND expires_at > NOW()
+    `;
+
+    if (!rows.length) return res.status(401).json({ error: 'Invalid or expired share code' });
+
+    const token_row = rows[0];
+
+    // Update usage stats
+    await req.prisma.$queryRaw`
+      UPDATE gis_share_tokens
+      SET use_count = use_count + 1, last_used_at = NOW()
+      WHERE id = ${token_row.id}
+    `;
+
+    // Issue a guest JWT (expires when the share link expires, max 24h)
+    const jwt = require('jsonwebtoken');
+    const maxMs = Math.min(token_row.expires_at.getTime() - Date.now(), 86400000);
+    const guestToken = jwt.sign(
+      { guestCode: token_row.code, permissions: token_row.permissions, label: token_row.label },
+      process.env.JWT_SECRET,
+      { expiresIn: Math.floor(maxMs / 1000) }
+    );
+
+    res.json({
+      token: guestToken,
+      permissions: token_row.permissions,
+      label: token_row.label,
+      expiresAt: new Date(Date.now() + maxMs).toISOString(),
+    });
+  } catch (err) {
+    console.error('Code validation error:', err);
+    res.status(500).json({ error: 'Validation failed' });
+  }
+});

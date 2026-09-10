@@ -1,0 +1,1083 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+// ── Secure Fetch Interceptor ─────────────────────────────
+(function(){
+  const _fetch = window.fetch;
+  window.fetch = function(url, opts) {
+    opts = opts || {};
+    const urlStr = typeof url === 'string' ? url : (url.url || '');
+    if (urlStr.startsWith('/api') || urlStr.includes('/api/')) {
+      opts.credentials = 'include';
+      const method = (opts.method || 'GET').toUpperCase();
+      if (['POST','PUT','DELETE','PATCH'].includes(method)) {
+        opts.headers = opts.headers || {};
+        if (!opts.headers['X-CSRF-Token'] && !opts.headers['x-csrf-token']) {
+          const m = document.cookie.match(/j2_csrf=([^;]+)/);
+          if (m) opts.headers['X-CSRF-Token'] = m[1];
+        }
+      }
+    }
+    return _fetch.call(this, url, opts);
+  };
+})();
+</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Netfactory — Service Tester</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #0c0e13;
+    --surface: #13161d;
+    --surface-2: #1a1e27;
+    --border: #252a35;
+    --border-hover: #3a4154;
+    --text: #e2e5eb;
+    --text-dim: #7a8299;
+    --text-muted: #4a5268;
+    --accent-email: #3b82f6;
+    --accent-email-dim: rgba(59, 130, 246, 0.12);
+    --accent-sms: #10b981;
+    --accent-sms-dim: rgba(16, 185, 129, 0.12);
+    --accent-xendit: #f59e0b;
+    --accent-xendit-dim: rgba(245, 158, 11, 0.12);
+    --danger: #ef4444;
+    --danger-dim: rgba(239, 68, 68, 0.12);
+    --warning: #f59e0b;
+    --radius: 10px;
+    --radius-sm: 6px;
+    --mono: 'JetBrains Mono', monospace;
+    --sans: 'DM Sans', -apple-system, sans-serif;
+  }
+
+  body {
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    line-height: 1.5;
+  }
+
+  /* ── Header ── */
+  .header {
+    border-bottom: 1px solid var(--border);
+    padding: 16px 28px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    backdrop-filter: blur(12px);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: rgba(12, 14, 19, 0.9);
+  }
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .logo {
+    width: 36px; height: 36px;
+    background: linear-gradient(135deg, var(--accent-email), var(--accent-sms));
+    border-radius: 8px;
+    display: grid; place-items: center;
+    font-weight: 700; font-size: 14px; color: #fff;
+    letter-spacing: -0.5px;
+    flex-shrink: 0;
+  }
+  .header h1 {
+    font-size: 16px; font-weight: 600; letter-spacing: -0.3px;
+  }
+  .header h1 span { color: var(--text-dim); font-weight: 400; }
+
+  .api-base-pill {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-size: 12px; color: var(--text-dim);
+    font-family: var(--mono);
+  }
+  .api-base-pill .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--accent-sms);
+    box-shadow: 0 0 6px var(--accent-sms);
+  }
+
+  /* ── Container ── */
+  .container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 24px 28px 60px;
+  }
+
+  /* ── Config Bar ── */
+  .config-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 24px;
+    padding: 14px 18px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    flex-wrap: wrap;
+  }
+  .config-bar label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-dim);
+    white-space: nowrap;
+  }
+  .config-bar input {
+    flex: 1;
+    min-width: 200px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+    font-family: var(--mono);
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .config-bar input:focus { border-color: var(--accent-email); }
+  .config-bar .status-btn {
+    padding: 8px 16px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: var(--sans);
+    transition: all 0.2s;
+  }
+  .config-bar .status-btn:hover { border-color: var(--accent-email); color: var(--accent-email); }
+
+  /* ── Panels ── */
+  .panels {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+    gap: 20px;
+    margin-bottom: 24px;
+  }
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    transition: border-color 0.3s;
+  }
+  .panel:hover { border-color: var(--border-hover); }
+  .panel.email .panel-header { border-bottom-color: rgba(59, 130, 246, 0.2); }
+  .panel.sms .panel-header { border-bottom-color: rgba(16, 185, 129, 0.2); }
+  .panel.xendit .panel-header { border-bottom-color: rgba(245, 158, 11, 0.2); }
+
+  .panel-header {
+    padding: 18px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .panel-icon {
+    width: 34px; height: 34px;
+    border-radius: 8px;
+    display: grid; place-items: center;
+  }
+  .panel-icon svg { width: 18px; height: 18px; }
+  .email .panel-icon { background: var(--accent-email-dim); color: var(--accent-email); }
+  .sms .panel-icon { background: var(--accent-sms-dim); color: var(--accent-sms); }
+  .xendit .panel-icon { background: var(--accent-xendit-dim); color: var(--accent-xendit); }
+
+  .panel-header h2 {
+    font-size: 14px; font-weight: 600; flex: 1;
+  }
+  .badge {
+    font-size: 10px; font-weight: 700; letter-spacing: 1px;
+    padding: 3px 8px; border-radius: 4px;
+    text-transform: uppercase;
+  }
+  .email .badge { background: var(--accent-email-dim); color: var(--accent-email); }
+  .sms .badge { background: var(--accent-sms-dim); color: var(--accent-sms); }
+  .xendit .badge { background: var(--accent-xendit-dim); color: var(--accent-xendit); }
+
+  .panel-body { padding: 20px; }
+
+  /* ── Form Fields ── */
+  .field { margin-bottom: 14px; }
+  .field label {
+    display: block;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-dim);
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .field input, .field select, .field textarea {
+    width: 100%;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    font-family: var(--sans);
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .field input:focus, .field select:focus, .field textarea:focus {
+    border-color: var(--accent-email);
+  }
+  .field textarea { min-height: 80px; resize: vertical; font-family: var(--sans); }
+  .field select { cursor: pointer; }
+
+  .field-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+
+  .template-vars {
+    margin-bottom: 14px;
+    padding: 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    display: none;
+  }
+  .template-vars.active { display: block; }
+  .template-vars h4 {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 10px;
+  }
+  .template-vars .field { margin-bottom: 10px; }
+  .template-vars .field:last-child { margin-bottom: 0; }
+  .template-vars .field label { font-size: 10px; }
+  .template-vars .field input { padding: 8px 10px; font-size: 12px; }
+
+  /* ── Buttons ── */
+  .btn-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 4px;
+  }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 10px 18px;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    font-weight: 600;
+    font-family: var(--sans);
+    border: none;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .btn svg { width: 15px; height: 15px; }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .btn-send-email {
+    background: var(--accent-email); color: #fff;
+    box-shadow: 0 2px 12px rgba(59, 130, 246, 0.25);
+  }
+  .btn-send-email:hover:not(:disabled) { background: #2563eb; }
+
+  .btn-send-sms {
+    background: var(--accent-sms); color: #fff;
+    box-shadow: 0 2px 12px rgba(16, 185, 129, 0.25);
+  }
+  .btn-send-sms:hover:not(:disabled) { background: #059669; }
+
+  .btn-send-xendit {
+    background: var(--accent-xendit); color: #000;
+    box-shadow: 0 2px 12px rgba(245, 158, 11, 0.25);
+  }
+  .btn-send-xendit:hover:not(:disabled) { background: #d97706; }
+
+  .btn-secondary {
+    background: var(--surface-2);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+  }
+  .btn-secondary:hover:not(:disabled) { border-color: var(--border-hover); color: var(--text); }
+
+  /* ── Credits Badge ── */
+  .credits-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    margin-bottom: 14px;
+    font-size: 12px;
+  }
+  .credits-bar .credits-label { color: var(--text-dim); }
+  .credits-bar .credits-value {
+    font-family: var(--mono);
+    font-weight: 600;
+    color: var(--accent-sms);
+  }
+
+  /* ── Log Section ── */
+  .log-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .log-header {
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .log-header h3 {
+    font-size: 14px; font-weight: 600;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .log-header .count {
+    font-size: 11px;
+    font-family: var(--mono);
+    background: var(--surface-2);
+    padding: 2px 8px;
+    border-radius: 10px;
+    color: var(--text-dim);
+  }
+  .btn-clear {
+    background: none; border: none;
+    color: var(--text-muted);
+    font-size: 12px; cursor: pointer;
+    font-family: var(--sans);
+    transition: color 0.2s;
+  }
+  .btn-clear:hover { color: var(--danger); }
+
+  .log-entries {
+    max-height: 420px;
+    overflow-y: auto;
+  }
+  .log-entries::-webkit-scrollbar { width: 5px; }
+  .log-entries::-webkit-scrollbar-track { background: transparent; }
+  .log-entries::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  .log-entry {
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    animation: slide-in 0.25s ease-out;
+  }
+  .log-entry:last-child { border-bottom: none; }
+  @keyframes slide-in {
+    from { opacity: 0; transform: translateY(-8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .log-entry-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+  }
+  .log-type {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    text-transform: uppercase;
+  }
+  .log-type.email { background: var(--accent-email-dim); color: var(--accent-email); }
+  .log-type.sms { background: var(--accent-sms-dim); color: var(--accent-sms); }
+  .log-type.xendit { background: var(--accent-xendit-dim); color: var(--accent-xendit); }
+  .log-type.system { background: rgba(139,92,246,0.12); color: #a78bfa; }
+
+  .log-status {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 4px;
+    text-transform: uppercase;
+  }
+  .log-status.ok { background: var(--accent-sms-dim); color: var(--accent-sms); }
+  .log-status.fail { background: var(--danger-dim); color: var(--danger); }
+
+  .log-timestamp {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-family: var(--mono);
+    margin-left: auto;
+  }
+
+  .log-detail {
+    font-size: 12px;
+    color: var(--text-dim);
+    font-family: var(--mono);
+    background: var(--bg);
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 160px;
+    overflow-y: auto;
+    line-height: 1.6;
+  }
+
+  .empty-state {
+    padding: 48px 20px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+  .empty-state svg {
+    width: 32px; height: 32px;
+    margin-bottom: 12px;
+    opacity: 0.3;
+  }
+
+  /* ── Toast ── */
+  .toast-container {
+    position: fixed; bottom: 24px; right: 24px;
+    display: flex; flex-direction: column; gap: 8px;
+    z-index: 999;
+  }
+  .toast {
+    padding: 10px 16px;
+    font-size: 13px; font-weight: 500;
+    border-radius: var(--radius-sm);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    animation: toast-in 0.3s ease-out;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .toast.success { background: #065f46; color: #6ee7b7; border: 1px solid #10b981; }
+  .toast.error { background: #7f1d1d; color: #fca5a5; border: 1px solid #ef4444; }
+  @keyframes toast-in {
+    from { opacity: 0; transform: translateX(20px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+
+  /* ── Responsive ── */
+  @media (max-width: 768px) {
+    .panels { grid-template-columns: 1fr; }
+    .header { padding: 14px 16px; }
+    .container { padding: 16px; }
+    .field-row { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body style="visibility:hidden;">
+<script>
+// ── Auth Guard (same pattern as /logistics/) ──────────────────
+(function() {
+  var TOKEN = localStorage.getItem('j2_admin_token') || '';
+  function redirectLogin() { window.location.href = '/crm/?redirect=j2network'; }
+  if (!TOKEN) { redirectLogin(); return; }
+  fetch('/api/admin/me', {
+    headers: { 'Content-Type':'application/json', 'Authorization':'Bearer ' + TOKEN }
+  })
+  .then(function(res) { return res.json(); })
+  .then(function(data) {
+    if (!data || data.error) { redirectLogin(); return; }
+    document.body.style.visibility = 'visible';
+  })
+  .catch(function() { redirectLogin(); });
+})();
+</script>
+
+<!-- Header -->
+<header class="header">
+  <div class="header-left">
+    <div class="logo">NF</div>
+    <h1>Service Tester <span>— Email, SMS &amp; Xendit</span></h1>
+  </div>
+  <div style="display:flex;align-items:center;gap:10px;">
+    <a href="/crm/" style="display:flex;align-items:center;gap:6px;color:var(--text-dim);text-decoration:none;font-size:13px;font-weight:500;padding:6px 12px;border-radius:8px;border:1px solid var(--border);background:var(--surface);transition:all .2s;white-space:nowrap;" onmouseover="this.style.borderColor='var(--border-hover)';this.style.color='var(--text)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-dim)'">&larr; Back to CRM</a>
+    <div class="api-base-pill">
+      <div class="dot" id="statusDot"></div>
+      <span id="apiDisplay">netfactory.com.ph/api</span>
+    </div>
+  </div>
+</header>
+
+<div class="container">
+
+  <!-- API Base Config -->
+  <div class="config-bar">
+    <label for="apiBase">API Base URL</label>
+    <input type="text" id="apiBase" value="https://netfactory.com.ph/api" placeholder="https://your-domain.com/api">
+    <button class="status-btn" onclick="checkStatus()">Check Status</button>
+  </div>
+
+  <!-- Panels -->
+  <div class="panels">
+
+    <!-- ═══ EMAIL PANEL ═══ -->
+    <div class="panel email">
+      <div class="panel-header">
+        <div class="panel-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M22 4L12 13 2 4"/></svg>
+        </div>
+        <h2>Email — Mailgun</h2>
+        <span class="badge">API</span>
+      </div>
+      <div class="panel-body">
+        <div class="field">
+          <label>Recipient</label>
+          <input type="email" id="emailTo" placeholder="test@example.com">
+        </div>
+        <div class="field">
+          <label>Template</label>
+          <select id="emailTemplate" onchange="updateEmailVars()">
+            <option value="">— Raw (custom subject/body) —</option>
+            <option value="welcome">welcome</option>
+            <option value="password_reset">password_reset</option>
+            <option value="payment_received">payment_received</option>
+            <option value="invoice_reminder">invoice_reminder</option>
+            <option value="account_suspended">account_suspended</option>
+          </select>
+        </div>
+        <div class="template-vars" id="emailTemplateVars"></div>
+        <div id="emailRawFields">
+          <div class="field">
+            <label>Subject</label>
+            <input type="text" id="emailSubject" placeholder="Test email from Netfactory" value="Test email from Netfactory">
+          </div>
+          <div class="field">
+            <label>HTML Body</label>
+            <textarea id="emailBody" placeholder="<h1>Hello!</h1><p>This is a test.</p>">&lt;h1&gt;Netfactory Test&lt;/h1&gt;&lt;p&gt;This is a test email from the service tester.&lt;/p&gt;</textarea>
+          </div>
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-send-email" id="btnSendEmail" onclick="sendEmail()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+            Send Email
+          </button>
+          <button class="btn btn-secondary" onclick="verifyEmail()">Verify SMTP</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ SMS PANEL ═══ -->
+    <div class="panel sms">
+      <div class="panel-header">
+        <div class="panel-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        </div>
+        <h2>SMS — Semaphore</h2>
+        <span class="badge">PH</span>
+      </div>
+      <div class="panel-body">
+        <!-- Credits -->
+        <div class="credits-bar">
+          <span class="credits-label">Semaphore Credits</span>
+          <span class="credits-value" id="smsCredits">—</span>
+          <button class="btn-clear" onclick="checkCredits()" style="margin-left:8px;">Refresh</button>
+        </div>
+        <div class="field">
+          <label>Recipient (PH Number)</label>
+          <input type="text" id="smsTo" placeholder="09XX-XXX-XXXX">
+        </div>
+        <div class="field">
+          <label>Send Mode</label>
+          <select id="smsMode" onchange="updateSmsMode()">
+            <option value="standard">Standard (1 credit / 160 chars)</option>
+            <option value="priority">Priority (2 credits, instant)</option>
+            <option value="otp">OTP (dedicated endpoint, 2 credits)</option>
+            <option value="template">Template</option>
+          </select>
+        </div>
+
+        <!-- Standard / Priority fields -->
+        <div id="smsStandardFields">
+          <div class="field">
+            <label>Message <span id="smsCharCount" style="float:right;font-weight:400;color:var(--text-muted)">0/160</span></label>
+            <textarea id="smsMessage" placeholder="Your message here..." oninput="updateCharCount()">Netfactory: This is a test SMS from the service tester.</textarea>
+          </div>
+        </div>
+
+        <!-- OTP fields -->
+        <div id="smsOtpFields" style="display:none;">
+          <div class="field">
+            <label>OTP Code (leave blank for auto-generate)</label>
+            <input type="text" id="smsOtpCode" placeholder="Optional — e.g. 483291" maxlength="10">
+          </div>
+        </div>
+
+        <!-- Template fields -->
+        <div id="smsTemplateFields" style="display:none;">
+          <div class="field">
+            <label>Template</label>
+            <select id="smsTemplate" onchange="updateSmsVars()">
+              <option value="welcome">welcome</option>
+              <option value="payment_received">payment_received</option>
+              <option value="invoice_reminder">invoice_reminder</option>
+              <option value="account_suspended">account_suspended</option>
+              <option value="installation_scheduled">installation_scheduled</option>
+              <option value="ticket_update">ticket_update</option>
+              <option value="password_reset">password_reset</option>
+              <option value="service_restored">service_restored</option>
+            </select>
+          </div>
+          <div class="template-vars active" id="smsTemplateVars"></div>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn btn-send-sms" id="btnSendSms" onclick="sendSms()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+            Send SMS
+          </button>
+          <button class="btn btn-secondary" onclick="checkSenderNames()">Sender Names</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ XENDIT PANEL ═══ -->
+    <div class="panel xendit">
+      <div class="panel-header">
+        <div class="panel-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+        </div>
+        <h2>Xendit — Payments</h2>
+        <span class="badge">PAY</span>
+      </div>
+      <div class="panel-body">
+        <div class="field">
+          <label>Invoice Number</label>
+          <input type="text" id="xenditInvoice" placeholder="INV-2026-0042" value="INV-260200001">
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Amount (₱)</label>
+            <input type="number" id="xenditAmount" placeholder="1599" value="1599">
+          </div>
+          <div class="field">
+            <label>Test Action</label>
+            <select id="xenditAction">
+              <option value="create">Create Invoice</option>
+              <option value="status">Check Status</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label>Subscriber Email</label>
+          <input type="email" id="xenditEmail" placeholder="subscriber@email.com">
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-send-xendit" id="btnSendXendit" onclick="testXendit()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 12 20 22 4 22 4 12"/><rect x="2" y="7" width="20" height="5"/><line x1="12" y1="22" x2="12" y2="7"/><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/></svg>
+            Test Xendit
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Response Log -->
+  <div class="log-section">
+    <div class="log-header">
+      <h3>Response Log <span class="count" id="logCount">0</span></h3>
+      <button class="btn-clear" onclick="clearLog()">Clear all</button>
+    </div>
+    <div class="log-entries" id="logEntries">
+      <div class="empty-state" id="logEmpty">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        <div>No requests yet — send a test above.</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Toast Container -->
+<div class="toast-container" id="toasts"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════════
+// CONFIGURATION
+// ═══════════════════════════════════════════════════════════
+
+// All calls now go through the J2 backend at /api/test/*
+// This avoids CORS issues with Semaphore, Mailgun, and Xendit
+
+function getApiBase() {
+  return document.getElementById('apiBase').value.replace(/\/+$/, '');
+}
+
+function getAuthHeader() {
+  return 'Basic ' + btoa('admin:changeme123');
+}
+
+async function apiCall(endpoint, method = 'GET', body = null) {
+  const url = `${getApiBase()}/test${endpoint}`;
+  const opts = {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': getAuthHeader(),
+    },
+  };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(url, opts);
+  return res.json();
+}
+
+// ═══════════════════════════════════════════════════════════
+// TEMPLATE VARIABLE DEFINITIONS
+// ═══════════════════════════════════════════════════════════
+
+const EMAIL_TEMPLATE_VARS = {
+  welcome: { name: 'Juan Dela Cruz', accountNumber: 'J2-2026-0001', plan: 'STANDARD — 200 Mbps' },
+  password_reset: { name: 'Juan Dela Cruz', accountNumber: 'J2-2026-0001', resetUrl: 'https://netfactory.com.ph/user/reset?token=abc123def456' },
+  payment_received: { name: 'Juan Dela Cruz', amount: '₱1,599', invoiceNumber: 'INV-260200042', method: 'GCash', date: 'February 13, 2026', reference: 'REF-20260213-001' },
+  invoice_reminder: { name: 'Juan Dela Cruz', amount: '₱1,599', dueDate: 'February 28, 2026', invoiceNumber: 'INV-260200042' },
+  account_suspended: { name: 'Juan Dela Cruz', accountNumber: 'J2-2026-0001', balance: '₱3,198' },
+};
+
+const SMS_TEMPLATE_VARS = {
+  welcome: { accountNumber: 'J2-2026-0001', plan: 'STANDARD' },
+  payment_received: { amount: '₱1,599', invoiceNumber: 'INV-260200042', reference: 'REF-20260213' },
+  invoice_reminder: { invoiceNumber: 'INV-260200042', amount: '₱1,599', dueDate: 'Feb 28' },
+  account_suspended: { accountNumber: 'J2-2026-0001', balance: '₱3,198' },
+  installation_scheduled: { date: 'Feb 15, 2026', time: '10:00 AM' },
+  ticket_update: { ticketNumber: 'TK-2026-0087', status: 'In Progress', note: '' },
+  password_reset: { code: '482917' },
+  service_restored: { accountNumber: 'J2-2026-0001' },
+};
+
+let logCounter = 0;
+
+// ═══════════════════════════════════════════════════════════
+// API BASE DISPLAY
+// ═══════════════════════════════════════════════════════════
+
+document.getElementById('apiBase').addEventListener('input', function() {
+  const val = this.value.replace(/^https?:\/\//, '').replace(/\/+$/, '');
+  document.getElementById('apiDisplay').textContent = val || 'not set';
+});
+
+// ═══════════════════════════════════════════════════════════
+// STATUS CHECK
+// ═══════════════════════════════════════════════════════════
+
+async function checkStatus() {
+  try {
+    const data = await apiCall('/status');
+    const dot = document.getElementById('statusDot');
+    dot.style.background = data.database?.ok ? 'var(--accent-sms)' : 'var(--danger)';
+    dot.style.boxShadow = data.database?.ok ? '0 0 6px var(--accent-sms)' : '0 0 6px var(--danger)';
+    addLog('system', data.database?.ok, 'Status Check', data);
+    toast(data.database?.ok ? 'All services connected' : 'Some services unavailable', data.database?.ok ? 'success' : 'error');
+  } catch (err) {
+    addLog('system', false, 'Status Check Failed', { error: err.message });
+    toast('Cannot reach API: ' + err.message, 'error');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// EMAIL
+// ═══════════════════════════════════════════════════════════
+
+function updateEmailVars() {
+  const template = document.getElementById('emailTemplate').value;
+  const varsContainer = document.getElementById('emailTemplateVars');
+  const rawFields = document.getElementById('emailRawFields');
+
+  if (!template) {
+    varsContainer.classList.remove('active');
+    varsContainer.innerHTML = '';
+    rawFields.style.display = 'block';
+    return;
+  }
+
+  rawFields.style.display = 'none';
+  const vars = EMAIL_TEMPLATE_VARS[template] || {};
+  let html = '<h4>Template Variables</h4>';
+  for (const [key, val] of Object.entries(vars)) {
+    html += `<div class="field"><label>${key}</label><input type="text" id="evar_${key}" value="${val}"></div>`;
+  }
+  varsContainer.innerHTML = html;
+  varsContainer.classList.add('active');
+}
+
+async function sendEmail() {
+  const btn = document.getElementById('btnSendEmail');
+  btn.disabled = true; btn.textContent = 'Sending...';
+
+  try {
+    const to = document.getElementById('emailTo').value;
+    if (!to) { toast('Enter recipient email', 'error'); return; }
+
+    const template = document.getElementById('emailTemplate').value;
+    let data;
+
+    if (template) {
+      // Template-based send
+      const vars = EMAIL_TEMPLATE_VARS[template] || {};
+      const templateData = {};
+      for (const key of Object.keys(vars)) {
+        const el = document.getElementById(`evar_${key}`);
+        templateData[key] = el ? el.value : vars[key];
+      }
+      data = await apiCall('/email/template', 'POST', { to, template, data: templateData });
+    } else {
+      // Raw send
+      const subject = document.getElementById('emailSubject').value;
+      const html = document.getElementById('emailBody').value;
+      data = await apiCall('/email/send', 'POST', { to, subject, html });
+    }
+
+    addLog('email', data.ok, `→ ${to}${template ? ` [${template}]` : ''}`, data);
+    toast(data.ok ? 'Email sent!' : `Email failed: ${data.error}`, data.ok ? 'success' : 'error');
+  } catch (err) {
+    addLog('email', false, 'Send failed', { error: err.message });
+    toast('Email error: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> Send Email';
+  }
+}
+
+async function verifyEmail() {
+  try {
+    const data = await apiCall('/email/verify');
+    addLog('email', data.ok, 'SMTP Verify', data);
+    toast(data.ok ? 'SMTP connection OK' : `SMTP error: ${data.error}`, data.ok ? 'success' : 'error');
+  } catch (err) {
+    addLog('email', false, 'SMTP Verify Failed', { error: err.message });
+    toast('Verify error: ' + err.message, 'error');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// SMS
+// ═══════════════════════════════════════════════════════════
+
+function updateSmsMode() {
+  const mode = document.getElementById('smsMode').value;
+  document.getElementById('smsStandardFields').style.display = (mode === 'standard' || mode === 'priority') ? 'block' : 'none';
+  document.getElementById('smsOtpFields').style.display = mode === 'otp' ? 'block' : 'none';
+  document.getElementById('smsTemplateFields').style.display = mode === 'template' ? 'block' : 'none';
+
+  if (mode === 'template') updateSmsVars();
+}
+
+function updateSmsVars() {
+  const template = document.getElementById('smsTemplate').value;
+  const varsContainer = document.getElementById('smsTemplateVars');
+  const vars = SMS_TEMPLATE_VARS[template] || {};
+  let html = '<h4>Template Variables</h4>';
+  for (const [key, val] of Object.entries(vars)) {
+    html += `<div class="field"><label>${key}</label><input type="text" id="svar_${key}" value="${val}"></div>`;
+  }
+  varsContainer.innerHTML = html;
+}
+
+function updateCharCount() {
+  const msg = document.getElementById('smsMessage').value;
+  const counter = document.getElementById('smsCharCount');
+  const len = msg.length;
+  const credits = len <= 160 ? 1 : Math.ceil(len / 153);
+  counter.textContent = `${len}/160 (${credits} credit${credits > 1 ? 's' : ''})`;
+  counter.style.color = len > 160 ? 'var(--warning)' : 'var(--text-muted)';
+}
+
+async function sendSms() {
+  const btn = document.getElementById('btnSendSms');
+  btn.disabled = true; btn.textContent = 'Sending...';
+
+  try {
+    const number = document.getElementById('smsTo').value;
+    if (!number) { toast('Enter recipient phone number', 'error'); return; }
+
+    const mode = document.getElementById('smsMode').value;
+    let data, endpoint, body;
+
+    switch (mode) {
+      case 'standard':
+        endpoint = '/sms/send';
+        body = { number, message: document.getElementById('smsMessage').value };
+        break;
+
+      case 'priority':
+        endpoint = '/sms/priority';
+        body = { number, message: document.getElementById('smsMessage').value };
+        break;
+
+      case 'otp':
+        endpoint = '/sms/otp';
+        const code = document.getElementById('smsOtpCode').value;
+        body = { number };
+        if (code) body.code = code;
+        break;
+
+      case 'template':
+        endpoint = '/sms/template';
+        const template = document.getElementById('smsTemplate').value;
+        const vars = SMS_TEMPLATE_VARS[template] || {};
+        const templateData = {};
+        for (const key of Object.keys(vars)) {
+          const el = document.getElementById(`svar_${key}`);
+          templateData[key] = el ? el.value : vars[key];
+        }
+        body = { number, template, data: templateData };
+        break;
+    }
+
+    data = await apiCall(endpoint, 'POST', body);
+    const label = mode === 'template' ? `[${document.getElementById('smsTemplate').value}]` : `[${mode}]`;
+    addLog('sms', data.ok, `→ ${number} ${label}`, data);
+    toast(data.ok ? 'SMS sent!' : `SMS failed: ${data.error}`, data.ok ? 'success' : 'error');
+  } catch (err) {
+    addLog('sms', false, 'Send failed', { error: err.message });
+    toast('SMS error: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> Send SMS';
+  }
+}
+
+async function checkCredits() {
+  try {
+    const data = await apiCall('/sms/credits');
+    if (data.ok) {
+      document.getElementById('smsCredits').textContent = data.credits + ' credits';
+      addLog('sms', true, 'Credits check', data);
+    } else {
+      document.getElementById('smsCredits').textContent = 'Error';
+      addLog('sms', false, 'Credits check failed', data);
+    }
+  } catch (err) {
+    document.getElementById('smsCredits').textContent = 'Error';
+    toast('Credits check failed: ' + err.message, 'error');
+  }
+}
+
+async function checkSenderNames() {
+  try {
+    const data = await apiCall('/sms/sendernames');
+    addLog('sms', data.ok, 'Sender Names', data);
+    toast(data.ok ? 'Sender names retrieved — check log' : `Failed: ${data.error}`, data.ok ? 'success' : 'error');
+  } catch (err) {
+    addLog('sms', false, 'Sender names failed', { error: err.message });
+    toast('Error: ' + err.message, 'error');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// XENDIT
+// ═══════════════════════════════════════════════════════════
+
+async function testXendit() {
+  const btn = document.getElementById('btnSendXendit');
+  btn.disabled = true; btn.textContent = 'Processing...';
+
+  try {
+    const action = document.getElementById('xenditAction').value;
+    const invoice = document.getElementById('xenditInvoice').value;
+    const amount = document.getElementById('xenditAmount').value;
+    const email = document.getElementById('xenditEmail').value;
+
+    // This calls the existing Xendit test routes on your API
+    let data;
+    if (action === 'create') {
+      data = await apiCall('/../admin/xendit/create-test', 'POST', {
+        invoiceNumber: invoice,
+        amount: parseFloat(amount),
+        email: email,
+      });
+    } else {
+      data = await apiCall('/../admin/xendit/status/' + invoice, 'GET');
+    }
+
+    addLog('xendit', data.success || data.ok, `${action}: ${invoice}`, data);
+    toast(data.success || data.ok ? `Xendit ${action} OK` : `Xendit: ${data.error || 'Failed'}`, (data.success || data.ok) ? 'success' : 'error');
+  } catch (err) {
+    addLog('xendit', false, 'Xendit failed', { error: err.message });
+    toast('Xendit error: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 12 20 22 4 22 4 12"/><rect x="2" y="7" width="20" height="5"/><line x1="12" y1="22" x2="12" y2="7"/><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/></svg> Test Xendit';
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// LOGGING
+// ═══════════════════════════════════════════════════════════
+
+function addLog(type, success, summary, detail) {
+  logCounter++;
+  document.getElementById('logCount').textContent = logCounter;
+  document.getElementById('logEmpty')?.remove();
+
+  const entry = document.createElement('div');
+  entry.className = 'log-entry';
+  const time = new Date().toLocaleTimeString();
+
+  entry.innerHTML = `
+    <div class="log-entry-header">
+      <span class="log-type ${type}">${type}</span>
+      <span class="log-status ${success ? 'ok' : 'fail'}">${success ? '✓ OK' : '✗ FAIL'}</span>
+      <span style="font-size:12px;color:var(--text-dim);">${summary}</span>
+      <span class="log-timestamp">${time}</span>
+    </div>
+    <div class="log-detail">${JSON.stringify(detail, null, 2)}</div>
+  `;
+
+  const container = document.getElementById('logEntries');
+  container.insertBefore(entry, container.firstChild);
+}
+
+function clearLog() {
+  logCounter = 0;
+  document.getElementById('logCount').textContent = '0';
+  document.getElementById('logEntries').innerHTML = `
+    <div class="empty-state" id="logEmpty">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      <div>No requests yet — send a test above.</div>
+    </div>`;
+}
+
+// ═══════════════════════════════════════════════════════════
+// TOASTS
+// ═══════════════════════════════════════════════════════════
+
+function toast(msg, type = 'success') {
+  const t = document.createElement('div');
+  t.className = `toast ${type}`;
+  t.textContent = msg;
+  document.getElementById('toasts').appendChild(t);
+  setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity 0.3s'; setTimeout(() => t.remove(), 300); }, 4000);
+}
+
+// ═══════════════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════════════
+
+updateCharCount();
+updateSmsVars();
+</script>
+</body>
+</html>

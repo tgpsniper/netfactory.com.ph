@@ -1,0 +1,992 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+// ── Secure Fetch Interceptor ─────────────────────────────
+(function(){
+  const _fetch = window.fetch;
+  window.fetch = function(url, opts) {
+    opts = opts || {};
+    const urlStr = typeof url === 'string' ? url : (url.url || '');
+    if (urlStr.startsWith('/api') || urlStr.includes('/api/')) {
+      opts.credentials = 'include';
+      const method = (opts.method || 'GET').toUpperCase();
+      if (['POST','PUT','DELETE','PATCH'].includes(method)) {
+        opts.headers = opts.headers || {};
+        if (!opts.headers['X-CSRF-Token'] && !opts.headers['x-csrf-token']) {
+          const m = document.cookie.match(/j2_csrf=([^;]+)/);
+          if (m) opts.headers['X-CSRF-Token'] = m[1];
+        }
+      }
+    }
+    return _fetch.call(this, url, opts);
+  };
+})();
+</script>
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OSP Manager — Netfactory CRM</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%233b82f6'/><text x='50%25' y='55%25' dominant-baseline='middle' text-anchor='middle' fill='white' font-size='14' font-weight='800' font-family='sans-serif'>NF</text></svg>">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; overflow: hidden; }
+  #root { height: 100vh; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #f59e0b; border-radius: 8px; }
+  ::-webkit-scrollbar-thumb:hover { background: #fbbf24; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes fadeIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text-jsx-source" id="jsx-source">
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+// ── Auth check ──────────────────────────────────────────────
+(function(){
+  const tok = document.cookie.split(';').map(c=>c.trim()).find(c=>c.startsWith('j2_admin_token='))?.split('=')[1] || localStorage.getItem('j2_admin_token');
+  if (!tok) window.location.href = '/crm/';
+})();
+
+// ── Theme (amber/dark) ─────────────────────────────────────
+const t = {
+  bg:'#0f172a', bgCard:'#1e293b', bgCard2:'#253347', text:'#e2e8f0', textSec:'#94a3b8', textMuted:'#64748b',
+  border:'#334155', accent:'#f59e0b', accentDk:'#d97706', accentLt:'#fbbf24',
+  shadow:'0 1px 3px rgba(0,0,0,.2)', shadowLg:'0 10px 30px rgba(0,0,0,.3)',
+  input:'#0f172a', inputBorder:'#334155', success:'#34d399', warning:'#fbbf24',
+  danger:'#f87171', info:'#22d3ee',
+};
+
+const API = '/api/admin/osp';
+
+// ── Status / Priority colors ────────────────────────────────
+const STATUS_COLORS = {
+  pending:'#f59e0b', assigned:'#60a5fa', scheduled:'#a78bfa', in_progress:'#22d3ee',
+  completed:'#34d399', cancelled:'#f87171',
+};
+const PRIORITY_COLORS = { low:'#34d399', normal:'#60a5fa', high:'#fbbf24', urgent:'#f87171' };
+const TYPE_ICONS = { installation:'fa-tools', survey:'fa-clipboard-check', repair:'fa-wrench', maintenance:'fa-cogs', relocation:'fa-truck' };
+
+// ============================================================
+//  SHARED COMPONENTS
+// ============================================================
+const Icon = ({ name, style={} }) => {
+  if (!name) return null;
+  const cn = name.startsWith('fa') ? name : 'fas '+name;
+  return <i className={cn} style={style}></i>;
+};
+
+const Card = ({ children, style={} }) => (
+  <div style={{ background:t.bgCard, borderRadius:16, border:`1px solid ${t.border}`, boxShadow:t.shadow, padding:24, transition:'all .3s', ...style }}>{children}</div>
+);
+
+const Badge = ({ color, label, icon }) => (
+  <span style={{ display:'inline-flex', alignItems:'center', gap:5, padding:'4px 12px', borderRadius:20, fontSize:11, fontWeight:700, background:`${color}20`, color, textTransform:'capitalize' }}>
+    {icon && <i className={`fas ${icon}`} style={{fontSize:9}}></i>}
+    <span style={{ width:6, height:6, borderRadius:'50%', background:color }}></span>{label}
+  </span>
+);
+
+const Btn = ({ children, primary, danger, small, ghost, onClick, disabled, style={} }) => (
+  <button onClick={onClick} disabled={disabled} style={{
+    padding: small ? '6px 14px' : '10px 20px', borderRadius:10,
+    background: danger ? t.danger : primary ? `linear-gradient(135deg,${t.accent},${t.accentDk})` : ghost ? 'transparent' : t.bgCard2,
+    color: primary || danger ? '#fff' : t.textSec,
+    border: ghost ? `1px solid ${t.border}` : primary || danger ? 'none' : `1px solid ${t.border}`,
+    fontSize: small ? 12 : 13, fontWeight:600, cursor: disabled ? 'not-allowed' : 'pointer', transition:'all .3s', fontFamily:'inherit',
+    display:'inline-flex', alignItems:'center', gap:6, opacity: disabled ? .5 : 1, ...style,
+  }}>{children}</button>
+);
+
+const Input = ({ label, value, onChange, type='text', placeholder, style={}, inputStyle={}, readOnly, options }) => (
+  <div style={{ flex:1, ...style }}>
+    {label && <div style={{ fontSize:11, fontWeight:700, color:t.textMuted, marginBottom:4, textTransform:'uppercase', letterSpacing:.5 }}>{label}</div>}
+    {options ? (
+      <select value={value} onChange={e=>onChange(e.target.value)} style={{ width:'100%', padding:'9px 12px', borderRadius:8, background:t.input, border:`1px solid ${t.inputBorder}`, color:t.text, fontSize:13, fontFamily:'inherit', outline:'none', ...inputStyle }}>
+        {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+    ) : type === 'textarea' ? (
+      <textarea value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} readOnly={readOnly} rows={3}
+        style={{ width:'100%', padding:'9px 12px', borderRadius:8, background:t.input, border:`1px solid ${t.inputBorder}`, color:t.text, fontSize:13, fontFamily:'inherit', outline:'none', resize:'vertical', ...inputStyle }} />
+    ) : (
+      <input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} readOnly={readOnly}
+        style={{ width:'100%', padding:'9px 12px', borderRadius:8, background:t.input, border:`1px solid ${t.inputBorder}`, color:t.text, fontSize:13, fontFamily:'inherit', outline:'none', ...inputStyle }} />
+    )}
+  </div>
+);
+
+const Spinner = () => <i className="fas fa-circle-notch" style={{ animation:'spin 1s linear infinite', color:t.accent }}></i>;
+
+const StatCard = ({ icon, label, value, color }) => (
+  <Card style={{ display:'flex', gap:14, alignItems:'center', padding:18 }}>
+    <div style={{ width:46, height:46, borderRadius:12, background:`${color}15`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:20, color }}><i className={`fas ${icon}`}></i></div>
+    <div>
+      <div style={{ fontSize:11, color:t.textMuted, fontWeight:600, marginBottom:2 }}>{label}</div>
+      <div style={{ fontSize:22, fontWeight:800, color:t.text }}>{value}</div>
+    </div>
+  </Card>
+);
+
+const TabBar = ({ tabs, active, onSelect }) => (
+  <div style={{ display:'flex', gap:2, background:t.bg, borderRadius:12, padding:3 }}>
+    {tabs.map(tb => (
+      <button key={tb.id} onClick={()=>onSelect(tb.id)} style={{
+        padding:'8px 18px', borderRadius:10, border:'none', background: active===tb.id ? t.accent : 'transparent',
+        color: active===tb.id ? '#000' : t.textSec, fontSize:12, fontWeight:700, cursor:'pointer', fontFamily:'inherit', transition:'all .2s',
+        display:'flex', alignItems:'center', gap:6,
+      }}>
+        {tb.icon && <i className={`fas ${tb.icon}`} style={{fontSize:11}}></i>}{tb.label}
+        {tb.count !== undefined && <span style={{ background: active===tb.id ? 'rgba(0,0,0,.2)' : `${t.accent}20`, color: active===tb.id ? '#000' : t.accent, padding:'1px 7px', borderRadius:8, fontSize:10, fontWeight:800 }}>{tb.count}</span>}
+      </button>
+    ))}
+  </div>
+);
+
+// ============================================================
+//  MODAL OVERLAY
+// ============================================================
+const Modal = ({ title, onClose, children, wide }) => (
+  <div style={{ position:'fixed', inset:0, zIndex:9999, display:'flex', alignItems:'center', justifyContent:'center', background:'rgba(0,0,0,.6)', backdropFilter:'blur(4px)' }} onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
+    <div style={{ background:t.bgCard, borderRadius:20, border:`1px solid ${t.border}`, boxShadow:t.shadowLg, width: wide ? 900 : 560, maxWidth:'95vw', maxHeight:'90vh', display:'flex', flexDirection:'column', animation:'fadeIn .2s ease-out' }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'20px 24px', borderBottom:`1px solid ${t.border}` }}>
+        <div style={{ fontSize:16, fontWeight:800, color:t.text }}>{title}</div>
+        <button onClick={onClose} style={{ background:'none', border:'none', color:t.textMuted, fontSize:18, cursor:'pointer' }}><i className="fas fa-times"></i></button>
+      </div>
+      <div style={{ padding:24, overflowY:'auto', flex:1 }}>{children}</div>
+    </div>
+  </div>
+);
+
+// ============================================================
+//  MAIN APP
+// ============================================================
+const OSPManager = () => {
+  const [tab, setTab] = useState('dashboard');
+  const [workOrders, setWorkOrders] = useState([]);
+  const [installers, setInstallers] = useState([]);
+  const [stats, setStats] = useState(null);
+  const [schedule, setSchedule] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedWO, setSelectedWO] = useState(null);
+  const [showCreate, setShowCreate] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [filters, setFilters] = useState({ status:'', type:'', search:'' });
+  const [toast, setToast] = useState(null);
+  const [schedMonth, setSchedMonth] = useState(new Date().getMonth()+1);
+  const [schedYear, setSchedYear] = useState(new Date().getFullYear());
+
+  // ── Toast ───────────────────────────────────────────────
+  const showToast = (msg, type='success') => { setToast({msg,type}); setTimeout(()=>setToast(null), 3000); };
+
+  // ── API helpers ─────────────────────────────────────────
+  const apiFetch = async (path, opts={}) => {
+    const res = await fetch(API + path, { ...opts, headers: { 'Content-Type':'application/json', ...opts.headers } });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'API error');
+    return data;
+  };
+
+  const loadAll = async () => {
+    setLoading(true);
+    try {
+      const [woRes, instRes, statsRes] = await Promise.all([
+        apiFetch('/work-orders?' + new URLSearchParams(Object.fromEntries(Object.entries(filters).filter(([,v])=>v)))),
+        apiFetch('/installers'),
+        apiFetch('/stats'),
+      ]);
+      setWorkOrders(woRes.workOrders || []);
+      setInstallers(instRes.installers || []);
+      setStats(statsRes);
+    } catch(e) { showToast(e.message, 'error'); }
+    setLoading(false);
+  };
+
+  const loadSchedule = async () => {
+    try {
+      const data = await apiFetch(`/schedule?month=${schedMonth}&year=${schedYear}`);
+      setSchedule(data.schedule || []);
+    } catch(e) { showToast(e.message, 'error'); }
+  };
+
+  useEffect(() => { loadAll(); }, []);
+  useEffect(() => { if(tab==='schedule') loadSchedule(); }, [tab, schedMonth, schedYear]);
+
+  const loadWODetail = async (id) => {
+    setDetailLoading(true);
+    try {
+      const data = await apiFetch(`/work-orders/${id}`);
+      setSelectedWO(data.workOrder);
+    } catch(e) { showToast(e.message, 'error'); }
+    setDetailLoading(false);
+  };
+
+  // ── Create WO ───────────────────────────────────────────
+  const [createForm, setCreateForm] = useState({ subscriber_id:'', type:'installation', priority:'normal', notes:'', assigned_to:'', scheduled_date:'', scheduled_time:'' });
+
+  const handleCreate = async () => {
+    try {
+      const body = { ...createForm };
+      if (body.subscriber_id) body.subscriber_id = parseInt(body.subscriber_id);
+      if (body.assigned_to) body.assigned_to = parseInt(body.assigned_to); else delete body.assigned_to;
+      if (!body.scheduled_date) delete body.scheduled_date;
+      if (!body.scheduled_time) delete body.scheduled_time;
+      if (!body.notes) delete body.notes;
+      const res = await apiFetch('/work-orders', { method:'POST', body:JSON.stringify(body) });
+      showToast(`Work Order ${res.workOrder.order_number} created`);
+      setShowCreate(false);
+      setCreateForm({ subscriber_id:'', type:'installation', priority:'normal', notes:'', assigned_to:'', scheduled_date:'', scheduled_time:'' });
+      loadAll();
+    } catch(e) { showToast(e.message, 'error'); }
+  };
+
+  // ── Update WO ───────────────────────────────────────────
+  const updateWO = async (id, body) => {
+    try {
+      await apiFetch(`/work-orders/${id}`, { method:'PUT', body:JSON.stringify(body) });
+      showToast('Work order updated');
+      loadAll();
+      if (selectedWO && selectedWO.id === id) loadWODetail(id);
+    } catch(e) { showToast(e.message, 'error'); }
+  };
+
+  // ── Toggle Task ─────────────────────────────────────────
+  const toggleTask = async (woId, taskId, completed) => {
+    try {
+      await apiFetch(`/work-orders/${woId}/tasks/${taskId}`, { method:'PUT', body:JSON.stringify({ is_completed: completed }) });
+      loadWODetail(woId);
+    } catch(e) { showToast(e.message, 'error'); }
+  };
+
+  // ── Complete WO ─────────────────────────────────────────
+  const completeWO = async (id) => {
+    try {
+      await apiFetch(`/work-orders/${id}/complete`, { method:'POST' });
+      showToast('Work order completed!');
+      loadAll();
+      if (selectedWO && selectedWO.id === id) loadWODetail(id);
+    } catch(e) { showToast(e.message, 'error'); }
+  };
+
+  // ── Delete material ─────────────────────────────────────
+  const deleteMaterial = async (woId, matId) => {
+    try {
+      await apiFetch(`/work-orders/${woId}/materials/${matId}`, { method:'DELETE' });
+      loadWODetail(woId);
+    } catch(e) { showToast(e.message, 'error'); }
+  };
+
+  // ── Add material ────────────────────────────────────────
+  const [matForm, setMatForm] = useState({ item_name:'', quantity:1, unit:'pcs' });
+  const addMaterial = async (woId) => {
+    if (!matForm.item_name) return;
+    try {
+      await apiFetch(`/work-orders/${woId}/materials`, { method:'POST', body:JSON.stringify(matForm) });
+      setMatForm({ item_name:'', quantity:1, unit:'pcs' });
+      loadWODetail(woId);
+    } catch(e) { showToast(e.message, 'error'); }
+  };
+
+  // ── Format helpers ──────────────────────────────────────
+  const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' }) : '—';
+  const fmtTime = (d) => d ? new Date(d).toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit' }) : '';
+  const fmtDateTime = (d) => d ? `${fmtDate(d)} ${fmtTime(d)}` : '—';
+  const timeAgo = (d) => {
+    if (!d) return '';
+    const diff = Date.now() - new Date(d).getTime();
+    const mins = Math.floor(diff/60000);
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins/60);
+    if (hrs < 24) return `${hrs}h ago`;
+    return `${Math.floor(hrs/24)}d ago`;
+  };
+
+  // ============================================================
+  //  DASHBOARD TAB
+  // ============================================================
+  const DashboardTab = () => {
+    if (!stats) return <div style={{textAlign:'center',padding:40}}><Spinner /></div>;
+    const s = stats;
+    return (
+      <div style={{ animation:'fadeIn .3s ease-out' }}>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))', gap:16, marginBottom:24 }}>
+          <StatCard icon="fa-clipboard-list" label="Total Work Orders" value={s.total} color={t.accent} />
+          <StatCard icon="fa-clock" label="Pending" value={s.byStatus?.pending || 0} color="#f59e0b" />
+          <StatCard icon="fa-spinner" label="In Progress" value={s.byStatus?.in_progress || 0} color="#22d3ee" />
+          <StatCard icon="fa-check-circle" label="Completed" value={s.byStatus?.completed || 0} color="#34d399" />
+          <StatCard icon="fa-calendar-day" label="Scheduled Today" value={s.scheduledToday || 0} color="#a78bfa" />
+          <StatCard icon="fa-exclamation-triangle" label="Overdue" value={s.overdue || 0} color="#f87171" />
+        </div>
+
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}>
+          <Card>
+            <div style={{ fontSize:14, fontWeight:700, color:t.text, marginBottom:16 }}><i className="fas fa-chart-pie" style={{marginRight:8,color:t.accent}}></i>By Type</div>
+            {s.byType && Object.entries(s.byType).map(([type,count]) => (
+              <div key={type} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'8px 0', borderBottom:`1px solid ${t.border}` }}>
+                <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                  <i className={`fas ${TYPE_ICONS[type]||'fa-file'}`} style={{ color:t.accent, width:18, textAlign:'center' }}></i>
+                  <span style={{ fontSize:13, color:t.textSec, textTransform:'capitalize' }}>{type}</span>
+                </div>
+                <span style={{ fontSize:14, fontWeight:700, color:t.text }}>{count}</span>
+              </div>
+            ))}
+          </Card>
+          <Card>
+            <div style={{ fontSize:14, fontWeight:700, color:t.text, marginBottom:16 }}><i className="fas fa-users" style={{marginRight:8,color:t.accent}}></i>Installer Workload</div>
+            {installers.length === 0 ? <div style={{color:t.textMuted,fontSize:13}}>No installers found</div> :
+              installers.map(inst => (
+                <div key={inst.id} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'8px 0', borderBottom:`1px solid ${t.border}` }}>
+                  <div>
+                    <div style={{ fontSize:13, fontWeight:600, color:t.text }}>{inst.full_name}</div>
+                    <div style={{ fontSize:11, color:t.textMuted }}>{inst.role}</div>
+                  </div>
+                  <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                    <span style={{ fontSize:11, color:t.textMuted }}>{inst.active_work_orders} active</span>
+                    <div style={{ width:50, height:6, borderRadius:3, background:t.border }}>
+                      <div style={{ width:`${Math.min(inst.active_work_orders*20,100)}%`, height:6, borderRadius:3, background: inst.active_work_orders > 3 ? t.danger : t.success, transition:'width .3s' }}></div>
+                    </div>
+                  </div>
+                </div>
+              ))
+            }
+          </Card>
+        </div>
+      </div>
+    );
+  };
+
+  // ============================================================
+  //  WORK ORDERS TAB
+  // ============================================================
+  const WorkOrdersTab = () => {
+    const filtered = workOrders;
+    return (
+      <div style={{ animation:'fadeIn .3s ease-out' }}>
+        <div style={{ display:'flex', gap:12, marginBottom:20, flexWrap:'wrap', alignItems:'center' }}>
+          <div style={{ flex:1, minWidth:200, position:'relative' }}>
+            <i className="fas fa-search" style={{ position:'absolute', left:12, top:'50%', transform:'translateY(-50%)', color:t.textMuted, fontSize:13 }}></i>
+            <input value={filters.search} onChange={e=>setFilters(f=>({...f,search:e.target.value}))} placeholder="Search WO#, subscriber..." style={{ width:'100%', padding:'9px 12px 9px 34px', borderRadius:10, background:t.input, border:`1px solid ${t.inputBorder}`, color:t.text, fontSize:13, fontFamily:'inherit', outline:'none' }} />
+          </div>
+          <select value={filters.status} onChange={e=>setFilters(f=>({...f,status:e.target.value}))} style={{ padding:'9px 12px', borderRadius:10, background:t.input, border:`1px solid ${t.inputBorder}`, color:t.text, fontSize:13, fontFamily:'inherit', outline:'none' }}>
+            <option value="">All Status</option>
+            <option value="pending">Pending</option>
+            <option value="assigned">Assigned</option>
+            <option value="scheduled">Scheduled</option>
+            <option value="in_progress">In Progress</option>
+            <option value="completed">Completed</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+          <select value={filters.type} onChange={e=>setFilters(f=>({...f,type:e.target.value}))} style={{ padding:'9px 12px', borderRadius:10, background:t.input, border:`1px solid ${t.inputBorder}`, color:t.text, fontSize:13, fontFamily:'inherit', outline:'none' }}>
+            <option value="">All Types</option>
+            <option value="installation">Installation</option>
+            <option value="survey">Survey</option>
+            <option value="repair">Repair</option>
+            <option value="maintenance">Maintenance</option>
+            <option value="relocation">Relocation</option>
+          </select>
+          <Btn primary onClick={()=>{ loadAll(); }}><i className="fas fa-sync-alt"></i> Refresh</Btn>
+          <Btn primary onClick={()=>setShowCreate(true)} style={{background:`linear-gradient(135deg,${t.success},#059669)`}}><i className="fas fa-plus"></i> New Work Order</Btn>
+        </div>
+
+        {loading ? <div style={{textAlign:'center',padding:40}}><Spinner /></div> : filtered.length === 0 ? (
+          <Card style={{textAlign:'center',padding:40}}>
+            <i className="fas fa-clipboard" style={{fontSize:40,color:t.textMuted,marginBottom:12}}></i>
+            <div style={{fontSize:14,color:t.textMuted}}>No work orders found</div>
+          </Card>
+        ) : (
+          <div style={{ overflowX:'auto', borderRadius:12, border:`1px solid ${t.border}` }}>
+            <table style={{ width:'100%', borderCollapse:'collapse' }}>
+              <thead>
+                <tr style={{ background:t.bgCard2 }}>
+                  {['WO #','Type','Subscriber','Status','Priority','Assigned To','Scheduled','Created'].map(h => (
+                    <th key={h} style={{ padding:'12px 14px', textAlign:'left', fontSize:11, fontWeight:700, color:t.textMuted, textTransform:'uppercase', letterSpacing:.5, borderBottom:`2px solid ${t.border}`, whiteSpace:'nowrap' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map(wo => (
+                  <tr key={wo.id} onClick={()=>loadWODetail(wo.id)} style={{ cursor:'pointer', borderBottom:`1px solid ${t.border}`, transition:'background .15s' }}
+                    onMouseEnter={e=>e.currentTarget.style.background=t.bgCard2} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                    <td style={{ padding:'12px 14px', fontSize:13, fontWeight:700, color:t.accent }}>{wo.order_number}</td>
+                    <td style={{ padding:'12px 14px' }}>
+                      <span style={{ display:'inline-flex', alignItems:'center', gap:6, fontSize:12, color:t.textSec, textTransform:'capitalize' }}>
+                        <i className={`fas ${TYPE_ICONS[wo.type]||'fa-file'}`} style={{fontSize:11,color:t.accent}}></i>{wo.type}
+                      </span>
+                    </td>
+                    <td style={{ padding:'12px 14px', fontSize:13, color:t.text }}>{wo.subscribers?.first_name} {wo.subscribers?.last_name}</td>
+                    <td style={{ padding:'12px 14px' }}><Badge color={STATUS_COLORS[wo.status]||t.textMuted} label={wo.status.replace('_',' ')} /></td>
+                    <td style={{ padding:'12px 14px' }}><Badge color={PRIORITY_COLORS[wo.priority]||t.textMuted} label={wo.priority} /></td>
+                    <td style={{ padding:'12px 14px', fontSize:13, color:t.textSec }}>{wo.admin_users_work_orders_assigned_toToadmin_users?.full_name || '—'}</td>
+                    <td style={{ padding:'12px 14px', fontSize:12, color:t.textSec }}>{wo.scheduled_date ? fmtDate(wo.scheduled_date) : '—'}{wo.scheduled_time ? ` ${wo.scheduled_time}` : ''}</td>
+                    <td style={{ padding:'12px 14px', fontSize:12, color:t.textMuted }}>{timeAgo(wo.created_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // ============================================================
+  //  SCHEDULE TAB
+  // ============================================================
+  const ScheduleTab = () => {
+    const daysInMonth = new Date(schedYear, schedMonth, 0).getDate();
+    const firstDay = new Date(schedYear, schedMonth-1, 1).getDay();
+    const monthName = new Date(schedYear, schedMonth-1).toLocaleString('en-US', { month:'long' });
+
+    const dayMap = {};
+    schedule.forEach(wo => {
+      if (wo.scheduled_date) {
+        const d = new Date(wo.scheduled_date).getDate();
+        if (!dayMap[d]) dayMap[d] = [];
+        dayMap[d].push(wo);
+      }
+    });
+
+    return (
+      <div style={{ animation:'fadeIn .3s ease-out' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+            <Btn ghost small onClick={()=>{ if(schedMonth===1){setSchedMonth(12);setSchedYear(y=>y-1);}else setSchedMonth(m=>m-1); }}><i className="fas fa-chevron-left"></i></Btn>
+            <span style={{ fontSize:18, fontWeight:700, color:t.text, minWidth:160, textAlign:'center' }}>{monthName} {schedYear}</span>
+            <Btn ghost small onClick={()=>{ if(schedMonth===12){setSchedMonth(1);setSchedYear(y=>y+1);}else setSchedMonth(m=>m+1); }}><i className="fas fa-chevron-right"></i></Btn>
+          </div>
+          <Btn ghost small onClick={()=>{setSchedMonth(new Date().getMonth()+1);setSchedYear(new Date().getFullYear());}}><i className="fas fa-calendar-day"></i> Today</Btn>
+        </div>
+
+        <Card style={{ padding:0, overflow:'hidden' }}>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(7,1fr)' }}>
+            {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d => (
+              <div key={d} style={{ padding:'10px', textAlign:'center', fontSize:11, fontWeight:700, color:t.textMuted, textTransform:'uppercase', borderBottom:`1px solid ${t.border}`, background:t.bgCard2 }}>{d}</div>
+            ))}
+            {Array.from({length:firstDay}).map((_,i) => <div key={`e${i}`} style={{ minHeight:90, borderBottom:`1px solid ${t.border}`, borderRight:`1px solid ${t.border}` }}></div>)}
+            {Array.from({length:daysInMonth}).map((_,i) => {
+              const day = i+1;
+              const wos = dayMap[day] || [];
+              const isToday = day === new Date().getDate() && schedMonth === new Date().getMonth()+1 && schedYear === new Date().getFullYear();
+              return (
+                <div key={day} style={{ minHeight:90, padding:6, borderBottom:`1px solid ${t.border}`, borderRight:`1px solid ${t.border}`, background: isToday ? `${t.accent}08` : 'transparent' }}>
+                  <div style={{ fontSize:12, fontWeight: isToday ? 800 : 500, color: isToday ? t.accent : t.textSec, marginBottom:4 }}>{day}</div>
+                  {wos.slice(0,3).map(wo => (
+                    <div key={wo.id} onClick={()=>loadWODetail(wo.id)} style={{ fontSize:10, padding:'2px 6px', borderRadius:4, background:`${STATUS_COLORS[wo.status]}20`, color:STATUS_COLORS[wo.status], marginBottom:2, cursor:'pointer', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', fontWeight:600 }}>
+                      {wo.order_number}
+                    </div>
+                  ))}
+                  {wos.length > 3 && <div style={{ fontSize:10, color:t.textMuted, fontWeight:600 }}>+{wos.length-3} more</div>}
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      </div>
+    );
+  };
+
+  // ============================================================
+  //  INSTALLERS TAB
+  // ============================================================
+  const InstallersTab = () => (
+    <div style={{ animation:'fadeIn .3s ease-out', display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))', gap:16 }}>
+      {installers.length === 0 ? <Card style={{gridColumn:'1/-1',textAlign:'center',padding:40}}><div style={{color:t.textMuted}}>No installers or field staff found</div></Card> :
+        installers.map(inst => (
+          <Card key={inst.id} style={{ display:'flex', flexDirection:'column', gap:12 }}>
+            <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+              <div style={{ width:44, height:44, borderRadius:12, background:`${t.accent}20`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:18, color:t.accent, fontWeight:800 }}>
+                {(inst.full_name||'?')[0].toUpperCase()}
+              </div>
+              <div>
+                <div style={{ fontSize:14, fontWeight:700, color:t.text }}>{inst.full_name}</div>
+                <div style={{ fontSize:11, color:t.textMuted, textTransform:'capitalize' }}>{inst.role}</div>
+              </div>
+            </div>
+            <div style={{ display:'flex', gap:8 }}>
+              <div style={{ flex:1, padding:10, borderRadius:8, background:t.bg, textAlign:'center' }}>
+                <div style={{ fontSize:18, fontWeight:800, color:t.accent }}>{inst.active_work_orders}</div>
+                <div style={{ fontSize:10, color:t.textMuted }}>Active WOs</div>
+              </div>
+              <div style={{ flex:1, padding:10, borderRadius:8, background:t.bg, textAlign:'center' }}>
+                <div style={{ fontSize:18, fontWeight:800, color:t.success }}>{inst.total_completed || 0}</div>
+                <div style={{ fontSize:10, color:t.textMuted }}>Completed</div>
+              </div>
+            </div>
+          </Card>
+        ))
+      }
+    </div>
+  );
+
+  // ============================================================
+  //  WO DETAIL MODAL
+  // ============================================================
+  const WODetailModal = () => {
+    if (!selectedWO) return null;
+    const wo = selectedWO;
+    const tasks = wo.work_order_tasks || [];
+    const photos = wo.work_order_photos || [];
+    const materials = wo.work_order_materials || [];
+    const logs = wo.work_order_logs || [];
+    const sig = wo.work_order_signatures;
+    const completedTasks = tasks.filter(t=>t.is_completed).length;
+    const totalTasks = tasks.length;
+    const progress = totalTasks > 0 ? Math.round(completedTasks/totalTasks*100) : 0;
+    const [detailTab, setDetailTab] = useState('checklist');
+    const [assignTo, setAssignTo] = useState(wo.assigned_to?.toString() || '');
+    const [schedDate, setSchedDate] = useState(wo.scheduled_date ? wo.scheduled_date.split('T')[0] : '');
+    const [schedTime, setSchedTime] = useState(wo.scheduled_time || '');
+
+    const taskGroups = {};
+    tasks.forEach(t => { const g = t.task_group||'general'; if(!taskGroups[g]) taskGroups[g]=[]; taskGroups[g].push(t); });
+
+    return (
+      <Modal title={`Work Order ${wo.order_number}`} onClose={()=>setSelectedWO(null)} wide>
+        {detailLoading ? <div style={{textAlign:'center',padding:40}}><Spinner /></div> : (
+          <div>
+            {/* Header info */}
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:16, marginBottom:20 }}>
+              <div>
+                <div style={{fontSize:11,color:t.textMuted,fontWeight:700,marginBottom:4}}>TYPE</div>
+                <div style={{display:'flex',alignItems:'center',gap:6}}>
+                  <i className={`fas ${TYPE_ICONS[wo.type]||'fa-file'}`} style={{color:t.accent}}></i>
+                  <span style={{fontSize:14,fontWeight:600,color:t.text,textTransform:'capitalize'}}>{wo.type}</span>
+                </div>
+              </div>
+              <div>
+                <div style={{fontSize:11,color:t.textMuted,fontWeight:700,marginBottom:4}}>STATUS</div>
+                <Badge color={STATUS_COLORS[wo.status]} label={wo.status.replace('_',' ')} />
+              </div>
+              <div>
+                <div style={{fontSize:11,color:t.textMuted,fontWeight:700,marginBottom:4}}>PRIORITY</div>
+                <Badge color={PRIORITY_COLORS[wo.priority]} label={wo.priority} />
+              </div>
+            </div>
+
+            {/* Subscriber info */}
+            <Card style={{ padding:14, marginBottom:16, display:'flex', alignItems:'center', gap:12 }}>
+              <i className="fas fa-user" style={{fontSize:16,color:t.accent}}></i>
+              <div>
+                <div style={{fontSize:13,fontWeight:700,color:t.text}}>{wo.subscribers?.first_name} {wo.subscribers?.last_name}</div>
+                <div style={{fontSize:11,color:t.textMuted}}>{wo.subscribers?.address || 'No address'} — {wo.subscribers?.phone_number || 'No phone'}</div>
+              </div>
+              <Badge color={STATUS_COLORS[wo.subscribers?.status]||t.textMuted} label={wo.subscribers?.status||'unknown'} />
+            </Card>
+
+            {/* Progress bar */}
+            <div style={{ marginBottom:16 }}>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
+                <span style={{fontSize:12,fontWeight:700,color:t.textSec}}>Checklist Progress</span>
+                <span style={{fontSize:12,fontWeight:700,color:t.accent}}>{completedTasks}/{totalTasks} ({progress}%)</span>
+              </div>
+              <div style={{ height:8, borderRadius:4, background:t.border }}>
+                <div style={{ width:`${progress}%`, height:8, borderRadius:4, background: progress===100 ? t.success : t.accent, transition:'width .3s' }}></div>
+              </div>
+            </div>
+
+            {/* Assignment / Schedule controls */}
+            <div style={{ display:'flex', gap:12, marginBottom:16, flexWrap:'wrap' }}>
+              <Input label="Assign To" value={assignTo} onChange={v=>setAssignTo(v)} options={[{value:'',label:'Unassigned'}, ...installers.map(i=>({value:i.id.toString(),label:i.full_name}))]} style={{minWidth:180}} />
+              <Input label="Scheduled Date" type="date" value={schedDate} onChange={v=>setSchedDate(v)} style={{minWidth:160}} />
+              <Input label="Scheduled Time" value={schedTime} onChange={v=>setSchedTime(v)} placeholder="e.g. 09:00 AM" style={{minWidth:140}} />
+              <div style={{display:'flex',alignItems:'flex-end'}}>
+                <Btn primary small onClick={()=>updateWO(wo.id, {
+                  assigned_to: assignTo ? parseInt(assignTo) : null,
+                  scheduled_date: schedDate || null,
+                  scheduled_time: schedTime || null,
+                })}><i className="fas fa-save"></i> Update</Btn>
+              </div>
+            </div>
+
+            {/* Quick actions */}
+            <div style={{ display:'flex', gap:8, marginBottom:16, flexWrap:'wrap' }}>
+              {wo.status === 'pending' && <Btn small onClick={()=>updateWO(wo.id,{status:'assigned'})}><i className="fas fa-user-check"></i> Mark Assigned</Btn>}
+              {wo.status === 'assigned' && <Btn small onClick={()=>updateWO(wo.id,{status:'scheduled'})}><i className="fas fa-calendar-check"></i> Mark Scheduled</Btn>}
+              {(wo.status === 'scheduled' || wo.status === 'assigned') && <Btn small onClick={()=>updateWO(wo.id,{status:'in_progress'})}><i className="fas fa-play"></i> Start Work</Btn>}
+              {wo.status === 'in_progress' && <Btn primary small onClick={()=>completeWO(wo.id)} style={{background:`linear-gradient(135deg,${t.success},#059669)`}}><i className="fas fa-check-double"></i> Complete</Btn>}
+              {wo.status !== 'cancelled' && wo.status !== 'completed' && <Btn danger small onClick={()=>updateWO(wo.id,{status:'cancelled'})}><i className="fas fa-ban"></i> Cancel</Btn>}
+            </div>
+
+            {/* Detail tabs */}
+            <TabBar tabs={[
+              {id:'checklist',label:'Checklist',icon:'fa-tasks',count:totalTasks},
+              {id:'materials',label:'Materials',icon:'fa-boxes',count:materials.length},
+              {id:'photos',label:'Photos',icon:'fa-camera',count:photos.length},
+              {id:'logs',label:'Activity Log',icon:'fa-history',count:logs.length},
+            ]} active={detailTab} onSelect={setDetailTab} />
+
+            <div style={{ marginTop:16 }}>
+              {/* CHECKLIST */}
+              {detailTab === 'checklist' && (
+                <div>
+                  {Object.entries(taskGroups).map(([group, groupTasks]) => (
+                    <div key={group} style={{ marginBottom:16 }}>
+                      <div style={{ fontSize:12, fontWeight:700, color:t.accent, textTransform:'uppercase', letterSpacing:.5, marginBottom:8, display:'flex', alignItems:'center', gap:6 }}>
+                        <i className="fas fa-layer-group" style={{fontSize:10}}></i>{group}
+                        <span style={{fontSize:10,color:t.textMuted,fontWeight:500}}>({groupTasks.filter(t=>t.is_completed).length}/{groupTasks.length})</span>
+                      </div>
+                      {groupTasks.sort((a,b)=>a.sort_order-b.sort_order).map(task => (
+                        <div key={task.id} onClick={()=>toggleTask(wo.id, task.id, !task.is_completed)}
+                          style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 12px', borderRadius:8, background:t.bg, marginBottom:4, cursor:'pointer', transition:'all .15s', border:`1px solid ${task.is_completed ? t.success+'30' : t.border}` }}>
+                          <div style={{ width:22, height:22, borderRadius:6, border:`2px solid ${task.is_completed ? t.success : t.textMuted}`, background: task.is_completed ? t.success : 'transparent', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, transition:'all .2s' }}>
+                            {task.is_completed && <i className="fas fa-check" style={{fontSize:11,color:'#fff'}}></i>}
+                          </div>
+                          <span style={{ fontSize:13, color: task.is_completed ? t.textMuted : t.text, textDecoration: task.is_completed ? 'line-through' : 'none', flex:1 }}>{task.task_name}</span>
+                          {task.completed_at && <span style={{ fontSize:10, color:t.textMuted }}>{fmtDateTime(task.completed_at)}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* MATERIALS */}
+              {detailTab === 'materials' && (
+                <div>
+                  <div style={{ display:'flex', gap:8, marginBottom:12 }}>
+                    <Input value={matForm.item_name} onChange={v=>setMatForm(f=>({...f,item_name:v}))} placeholder="Item name..." style={{flex:2}} />
+                    <Input type="number" value={matForm.quantity} onChange={v=>setMatForm(f=>({...f,quantity:parseInt(v)||1}))} placeholder="Qty" style={{flex:0,minWidth:70}} />
+                    <Input value={matForm.unit} onChange={v=>setMatForm(f=>({...f,unit:v}))} placeholder="Unit" style={{flex:0,minWidth:80}} />
+                    <div style={{display:'flex',alignItems:'flex-end'}}><Btn primary small onClick={()=>addMaterial(wo.id)}><i className="fas fa-plus"></i></Btn></div>
+                  </div>
+                  {materials.length === 0 ? <div style={{textAlign:'center',padding:20,color:t.textMuted,fontSize:13}}>No materials logged</div> :
+                    materials.map(m => (
+                      <div key={m.id} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'10px 12px', borderRadius:8, background:t.bg, marginBottom:4 }}>
+                        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                          <i className="fas fa-cube" style={{color:t.accent,fontSize:12}}></i>
+                          <span style={{fontSize:13,color:t.text}}>{m.item_name}</span>
+                        </div>
+                        <div style={{display:'flex',alignItems:'center',gap:12}}>
+                          <span style={{fontSize:12,color:t.textSec,fontWeight:600}}>{m.quantity} {m.unit}</span>
+                          <button onClick={()=>deleteMaterial(wo.id,m.id)} style={{background:'none',border:'none',color:t.danger,cursor:'pointer',fontSize:12}}><i className="fas fa-trash-alt"></i></button>
+                        </div>
+                      </div>
+                    ))
+                  }
+                </div>
+              )}
+
+              {/* PHOTOS */}
+              {detailTab === 'photos' && (
+                <div>
+                  {photos.length === 0 ? <div style={{textAlign:'center',padding:20,color:t.textMuted,fontSize:13}}>No photos uploaded</div> :
+                    <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(180px,1fr))', gap:12 }}>
+                      {photos.map(p => (
+                        <div key={p.id} style={{ borderRadius:12, overflow:'hidden', border:`1px solid ${t.border}` }}>
+                          <img src={p.photo_path} alt={p.caption||'Photo'} style={{ width:'100%', height:140, objectFit:'cover' }} />
+                          <div style={{ padding:8 }}>
+                            <div style={{fontSize:11,fontWeight:700,color:t.accent,textTransform:'capitalize'}}>{p.photo_type}</div>
+                            {p.caption && <div style={{fontSize:11,color:t.textSec}}>{p.caption}</div>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  }
+                </div>
+              )}
+
+              {/* ACTIVITY LOG */}
+              {detailTab === 'logs' && (
+                <div>
+                  {logs.length === 0 ? <div style={{textAlign:'center',padding:20,color:t.textMuted,fontSize:13}}>No activity recorded</div> :
+                    logs.map(l => (
+                      <div key={l.id} style={{ display:'flex', gap:12, padding:'10px 0', borderBottom:`1px solid ${t.border}` }}>
+                        <div style={{ width:32, height:32, borderRadius:8, background:`${t.accent}15`, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+                          <i className="fas fa-circle" style={{fontSize:8,color:t.accent}}></i>
+                        </div>
+                        <div style={{flex:1}}>
+                          <div style={{fontSize:13,fontWeight:600,color:t.text,textTransform:'capitalize'}}>{l.action.replace(/_/g,' ')}</div>
+                          {l.details && <div style={{fontSize:12,color:t.textSec,marginTop:2}}>{l.details}</div>}
+                          <div style={{fontSize:10,color:t.textMuted,marginTop:2}}>{l.performed_by} — {fmtDateTime(l.created_at)}</div>
+                        </div>
+                      </div>
+                    ))
+                  }
+                </div>
+              )}
+            </div>
+
+            {/* Signature */}
+            {sig && (
+              <Card style={{ marginTop:16, padding:14 }}>
+                <div style={{fontSize:11,fontWeight:700,color:t.textMuted,marginBottom:4}}>CUSTOMER SIGNATURE</div>
+                <div style={{display:'flex',alignItems:'center',gap:12}}>
+                  <img src={sig.signature_data} alt="Signature" style={{ maxHeight:60, borderRadius:4, border:`1px solid ${t.border}` }} />
+                  <div style={{fontSize:11,color:t.textMuted}}>Signed by {sig.signed_by || 'Customer'} — {fmtDateTime(sig.signed_at)}</div>
+                </div>
+              </Card>
+            )}
+
+            {/* Notes */}
+            {wo.notes && (
+              <Card style={{ marginTop:16, padding:14 }}>
+                <div style={{fontSize:11,fontWeight:700,color:t.textMuted,marginBottom:4}}>NOTES</div>
+                <div style={{fontSize:13,color:t.textSec,whiteSpace:'pre-wrap'}}>{wo.notes}</div>
+              </Card>
+            )}
+          </div>
+        )}
+      </Modal>
+    );
+  };
+
+  // ============================================================
+  //  CREATE WO MODAL
+  // ============================================================
+  const CreateWOModal = () => {
+    if (!showCreate) return null;
+    return (
+      <Modal title="Create Work Order" onClose={()=>setShowCreate(false)}>
+        <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+          <Input label="Subscriber ID" value={createForm.subscriber_id} onChange={v=>setCreateForm(f=>({...f,subscriber_id:v}))} placeholder="Enter subscriber ID" />
+          <div style={{ display:'flex', gap:12 }}>
+            <Input label="Type" value={createForm.type} onChange={v=>setCreateForm(f=>({...f,type:v}))} options={[
+              {value:'installation',label:'Installation'},{value:'survey',label:'Survey'},{value:'repair',label:'Repair'},
+              {value:'maintenance',label:'Maintenance'},{value:'relocation',label:'Relocation'},
+            ]} />
+            <Input label="Priority" value={createForm.priority} onChange={v=>setCreateForm(f=>({...f,priority:v}))} options={[
+              {value:'low',label:'Low'},{value:'normal',label:'Normal'},{value:'high',label:'High'},{value:'urgent',label:'Urgent'},
+            ]} />
+          </div>
+          <Input label="Assign To" value={createForm.assigned_to} onChange={v=>setCreateForm(f=>({...f,assigned_to:v}))} options={[{value:'',label:'Unassigned'}, ...installers.map(i=>({value:i.id.toString(),label:i.full_name}))]} />
+          <div style={{ display:'flex', gap:12 }}>
+            <Input label="Scheduled Date" type="date" value={createForm.scheduled_date} onChange={v=>setCreateForm(f=>({...f,scheduled_date:v}))} />
+            <Input label="Scheduled Time" value={createForm.scheduled_time} onChange={v=>setCreateForm(f=>({...f,scheduled_time:v}))} placeholder="e.g. 09:00 AM" />
+          </div>
+          <Input label="Notes" type="textarea" value={createForm.notes} onChange={v=>setCreateForm(f=>({...f,notes:v}))} placeholder="Additional notes..." />
+          <div style={{ display:'flex', justifyContent:'flex-end', gap:8, marginTop:8 }}>
+            <Btn ghost onClick={()=>setShowCreate(false)}>Cancel</Btn>
+            <Btn primary onClick={handleCreate} disabled={!createForm.subscriber_id}><i className="fas fa-plus"></i> Create Work Order</Btn>
+          </div>
+        </div>
+      </Modal>
+    );
+  };
+
+  // ============================================================
+  //  MAIN LAYOUT
+  // ============================================================
+  return (
+    <div style={{ height:'100vh', display:'flex', flexDirection:'column', background:t.bg }}>
+      {/* Top bar */}
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'14px 24px', background:t.bgCard, borderBottom:`1px solid ${t.border}` }}>
+        <div style={{ display:'flex', alignItems:'center', gap:14 }}>
+          <a href="/crm/" style={{ color:t.textMuted, textDecoration:'none', fontSize:14 }}><i className="fas fa-arrow-left"></i></a>
+          <div style={{ width:36, height:36, borderRadius:10, background:`linear-gradient(135deg,${t.accent},${t.accentDk})`, display:'flex', alignItems:'center', justifyContent:'center' }}>
+            <i className="fas fa-hard-hat" style={{fontSize:16,color:'#fff'}}></i>
+          </div>
+          <div>
+            <div style={{ fontSize:16, fontWeight:800, color:t.text }}>OSP Manager</div>
+            <div style={{ fontSize:11, color:t.textMuted }}>Outside Plant — Work Orders & Field Operations</div>
+          </div>
+        </div>
+        <Btn primary onClick={()=>setShowCreate(true)}><i className="fas fa-plus"></i> New Work Order</Btn>
+      </div>
+
+      {/* Tab bar */}
+      <div style={{ padding:'12px 24px 0', background:t.bgCard }}>
+        <TabBar tabs={[
+          { id:'dashboard', label:'Dashboard', icon:'fa-chart-line' },
+          { id:'workorders', label:'Work Orders', icon:'fa-clipboard-list', count:workOrders.length },
+          { id:'schedule', label:'Schedule', icon:'fa-calendar-alt' },
+          { id:'installers', label:'Field Team', icon:'fa-users' },
+        ]} active={tab} onSelect={setTab} />
+      </div>
+
+      {/* Content */}
+      <div style={{ flex:1, overflowY:'auto', padding:24 }}>
+        {tab === 'dashboard' && <DashboardTab />}
+        {tab === 'workorders' && <WorkOrdersTab />}
+        {tab === 'schedule' && <ScheduleTab />}
+        {tab === 'installers' && <InstallersTab />}
+      </div>
+
+      {/* Modals */}
+      {selectedWO && <WODetailModal />}
+      {showCreate && <CreateWOModal />}
+
+      {/* Toast */}
+      {toast && (
+        <div style={{ position:'fixed', bottom:24, right:24, padding:'12px 20px', borderRadius:12, background: toast.type==='error' ? t.danger : t.success, color:'#fff', fontSize:13, fontWeight:600, boxShadow:t.shadowLg, zIndex:99999, animation:'fadeIn .2s ease-out', display:'flex', alignItems:'center', gap:8 }}>
+          <i className={`fas ${toast.type==='error'?'fa-exclamation-circle':'fa-check-circle'}`}></i>{toast.msg}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ============================================================
+//  RENDER
+// ============================================================
+ReactDOM.render(<OSPManager />, document.getElementById('root'));
+</script>
+
+<!-- ── JSX Compiler (same as other CRM pages) ──────────────── -->
+<script>
+(function(){
+  const src = document.getElementById('jsx-source');
+  if (!src) return;
+  let code = src.textContent;
+  // Minimal JSX transform
+  function transformJSX(code) {
+    let result = '';
+    let i = 0;
+    const len = code.length;
+    while (i < len) {
+      if (code[i] === '/' && code[i+1] === '/') {
+        const end = code.indexOf('\n', i);
+        result += code.slice(i, end === -1 ? len : end);
+        i = end === -1 ? len : end;
+      } else if (code[i] === '/' && code[i+1] === '*') {
+        const end = code.indexOf('*/', i);
+        result += code.slice(i, end === -1 ? len : end + 2);
+        i = end === -1 ? len : end + 2;
+      } else if (code[i] === '"' || code[i] === "'" || code[i] === '`') {
+        const q = code[i];
+        let j = i + 1;
+        while (j < len && code[j] !== q) { if (code[j] === '\\') j++; j++; }
+        result += code.slice(i, j + 1);
+        i = j + 1;
+      } else if (code[i] === '<' && (code[i+1] === '/' || /[A-Za-z_]/.test(code[i+1]))) {
+        const jsx = parseJSXElement(code, i);
+        if (jsx) { result += jsx.code; i = jsx.end; }
+        else { result += code[i]; i++; }
+      } else { result += code[i]; i++; }
+    }
+    return result;
+  }
+  function parseJSXElement(code, start) {
+    let i = start;
+    if (code[i] !== '<') return null;
+    i++;
+    const isClosing = code[i] === '/';
+    if (isClosing) return null;
+    let tagStart = i;
+    while (i < code.length && /[A-Za-z0-9_.$]/.test(code[i])) i++;
+    const tag = code.slice(tagStart, i);
+    if (!tag) return null;
+    const isComponent = /^[A-Z_]/.test(tag);
+    const tagStr = isComponent ? tag : `"${tag}"`;
+    let props = [];
+    let spreadProps = [];
+    while (i < code.length) {
+      while (i < code.length && /\s/.test(code[i])) i++;
+      if (code[i] === '/' && code[i+1] === '>') {
+        i += 2;
+        const propsStr = buildProps(props, spreadProps);
+        return { code: `React.createElement(${tagStr},${propsStr})`, end: i };
+      }
+      if (code[i] === '>') { i++; break; }
+      if (code[i] === '{' && code[i+1] === '.' && code[i+2] === '.' && code[i+3] === '.') {
+        i += 4;
+        let depth = 1, expr = '';
+        while (i < code.length && depth > 0) {
+          if (code[i] === '{') depth++;
+          if (code[i] === '}') depth--;
+          if (depth > 0) expr += code[i];
+          i++;
+        }
+        spreadProps.push(transformJSX(expr.trim()));
+        continue;
+      }
+      let attrStart = i;
+      while (i < code.length && /[A-Za-z0-9_\-]/.test(code[i])) i++;
+      const attr = code.slice(attrStart, i);
+      if (!attr) { i++; continue; }
+      const propName = attr === 'class' ? 'className' : attr === 'for' ? 'htmlFor' : attr;
+      while (i < code.length && /\s/.test(code[i])) i++;
+      if (code[i] !== '=') { props.push([propName, 'true']); continue; }
+      i++;
+      while (i < code.length && /\s/.test(code[i])) i++;
+      if (code[i] === '"' || code[i] === "'") {
+        const q = code[i]; i++;
+        let val = '';
+        while (i < code.length && code[i] !== q) { if (code[i] === '\\') { val += code[i]; i++; } val += code[i]; i++; }
+        i++;
+        props.push([propName, `"${val.replace(/"/g, '\\"')}"`]);
+      } else if (code[i] === '{') {
+        i++;
+        let depth = 1, expr = '';
+        while (i < code.length && depth > 0) {
+          if (code[i] === '{' || code[i] === '(' || code[i] === '[') depth++;
+          if (code[i] === '}' || code[i] === ')' || code[i] === ']') depth--;
+          if (code[i] === '"' || code[i] === "'" || code[i] === '`') {
+            const q = code[i]; expr += code[i]; i++;
+            while (i < code.length && code[i] !== q) { if (code[i] === '\\') { expr += code[i]; i++; } expr += code[i]; i++; }
+            if (i < code.length) { expr += code[i]; i++; }
+            continue;
+          }
+          if (depth > 0) expr += code[i];
+          i++;
+        }
+        props.push([propName, transformJSX(expr.trim())]);
+      }
+    }
+    let children = [];
+    while (i < code.length) {
+      while (i < code.length && /\s/.test(code[i])) i++;
+      if (code[i] === '<' && code[i+1] === '/') {
+        i += 2;
+        while (i < code.length && code[i] !== '>') i++;
+        i++;
+        break;
+      }
+      if (code[i] === '<') {
+        const child = parseJSXElement(code, i);
+        if (child) { children.push(child.code); i = child.end; }
+        else { i++; }
+      } else if (code[i] === '{') {
+        i++;
+        let depth = 1, expr = '';
+        while (i < code.length && depth > 0) {
+          if (code[i] === '{' || code[i] === '(' || code[i] === '[') depth++;
+          if (code[i] === '}' || code[i] === ')' || code[i] === ']') depth--;
+          if (code[i] === '"' || code[i] === "'" || code[i] === '`') {
+            const q = code[i]; expr += code[i]; i++;
+            while (i < code.length && code[i] !== q) { if (code[i] === '\\') { expr += code[i]; i++; } expr += code[i]; i++; }
+            if (i < code.length) { expr += code[i]; i++; }
+            continue;
+          }
+          if (depth > 0) expr += code[i];
+          i++;
+        }
+        const transformed = transformJSX(expr.trim());
+        if (transformed) children.push(transformed);
+      } else {
+        let text = '';
+        while (i < code.length && code[i] !== '<' && code[i] !== '{') { text += code[i]; i++; }
+        text = text.trim();
+        if (text) children.push(`"${text.replace(/\\/g,'\\\\').replace(/"/g,'\\"').replace(/\n/g,'\\n')}"`);
+      }
+    }
+    const propsStr = buildProps(props, spreadProps);
+    const args = [tagStr, propsStr, ...children].join(',');
+    return { code: `React.createElement(${args})`, end: i };
+  }
+  function buildProps(props, spreadProps) {
+    if (props.length === 0 && spreadProps.length === 0) return 'null';
+    let parts = [];
+    if (spreadProps.length > 0) parts.push(...spreadProps.map(s => `...${s}`));
+    parts.push(...props.map(([k, v]) => {
+      const safe = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(k) ? k : `"${k}"`;
+      return `${safe}:${v}`;
+    }));
+    return `Object.assign({${parts.join(',')}})`;
+  }
+  try {
+    const transformed = transformJSX(code);
+    const script = document.createElement('script');
+    script.textContent = transformed;
+    document.body.appendChild(script);
+  } catch(e) {
+    console.error('JSX Transform Error:', e);
+    document.getElementById('root').innerHTML = '<div style="color:red;padding:40px;font-family:monospace"><h2>JSX Compile Error</h2><pre>'+e.message+'</pre></div>';
+  }
+})();
+</script>
+</body>
+</html>

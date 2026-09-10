@@ -1,0 +1,559 @@
+// ============================================================
+// NETFACTORY — Centralized Notification Templates
+// ============================================================
+// All email HTML and SMS text templates live here in one place.
+// To edit any message: find the template name and update the text.
+// Company info is always read live from system_settings.
+//
+// STATUS FLOW:
+//   prospective → surveyed → approved → pending → active
+//   Any status  → suspended / disconnected / declined
+//
+// Available templates:
+//   application_received   — new prospective subscriber
+//   survey_scheduled       — survey date set
+//   application_approved   — survey passed, awaiting install schedule
+//   installation_scheduled — install date confirmed (moves to pending)
+//   welcome_active         — account activated (includes credentials)
+//   service_restored       — suspended → active reactivation
+//   account_suspended      — account suspended
+//   account_disconnected   — account disconnected
+//   application_declined   — application rejected
+//   invoice_reminder       — upcoming payment due
+//   payment_received       — payment confirmed
+//   password_reset         — password reset link/OTP
+// ============================================================
+
+const msgTemplates = require('../config/message-templates');
+
+// ── Shared email wrapper ────────────────────────────────────
+function emailWrap(accentColor, badgeLabel, bodyHtml, c) {
+  const name    = c.name    || 'Netfactory';
+  const domain  = c.domain  || 'netfactory.com.ph';
+  const phone   = c.phone   || '';
+  const email   = c.email   || '';
+  const address = c.address || '';
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>${name}</title>
+</head>
+<body style="margin:0;padding:0;background:#f1f5f9;font-family:Arial,Helvetica,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9;padding:32px 16px;">
+<tr><td align="center">
+<table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:14px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.09);max-width:600px;">
+
+  <!-- HEADER -->
+  <tr><td style="background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);padding:28px 36px;text-align:center;">
+    <div style="display:inline-block;background:${accentColor};border-radius:10px;padding:8px 18px;margin-bottom:12px;">
+      <span style="color:#ffffff;font-size:20px;font-weight:900;letter-spacing:2px;">${c.shortName || 'NF'}</span>
+    </div>
+    <h1 style="color:#ffffff;margin:8px 0 4px;font-size:20px;font-weight:800;letter-spacing:0.5px;">${name}</h1>
+    <p style="color:#94a3b8;margin:0;font-size:13px;">${badgeLabel}</p>
+  </td></tr>
+
+  <!-- BODY -->
+  <tr><td style="padding:32px 36px;"><!--BODY_START-->${bodyHtml}<!--BODY_END--></td></tr>
+
+  <!-- FOOTER -->
+  <tr><td style="background:#f8fafc;border-top:1px solid #e2e8f0;padding:20px 36px;text-align:center;">
+    <p style="margin:0;color:#64748b;font-size:12px;line-height:2;">
+      <strong style="color:#1e293b;">${name}</strong><br>
+      ${address ? address + '<br>' : ''}
+      ${phone ? phone + (email ? '&nbsp; | &nbsp;' : '') : ''}
+      ${email ? '<a href="mailto:' + email + '" style="color:#3b82f6;text-decoration:none;">' + email + '</a>' : ''}<br>
+      <a href="https://${domain}" style="color:#3b82f6;text-decoration:none;">https://${domain}</a>
+    </p>
+    <p style="margin:10px 0 0;color:#94a3b8;font-size:11px;">You received this because you are a subscriber of ${name}.</p>
+  </td></tr>
+
+</table>
+</td></tr>
+</table>
+</body>
+</html>`;
+}
+
+// ── Info box table ──────────────────────────────────────────
+function infoBox(accentColor, rows) {
+  const html = rows.map(([label, value], i) =>
+    `<tr style="background:${i % 2 === 0 ? '#f8fafc' : '#ffffff'};">
+      <td style="padding:10px 14px;color:#64748b;font-size:13px;width:42%;border-bottom:1px solid #f1f5f9;">${label}</td>
+      <td style="padding:10px 14px;font-weight:600;color:#0f172a;font-size:13px;border-bottom:1px solid #f1f5f9;">${value}</td>
+    </tr>`
+  ).join('');
+  return `<table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;border:1px solid ${accentColor}40;border-radius:10px;overflow:hidden;margin:20px 0;">${html}</table>`;
+}
+
+// ── CTA button ──────────────────────────────────────────────
+function ctaBtn(label, url, color) {
+  return `<p style="text-align:center;margin:28px 0;">
+    <a href="${url}" style="background:${color};color:#ffffff;padding:14px 38px;border-radius:8px;text-decoration:none;font-weight:700;font-size:14px;display:inline-block;">${label}</a>
+  </p>`;
+}
+
+// ── Alert/info box ──────────────────────────────────────────
+function alertBox(bg, border, textColor, content) {
+  return `<div style="background:${bg};border:1px solid ${border};border-radius:8px;padding:14px 16px;margin:16px 0;">
+    <p style="margin:0;font-size:13px;color:${textColor};line-height:1.8;">${content}</p>
+  </div>`;
+}
+
+// ── Credential box (dark) ───────────────────────────────────
+function credBox(username, password, portalUrl) {
+  return `<div style="background:#0f172a;border-radius:10px;padding:20px 24px;margin:20px 0;font-family:monospace;">
+    <p style="color:#94a3b8;font-size:11px;margin:0 0 14px;text-transform:uppercase;letter-spacing:1px;">Your Login Credentials</p>
+    <p style="margin:6px 0;"><span style="color:#64748b;font-size:13px;display:inline-block;width:110px;">Portal URL</span><a href="${portalUrl}" style="color:#38bdf8;font-size:13px;">${portalUrl}</a></p>
+    <p style="margin:6px 0;"><span style="color:#64748b;font-size:13px;display:inline-block;width:110px;">Username</span><strong style="color:#f0f9ff;font-size:16px;">${username}</strong></p>
+    <p style="margin:6px 0;"><span style="color:#64748b;font-size:13px;display:inline-block;width:110px;">Password</span><strong style="color:#4ade80;font-size:16px;">${password}</strong></p>
+  </div>
+  <p style="color:#ef4444;font-size:12px;text-align:center;margin:4px 0 16px;">IMPORTANT: Please change your password immediately after your first login.</p>`;
+}
+
+// ============================================================
+// EMAIL TEMPLATES
+// ============================================================
+const emailTemplates = {
+
+  // 1. New application received (prospective)
+  application_received: (d, c) => ({
+    subject: `${c.name} — We've Received Your Application`,
+    html: emailWrap('#3b82f6', 'Application Received', `
+      <p style="font-size:15px;color:#0f172a;">Hi <strong>${d.name}</strong>,</p>
+      <p style="color:#475569;line-height:1.7;margin:0 0 16px;">
+        Thank you for your interest in <strong>${c.name}</strong>! We have successfully received your application and our team will be in touch soon.
+      </p>
+      ${infoBox('#3b82f6', [
+        ['Account Number', d.accountNumber],
+        ['Name', d.name],
+        ['Address', d.address || '—'],
+        ['Plan Requested', d.plan || 'To be determined'],
+        ['Current Status', 'Under Review'],
+      ])}
+      ${alertBox('#eff6ff', '#bfdbfe', '#1e40af', `
+        <strong>What happens next?</strong><br>
+        1. Our team reviews your application<br>
+        2. We schedule a site survey at your location<br>
+        3. If the survey passes, we schedule installation<br>
+        4. Your internet service goes live!
+      `)}
+      <p style="color:#64748b;font-size:13px;">Questions? Contact us at ${c.phone || c.email || 'our support team'}.</p>
+    `, c),
+  }),
+
+  // 2. Survey scheduled (prospective → surveyed)
+  survey_scheduled: (d, c) => ({
+    subject: `${c.name} — Your Site Survey Has Been Scheduled`,
+    html: emailWrap('#8b5cf6', 'Survey Scheduled', `
+      <p style="font-size:15px;color:#0f172a;">Hi <strong>${d.name}</strong>,</p>
+      <p style="color:#475569;line-height:1.7;margin:0 0 16px;">
+        A site survey has been scheduled for your location. Our technical team will visit to assess installation feasibility.
+      </p>
+      ${infoBox('#8b5cf6', [
+        ['Account Number', d.accountNumber],
+        ['Survey Date', d.scheduleDate || 'To be confirmed'],
+        ['Survey Time', d.scheduleTime || 'To be confirmed'],
+        ['Address', d.address || '—'],
+      ])}
+      ${alertBox('#fdf4ff', '#e9d5ff', '#6b21a8', `
+        <strong>Please prepare:</strong><br>
+        • Someone must be available at the property<br>
+        • Our technician will call before arriving<br>
+        • The survey typically takes 30–60 minutes
+      `)}
+      <p style="color:#64748b;font-size:13px;">Need to reschedule? Contact us immediately at ${c.phone || ''}.</p>
+    `, c),
+  }),
+
+  // 2b. Survey completed — under review (prospective → surveyed)
+  survey_completed: (data, company) => ({
+    subject: `${company.name || 'Netfactory'} — Site Survey Completed`,
+    html: emailWrap('#6366f1', 'Survey Completed', `
+      <p style="font-size:15px;color:#0f172a;">Hi <strong>${data.name}</strong>,</p>
+      <p style="color:#475569;line-height:1.7;">Thank you for allowing our team to conduct a site survey at your location. The survey has been <strong>completed</strong> and we are now reviewing the results.</p>
+      ${infoBox('#6366f1', [
+        ['Account Number', data.accountNumber],
+        ['Plan', data.plan || '—'],
+        ['Status', 'Survey Completed — Under Review'],
+      ])}
+      <p style="color:#475569;line-height:1.7;">Our team will review the survey results and get back to you within <strong>1–2 business days</strong> regarding your application status.</p>
+      <p style="color:#64748b;font-size:13px;">Questions? Contact us at ${company.phone || ''} or reply to this email.</p>
+    `, company),
+  }),
+
+  // 3. Application approved (surveyed → approved)
+  application_approved: (d, c) => ({
+    subject: `${c.name} — Your Application Has Been Approved!`,
+    html: emailWrap('#10b981', 'Application Approved', `
+      <p style="font-size:15px;color:#0f172a;">Hi <strong>${d.name}</strong>,</p>
+      <p style="color:#475569;line-height:1.7;margin:0 0 16px;">
+        Excellent news! After our site survey, we are pleased to confirm that your location is
+        <strong style="color:#10b981;">approved</strong> for installation.
+      </p>
+      ${infoBox('#10b981', [
+        ['Account Number', d.accountNumber],
+        ['Plan', d.plan || '—'],
+        ['Monthly Rate', d.monthlyRate ? `₱${d.monthlyRate}` : '—'],
+        ['Next Step', 'Installation Scheduling'],
+        ['Status', 'Approved — Awaiting Schedule'],
+      ])}
+      ${alertBox('#f0fdf4', '#bbf7d0', '#166534', `
+        <strong>What's next?</strong><br>
+        Our scheduling team will contact you shortly to set your installation date.
+        Installation typically takes <strong>2–4 hours</strong>.
+      `)}
+      <p style="color:#64748b;font-size:13px;">Questions? Contact us at ${c.phone || c.email || ''}.</p>
+    `, c),
+  }),
+
+  // 4. Installation scheduled (approved → pending)
+  installation_scheduled: (d, c) => ({
+    subject: `${c.name} — Your Installation Is Scheduled`,
+    html: emailWrap('#f59e0b', 'Installation Scheduled', `
+      <p style="font-size:15px;color:#0f172a;">Hi <strong>${d.name}</strong>,</p>
+      <p style="color:#475569;line-height:1.7;margin:0 0 16px;">
+        Your installation date is confirmed! Our technician team will visit your location as scheduled below.
+      </p>
+      ${infoBox('#f59e0b', [
+        ['Account Number', d.accountNumber],
+        ['Plan', d.plan || '—'],
+        ['Installation Date', d.scheduleDate || 'To be confirmed'],
+        ['Installation Time', d.scheduleTime || 'Morning or afternoon'],
+        ['Address', d.address || '—'],
+      ])}
+      ${alertBox('#fef3c7', '#fde68a', '#92400e', `
+        <strong>Prepare for installation day:</strong><br>
+        • Someone must be present and available<br>
+        • Provide access to where the router/ONT will be placed<br>
+        • Have a power outlet available near the installation area<br>
+        • Our technician will call you 30 minutes before arriving
+      `)}
+      <p style="color:#64748b;font-size:13px;">Need to reschedule? Call us immediately at ${c.phone || ''}.</p>
+    `, c),
+  }),
+
+  // 5. Account activated — WELCOME with login credentials
+  welcome_active: (d, c) => {
+    const portalUrl = `https://${c.domain}/portal/`;
+    return {
+      subject: `Welcome to ${c.name} — Your Account is Now ACTIVE!`,
+      html: emailWrap('#22c55e', 'Account Activated', `
+        <p style="font-size:15px;color:#0f172a;">Hi <strong>${d.name}</strong>,</p>
+        <p style="color:#475569;line-height:1.7;margin:0 0 16px;">
+          Your internet service is now <strong style="color:#22c55e;">live and active!</strong>
+          Welcome to <strong>${c.name}</strong> — we're excited to have you with us.
+        </p>
+        ${infoBox('#22c55e', [
+          ['Account Number', d.accountNumber],
+          ['Plan', d.plan || '—'],
+          ['Speed', d.speed || '—'],
+          ['Activated On', new Date().toLocaleDateString('en-PH', {year:'numeric',month:'long',day:'numeric'})],
+          ['Monthly Bill', d.monthlyRate ? `₱${d.monthlyRate}` : '—'],
+        ])}
+        <p style="font-size:14px;font-weight:700;color:#0f172a;margin:24px 0 6px;">Your Subscriber Portal Access</p>
+        <p style="color:#64748b;font-size:13px;margin:0 0 4px;">Use these to log in and manage your account, view invoices, and pay your bill online:</p>
+        ${credBox(d.username || d.accountNumber, d.password, portalUrl)}
+        ${ctaBtn('Login to Your Portal →', portalUrl, '#22c55e')}
+        ${alertBox('#f0fdf4', '#bbf7d0', '#166534', `
+          <strong>Getting started:</strong><br>
+          • <strong>Change your password</strong> right after your first login<br>
+          • Pay your monthly bill online (GCash, Maya, bank transfer)<br>
+          • For technical support call: ${c.phone || ''}<br>
+          • Keep your account number: <strong>${d.accountNumber}</strong>
+        `)}
+        <p style="color:#64748b;font-size:13px;">Need help? Call ${c.phone || ''} or email ${c.email || ''}.</p>
+      `, c),
+    };
+  },
+
+  // 6. Service restored (suspended → active)
+  service_restored: (d, c) => {
+    const portalUrl = `https://${c.domain}/portal/`;
+    return {
+      subject: `${c.name} — Your Service Has Been Restored`,
+      html: emailWrap('#22c55e', 'Service Restored', `
+        <p style="font-size:15px;color:#0f172a;">Hi <strong>${d.name}</strong>,</p>
+        <p style="color:#475569;line-height:1.7;margin:0 0 16px;">
+          Great news! Your <strong>${c.name}</strong> internet service has been
+          <strong style="color:#22c55e;">restored</strong> and is now active again.
+        </p>
+        ${infoBox('#22c55e', [
+          ['Account Number', d.accountNumber],
+          ['Plan', d.plan || '—'],
+          ['Status', 'Active'],
+          ['Restored On', new Date().toLocaleDateString('en-PH', {year:'numeric',month:'long',day:'numeric'})],
+        ])}
+        ${ctaBtn('Go to Your Portal →', portalUrl, '#22c55e')}
+        <p style="color:#64748b;font-size:13px;">
+          Thank you for settling your account. If you experience issues, contact us at ${c.phone || ''}.
+        </p>
+      `, c),
+    };
+  },
+
+  // 7. Account suspended
+  account_suspended: (d, c) => {
+    const portalUrl = `https://${c.domain}/portal/`;
+    return {
+      subject: `${c.name} — Important: Account Suspended`,
+      html: emailWrap('#ef4444', 'Account Suspended', `
+        <p style="font-size:15px;color:#0f172a;">Hi <strong>${d.name}</strong>,</p>
+        <p style="color:#475569;line-height:1.7;margin:0 0 16px;">
+          We regret to inform you that your account has been
+          <strong style="color:#ef4444;">suspended</strong> due to an unpaid balance.
+          Your internet service has been temporarily interrupted.
+        </p>
+        ${infoBox('#ef4444', [
+          ['Account Number', d.accountNumber],
+          ['Outstanding Balance', d.balance || '—'],
+          ['Reason', d.reason || 'Non-payment'],
+          ['Suspended On', new Date().toLocaleDateString('en-PH', {year:'numeric',month:'long',day:'numeric'})],
+        ])}
+        ${alertBox('#fef2f2', '#fecaca', '#991b1b', `
+          <strong>To restore your service:</strong><br>
+          Please settle your outstanding balance as soon as possible.
+          Payment options: GCash, Maya, online banking, or our office.
+        `)}
+        ${ctaBtn('Pay Now to Restore →', portalUrl, '#ef4444')}
+        <p style="color:#64748b;font-size:13px;">
+          For payment arrangements, contact us at ${c.phone || ''} or ${c.email || ''}.
+        </p>
+      `, c),
+    };
+  },
+
+  // 8. Account disconnected
+  account_disconnected: (d, c) => ({
+    subject: `${c.name} — Account Disconnected`,
+    html: emailWrap('#64748b', 'Account Disconnected', `
+      <p style="font-size:15px;color:#0f172a;">Hi <strong>${d.name}</strong>,</p>
+      <p style="color:#475569;line-height:1.7;margin:0 0 16px;">
+        Your account with <strong>${c.name}</strong> has been <strong>disconnected</strong>.
+      </p>
+      ${infoBox('#64748b', [
+        ['Account Number', d.accountNumber],
+        ['Reason', d.reason || 'Account closure'],
+        ['Disconnected On', new Date().toLocaleDateString('en-PH', {year:'numeric',month:'long',day:'numeric'})],
+      ])}
+      <p style="color:#475569;line-height:1.7;">
+        If you believe this is an error or wish to reconnect, please contact us at ${c.phone || c.email || ''}.
+      </p>
+      <p style="color:#64748b;font-size:13px;">Thank you for being a ${c.name} subscriber.</p>
+    `, c),
+  }),
+
+  // 9. Application declined
+  application_declined: (d, c) => ({
+    subject: `${c.name} — Update on Your Application`,
+    html: emailWrap('#f59e0b', 'Application Update', `
+      <p style="font-size:15px;color:#0f172a;">Hi <strong>${d.name}</strong>,</p>
+      <p style="color:#475569;line-height:1.7;margin:0 0 16px;">
+        We regret to inform you that after careful evaluation, we are unable to proceed with your application at this time.
+      </p>
+      ${infoBox('#f59e0b', [
+        ['Account Number', d.accountNumber],
+        ['Reason', d.reason || 'Coverage or technical limitations in your area'],
+      ])}
+      <p style="color:#475569;line-height:1.7;">
+        We are continuously expanding our network and may be able to serve your area in the future.
+        We welcome you to re-apply once coverage becomes available.
+      </p>
+      <p style="color:#64748b;font-size:13px;">For more information, call ${c.phone || c.email || ''}.</p>
+    `, c),
+  }),
+
+  // 10. Invoice reminder
+  invoice_reminder: (d, c) => {
+    const portalUrl = `https://${c.domain}/portal/`;
+    return {
+      subject: `${c.name} — Invoice ${d.invoiceNumber} Due on ${d.dueDate}`,
+      html: emailWrap('#f59e0b', 'Payment Reminder', `
+        <p style="font-size:15px;color:#0f172a;">Hi <strong>${d.name}</strong>,</p>
+        <p style="color:#475569;line-height:1.7;margin:0 0 16px;">
+          This is a friendly reminder that your invoice is due soon. Please settle before the due date to avoid interruption.
+        </p>
+        ${infoBox('#f59e0b', [
+          ['Invoice Number', d.invoiceNumber],
+          ['Amount Due', d.amount],
+          ['Due Date', d.dueDate],
+          ['Account Number', d.accountNumber || '—'],
+        ])}
+        ${ctaBtn('Pay Now →', portalUrl, '#f59e0b')}
+        ${alertBox('#fef3c7', '#fde68a', '#92400e', `
+          <strong>Payment options:</strong> GCash, Maya, online banking, or at our office.<br>
+          Pay online: <a href="${portalUrl}" style="color:#92400e;">${portalUrl}</a>
+        `)}
+        <p style="color:#64748b;font-size:13px;">Questions? Call ${c.phone || ''}.</p>
+      `, c),
+    };
+  },
+
+  // 11. Payment received
+  payment_received: (d, c) => {
+    const portalUrl = `https://${c.domain}/portal/`;
+    return {
+      subject: `${c.name} — Payment Received (${d.invoiceNumber})`,
+      html: emailWrap('#10b981', 'Payment Confirmed', `
+        <p style="font-size:15px;color:#0f172a;">Hi <strong>${d.name}</strong>,</p>
+        <p style="color:#475569;line-height:1.7;margin:0 0 16px;">We have successfully received your payment. Thank you!</p>
+        ${infoBox('#10b981', [
+          ['Invoice', d.invoiceNumber],
+          ['Amount Paid', d.amount],
+          ['Payment Method', d.method || '—'],
+          ['Date', d.date || '—'],
+          ['Reference #', d.reference || '—'],
+        ])}
+        ${ctaBtn('View Invoice →', portalUrl, '#10b981')}
+        <p style="color:#64748b;font-size:13px;">Keep this as your receipt. For concerns, contact ${c.phone || ''}.</p>
+      `, c),
+    };
+  },
+
+  // 12. Password reset
+  password_reset: (d, c) => ({
+    subject: `${c.name} — Password Reset Request`,
+    html: emailWrap('#3b82f6', 'Password Reset', `
+      <p style="font-size:15px;color:#0f172a;">Hi <strong>${d.name}</strong>,</p>
+      <p style="color:#475569;line-height:1.7;margin:0 0 16px;">
+        We received a request to reset the password for account <strong>${d.accountNumber}</strong>.
+      </p>
+      ${ctaBtn('Reset My Password →', d.resetUrl, '#3b82f6')}
+      ${alertBox('#eff6ff', '#bfdbfe', '#1e40af', `
+        This link expires in <strong>1 hour</strong>.<br>
+        If you did not request a password reset, please ignore this email. Your account is safe.
+      `)}
+      <p style="color:#64748b;font-size:13px;">Need help? Contact us at ${c.phone || c.email || ''}.</p>
+    `, c),
+  }),
+};
+
+// ============================================================
+// SMS TEMPLATES — Keep concise (160 chars = 1 credit)
+// ============================================================
+const smsTemplates = {
+  application_received: (d, c) =>
+    `${c.shortName}: Hi ${d.name}! App received (Acct: ${d.accountNumber}). We'll contact you in 2-3 days for site survey. Call ${c.phone} for questions.`,
+
+  survey_scheduled: (d, c) =>
+    `${c.shortName}: Hi ${d.name}, site survey scheduled on ${d.scheduleDate || 'TBD'}${d.scheduleTime ? ' at ' + d.scheduleTime : ''}. Our team will call before arriving. Call ${c.phone} to reschedule.`,
+
+  survey_completed: (d, c) =>
+    `${c.shortName}: Hi ${d.name}, our team has completed the site survey at your location. We are now reviewing the results and will update you within 1-2 business days. Call ${c.phone} for questions.`,
+
+  application_approved: (d, c) =>
+    `${c.shortName}: Congrats ${d.name}! Application APPROVED. We'll call you soon to schedule installation. Call ${c.phone} for questions.`,
+
+  installation_scheduled: (d, c) =>
+    `${c.shortName}: Hi ${d.name}, installation on ${d.scheduleDate || 'TBD'}${d.scheduleTime ? ' at ' + d.scheduleTime : ''}. Please be home. Call ${c.phone} to reschedule.`,
+
+  welcome_active: (d, c) =>
+    `${c.shortName}: Welcome ${d.name}! Acct ${d.accountNumber} ACTIVE. Portal: https://${c.domain}/portal/ User: ${d.username || d.accountNumber} PW: ${d.password} Change PW on 1st login!`,
+
+  service_restored: (d, c) =>
+    `${c.shortName}: Hi ${d.name}, good news! Acct ${d.accountNumber} is RESTORED and active again. Thank you for your payment!`,
+
+  account_suspended: (d, c) =>
+    `${c.shortName}: Hi ${d.name}, acct ${d.accountNumber} SUSPENDED. Balance: ${d.balance}. Pay at https://${c.domain}/portal/ or call ${c.phone}.`,
+
+  account_disconnected: (d, c) =>
+    `${c.shortName}: Hi ${d.name}, acct ${d.accountNumber} has been disconnected. Call ${c.phone} for questions or to reconnect.`,
+
+  application_declined: (d, c) =>
+    `${c.shortName}: Hi ${d.name}, we're unable to process your application at this time. Call ${c.phone} for more information.`,
+
+  invoice_reminder: (d, c) =>
+    `${c.shortName}: Hi ${d.name}, invoice ${d.invoiceNumber} for ${d.amount} due on ${d.dueDate}. Pay at https://${c.domain}/portal/ or via GCash/Maya.`,
+
+  payment_received: (d, c) =>
+    `${c.shortName}: Payment of ${d.amount} received for ${d.invoiceNumber}. Thank you! Ref: ${d.reference || 'N/A'}`,
+
+  password_reset: (d, c) =>
+    `${c.shortName}: Password reset code: ${d.code}. Valid 1 hour. Do not share this code.`,
+};
+
+// ============================================================
+// EXPORTS
+// ============================================================
+
+function getEmailTemplate(name, data, company = {}) {
+  const fn = emailTemplates[name];
+  if (!fn) { console.error(`[NOTIFY] Unknown email template: ${name}`); return null; }
+  // A staff edit from the CRM wins over the text below; with no edit saved this
+  // returns exactly what fn() always returned.
+  return msgTemplates.renderEmail(name, data, company, () => fn(data, company));
+}
+
+function getSmsTemplate(name, data, company = {}) {
+  const fn = smsTemplates[name];
+  if (!fn) { console.error(`[NOTIFY] Unknown SMS template: ${name}`); return null; }
+  return msgTemplates.renderSms(name, data, company, () => fn(data, company));
+}
+
+async function getCompanyInfo(prisma) {
+  try {
+    const rows = await prisma.system_settings.findMany();
+    const s = {};
+    rows.forEach(r => { s[r.key] = r.value; });
+
+    const rawDomain = s.company_website || s.company_domain || 'netfactory.com.ph';
+    const domain = rawDomain.replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const address = [s.company_address1, s.company_address2, s.company_city]
+      .filter(Boolean).join(', ') || s.company_address || '';
+
+    return {
+      name:      s.company_name       || 'Netfactory',
+      shortName: s.company_short_name || 'NF',
+      email:     s.company_email      || '',
+      phone:     s.company_phone      || '',
+      address,
+      domain,
+      portalUrl: `https://${domain}/portal/`,
+    };
+  } catch (err) {
+    console.error('[NOTIFY] Could not fetch company info:', err.message);
+    return {
+      name: 'Netfactory',
+      shortName: 'NF',
+      email: '', phone: '', address: '',
+      domain: 'netfactory.com.ph',
+      portalUrl: 'https://netfactory.com.ph/portal/',
+    };
+  }
+}
+
+/**
+ * Send both email and SMS for a given template — errors never break the caller.
+ */
+async function sendNotification({ template, data, company, email, phone, emailSvc, smsSvc }) {
+  const promises = [];
+
+  if (email && emailSvc) {
+    const tmpl = getEmailTemplate(template, data, company);
+    if (tmpl) {
+      promises.push(
+        emailSvc.send({ to: email, subject: tmpl.subject, html: tmpl.html })
+          .catch(err => console.error(`[EMAIL][${template}] → ${email}:`, err.message))
+      );
+    }
+  }
+
+  if (phone && smsSvc) {
+    const text = getSmsTemplate(template, data, company);
+    if (text) {
+      promises.push(
+        smsSvc.send(phone, text)
+          .catch(err => console.error(`[SMS][${template}] → ${phone}:`, err.message))
+      );
+    }
+  }
+
+  await Promise.allSettled(promises);
+}
+
+// emailTemplates/smsTemplates are exported so the CRM template panel can show the
+// built-in default alongside an edit, and restore it on reset.
+module.exports = { getEmailTemplate, getSmsTemplate, getCompanyInfo, sendNotification,
+  emailTemplates, smsTemplates };

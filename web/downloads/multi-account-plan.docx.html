@@ -1,0 +1,454 @@
+<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+<meta charset="UTF-8">
+<meta name="ProgId" content="Word.Document">
+<meta name="Generator" content="Microsoft Word 15">
+<meta name="Originator" content="Microsoft Word 15">
+<style>
+  body { font-family:'Segoe UI',Calibri,sans-serif; font-size:11pt; color:#1e293b; line-height:1.5; margin:40px; }
+  h1 { font-size:22pt; font-weight:800; color:#0f172a; margin-bottom:4px; }
+  h2 { font-size:16pt; font-weight:700; color:#0f172a; margin-top:28px; margin-bottom:10px; border-bottom:2px solid #e2e8f0; padding-bottom:6px; }
+  h3 { font-size:13pt; font-weight:700; color:#334155; margin-top:16px; margin-bottom:6px; }
+  h4 { font-size:11pt; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.3px; margin-top:12px; margin-bottom:4px; }
+  p { margin-bottom:8px; }
+  ul, ol { margin-bottom:10px; padding-left:24px; }
+  li { margin-bottom:4px; }
+  table { width:100%; border-collapse:collapse; margin:10px 0 16px 0; font-size:10pt; }
+  th { text-align:left; padding:6px 10px; background:#f1f5f9; color:#475569; font-weight:700; font-size:9pt; text-transform:uppercase; letter-spacing:0.3px; border:1px solid #e2e8f0; }
+  td { padding:6px 10px; border:1px solid #e2e8f0; vertical-align:top; }
+  code { font-family:Consolas,'Courier New',monospace; font-size:10pt; background:#f1f5f9; padding:1px 4px; color:#e11d48; }
+  .subtitle { font-size:12pt; color:#64748b; margin-bottom:6px; }
+  .meta { font-size:10pt; color:#94a3b8; margin-bottom:20px; }
+  .callout { background:#eff6ff; border-left:4px solid #3b82f6; padding:10px 14px; margin:10px 0; font-size:10pt; }
+  .callout-warn { background:#fffbeb; border-left-color:#f59e0b; }
+  .risk-high { color:#dc2626; font-weight:700; }
+  .risk-medium { color:#d97706; font-weight:700; }
+  .risk-low { color:#16a34a; font-weight:700; }
+  .diagram { background:#f8fafc; border:1px solid #e2e8f0; padding:14px; font-family:Consolas,'Courier New',monospace; font-size:9pt; line-height:1.7; white-space:pre; margin:10px 0; }
+  .footer { text-align:center; font-size:9pt; color:#94a3b8; margin-top:30px; border-top:1px solid #e2e8f0; padding-top:12px; }
+</style>
+</head>
+<body>
+
+<h1>Multi-Account Subscriber Architecture Plan</h1>
+<p class="subtitle">Proposal to allow one subscriber (person) to hold multiple service accounts</p>
+<p class="meta">Date: April 12, 2026 &nbsp;|&nbsp; Status: Draft &mdash; Pending Approval &nbsp;|&nbsp; Module: CRM / Portal / Billing / API</p>
+
+<!-- TOC -->
+<h2>Table of Contents</h2>
+<ol>
+  <li>Overview &amp; Business Case</li>
+  <li>Current Architecture</li>
+  <li>Proposed Architecture</li>
+  <li>New Schema Design</li>
+  <li>Data Migration Strategy</li>
+  <li>Foreign Key Re-mapping</li>
+  <li>Impact Analysis by Component</li>
+  <li>Portal Changes</li>
+  <li>CRM Changes</li>
+  <li>Billing Engine Changes</li>
+  <li>Authentication Changes</li>
+  <li>New API Endpoints</li>
+  <li>Implementation Phases</li>
+  <li>Risks &amp; Mitigations</li>
+  <li>Open Decisions</li>
+</ol>
+
+<!-- 1 -->
+<h2>1. Overview &amp; Business Case</h2>
+<p>Currently, each subscriber record in the system represents both a <strong>person</strong> and a <strong>service connection</strong>. This means a single customer who wants two internet connections (e.g., home + business, parent paying for a child's unit, business with multiple branches) must be registered as two completely separate subscribers with duplicate personal information.</p>
+
+<h4>Problems This Creates</h4>
+<ul>
+  <li>Duplicate personal data (name, email, phone, IDs) across multiple records</li>
+  <li>Customer must maintain separate portal logins for each connection</li>
+  <li>No unified view of a customer's total relationship with Netfactory</li>
+  <li>Email/phone uniqueness constraints block creating a second account for the same person</li>
+  <li>CRM staff cannot see all connections belonging to one customer at a glance</li>
+</ul>
+
+<h4>Proposed Solution</h4>
+<p>Separate the <strong>person</strong> (subscriber) from the <strong>service connection</strong> (account). One subscriber can hold multiple accounts, each with its own plan, address, billing, equipment, and status.</p>
+
+<!-- 2 -->
+<h2>2. Current Architecture</h2>
+<p>Today, the <code>subscribers</code> table is a monolithic record containing both personal identity and service connection data:</p>
+<div class="diagram">subscribers (current - single table)
++-- id (PK)
++-- account_number (unique)          [ Person fields ]
++-- first_name, last_name, email, phone
++-- id_type, id_number               [ Service fields ]
++-- status, plan_id, ont_serial
++-- address, barangay, municipality
++-- balance, credit_balance
++-- next_bill_date, installed_at
++-- All child tables (invoices, payments, tickets, etc.) point here</div>
+
+<div class="callout">
+  <strong>Key issue:</strong> Every child table (invoices, payments, tickets, work orders, RADIUS, etc.) uses <code>subscriber_id</code> as its foreign key. The system cannot distinguish between "this invoice belongs to this person" vs. "this invoice belongs to this service connection."
+</div>
+
+<!-- 3 -->
+<h2>3. Proposed Architecture</h2>
+<div class="diagram">subscribers (person)                  subscriber_accounts (service connection)
++-- id (PK)                           +-- id (PK)
++-- first_name, last_name             +-- subscriber_id -> subscribers (FK)
++-- email, phone                      +-- account_number (unique)
++-- id_type, id_number                +-- status, plan_id
++-- documents (IDs, proof)            +-- address, barangay, municipality
++-- created_at, updated_at            +-- ont_serial, router_serial, mac_address
+                                      +-- balance, credit_balance
+  subscriber_auth (1:1 with person)   +-- next_bill_date, installed_at
+  +-- subscriber_id -> subscribers    +-- agent_id, installation_package
+  +-- password, 2FA, session          +-- created_at, updated_at
+
+  One Person  ->  Many Accounts  ->  Each account has own invoices, payments, tickets, etc.</div>
+
+<!-- 4 -->
+<h2>4. New Schema Design</h2>
+
+<h3>subscribers table (person &mdash; slimmed down)</h3>
+<table>
+  <tr><th>Column</th><th>Type</th><th>Notes</th></tr>
+  <tr><td><code>id</code></td><td>Int, PK, auto-increment</td><td>Existing PK &mdash; unchanged</td></tr>
+  <tr><td><code>first_name</code></td><td>VARCHAR(100)</td><td>Person's first name</td></tr>
+  <tr><td><code>middle_name</code></td><td>VARCHAR(50)</td><td>Optional</td></tr>
+  <tr><td><code>last_name</code></td><td>VARCHAR(100)</td><td>Person's last name</td></tr>
+  <tr><td><code>company_name</code></td><td>VARCHAR(200)</td><td>For business customers</td></tr>
+  <tr><td><code>email</code></td><td>VARCHAR(255)</td><td><strong>No @unique</strong> &mdash; allows shared emails</td></tr>
+  <tr><td><code>phone</code></td><td>VARCHAR(20)</td><td>Primary contact number</td></tr>
+  <tr><td><code>alternate_contact_name</code></td><td>VARCHAR(100)</td><td>Optional</td></tr>
+  <tr><td><code>alternate_contact_phone</code></td><td>VARCHAR(20)</td><td>Optional</td></tr>
+  <tr><td><code>id_type</code></td><td>VARCHAR(50)</td><td>Government ID type</td></tr>
+  <tr><td><code>id_number</code></td><td>VARCHAR(50)</td><td>Government ID number</td></tr>
+  <tr><td><code>proof_of_billing</code></td><td>VARCHAR(250)</td><td>File path</td></tr>
+  <tr><td><code>valid_id1</code></td><td>VARCHAR(250)</td><td>File path</td></tr>
+  <tr><td><code>valid_id2</code></td><td>VARCHAR(250)</td><td>File path</td></tr>
+  <tr><td><code>other_attachment</code></td><td>VARCHAR(250)</td><td>File path</td></tr>
+  <tr><td><code>notes</code></td><td>TEXT</td><td>Personal notes about the subscriber</td></tr>
+  <tr><td><code>created_at</code></td><td>TIMESTAMPTZ</td><td></td></tr>
+  <tr><td><code>updated_at</code></td><td>TIMESTAMPTZ</td><td></td></tr>
+</table>
+
+<h3>subscriber_accounts table (service connection &mdash; new)</h3>
+<table>
+  <tr><th>Column</th><th>Type</th><th>Notes</th></tr>
+  <tr><td><code>id</code></td><td>Int, PK, auto-increment</td><td></td></tr>
+  <tr><td><code>subscriber_id</code></td><td>Int, FK &rarr; subscribers</td><td>The person who owns this account</td></tr>
+  <tr><td><code>account_number</code></td><td>VARCHAR(20), unique</td><td>e.g. "J2-00123"</td></tr>
+  <tr><td><code>status</code></td><td>VARCHAR(20)</td><td>prospective, pending, active, suspended, disconnected</td></tr>
+  <tr><td><code>plan_id</code></td><td>Int, FK &rarr; plans</td><td></td></tr>
+  <tr><td><code>address</code></td><td>VARCHAR(255)</td><td>Service location address</td></tr>
+  <tr><td><code>address_street1</code></td><td>VARCHAR(50)</td><td></td></tr>
+  <tr><td><code>address_street2</code></td><td>VARCHAR(50)</td><td>Subdivision</td></tr>
+  <tr><td><code>address_city</code></td><td>VARCHAR(100)</td><td></td></tr>
+  <tr><td><code>address_state</code></td><td>VARCHAR(100)</td><td></td></tr>
+  <tr><td><code>address_postal_code</code></td><td>VARCHAR(10)</td><td></td></tr>
+  <tr><td><code>postal_code</code></td><td>VARCHAR(10)</td><td></td></tr>
+  <tr><td><code>barangay_id</code></td><td>Int, FK &rarr; barangays</td><td></td></tr>
+  <tr><td><code>barangay_name</code></td><td>VARCHAR(100)</td><td>Cached text</td></tr>
+  <tr><td><code>municipality_id</code></td><td>Int, FK &rarr; municipalities</td><td></td></tr>
+  <tr><td><code>municipality_name</code></td><td>VARCHAR(100)</td><td>Cached text</td></tr>
+  <tr><td><code>latitude</code></td><td>DECIMAL(10,7)</td><td></td></tr>
+  <tr><td><code>longitude</code></td><td>DECIMAL(10,7)</td><td></td></tr>
+  <tr><td><code>installed_at</code></td><td>TIMESTAMPTZ</td><td></td></tr>
+  <tr><td><code>date_installed</code></td><td>DATE</td><td></td></tr>
+  <tr><td><code>application_date</code></td><td>DATE</td><td></td></tr>
+  <tr><td><code>next_bill_date</code></td><td>DATE</td><td></td></tr>
+  <tr><td><code>installation_package</code></td><td>VARCHAR(10)</td><td>FK &rarr; installation_packages.code</td></tr>
+  <tr><td><code>ont_serial</code></td><td>VARCHAR(50)</td><td></td></tr>
+  <tr><td><code>router_serial</code></td><td>VARCHAR(50)</td><td></td></tr>
+  <tr><td><code>mac_address</code></td><td>VARCHAR(17)</td><td></td></tr>
+  <tr><td><code>agent</code></td><td>VARCHAR(250)</td><td>Agent name (legacy)</td></tr>
+  <tr><td><code>agent_id</code></td><td>Int, FK &rarr; sales_agents</td><td></td></tr>
+  <tr><td><code>balance</code></td><td>DECIMAL(10,2)</td><td>Outstanding balance owed</td></tr>
+  <tr><td><code>credit_balance</code></td><td>DECIMAL(10,2)</td><td>Overpayment/credit balance</td></tr>
+  <tr><td><code>remarks</code></td><td>TEXT</td><td>Service-specific notes</td></tr>
+  <tr><td><code>created_at</code></td><td>TIMESTAMPTZ</td><td></td></tr>
+  <tr><td><code>updated_at</code></td><td>TIMESTAMPTZ</td><td></td></tr>
+</table>
+
+<!-- 5 -->
+<h2>5. Data Migration Strategy</h2>
+
+<div class="callout callout-warn">
+  <strong>Critical:</strong> This migration restructures the core data model. A full database backup must be taken before execution. Test on staging environment first.
+</div>
+
+<table>
+  <tr><th>Step</th><th>Action</th><th>Detail</th></tr>
+  <tr>
+    <td><strong>1</strong></td>
+    <td>Create <code>subscriber_accounts</code> table</td>
+    <td>New table with all service-related columns. No data yet.</td>
+  </tr>
+  <tr>
+    <td><strong>2</strong></td>
+    <td>Populate <code>subscriber_accounts</code></td>
+    <td>For each existing subscriber, create one <code>subscriber_accounts</code> row copying all service fields. Set <code>subscriber_accounts.subscriber_id = subscribers.id</code>. This creates a 1:1 mapping &mdash; every existing subscriber gets exactly one account.</td>
+  </tr>
+  <tr>
+    <td><strong>3</strong></td>
+    <td>Add <code>account_id</code> column to child tables</td>
+    <td>Add nullable <code>account_id</code> FK to: invoices, payments, subscriber_credits, tickets, usage_data, work_orders, surveys, onu_inventory, olt_onu_mappings, nap_ports, accounts_receivable, subscriber_radius.</td>
+  </tr>
+  <tr>
+    <td><strong>4</strong></td>
+    <td>Backfill <code>account_id</code></td>
+    <td>Using the 1:1 mapping from Step 2, set <code>account_id</code> in every child row based on its existing <code>subscriber_id</code>.</td>
+  </tr>
+  <tr>
+    <td><strong>5</strong></td>
+    <td>Make <code>account_id</code> non-nullable</td>
+    <td>After backfill verification, add NOT NULL constraint on <code>account_id</code> in the child tables that were re-pointed.</td>
+  </tr>
+  <tr>
+    <td><strong>6</strong></td>
+    <td>Remove service columns from <code>subscribers</code></td>
+    <td>Drop: account_number, status, plan_id, address fields, equipment fields, balance fields, billing date fields, agent fields, remarks. <strong>Do this last, after all API code is updated.</strong></td>
+  </tr>
+  <tr>
+    <td><strong>7</strong></td>
+    <td>Remove <code>@unique</code> from email</td>
+    <td>Allow same email to be used across subscribers.</td>
+  </tr>
+</table>
+
+<div class="callout">
+  <strong>Key guarantee:</strong> After Step 2, every existing subscriber has exactly one account. Nothing breaks. Multi-account capability is only available for new additions after migration completes.
+</div>
+
+<!-- 6 -->
+<h2>6. Foreign Key Re-mapping</h2>
+<p>Every table currently referencing <code>subscriber_id</code> must be categorized: does it belong to the <strong>person</strong> or the <strong>service account</strong>?</p>
+
+<h3>Points to subscriber_accounts (service connection)</h3>
+<table>
+  <tr><th>Table</th><th>Current FK</th><th>New FK</th><th>Reason</th></tr>
+  <tr><td><code>invoices</code></td><td>subscriber_id</td><td>account_id</td><td>Billing is per connection</td></tr>
+  <tr><td><code>payments</code></td><td>subscriber_id</td><td>account_id</td><td>Payment is per connection</td></tr>
+  <tr><td><code>subscriber_credits</code></td><td>subscriber_id</td><td>account_id</td><td>Credits are per connection</td></tr>
+  <tr><td><code>tickets</code></td><td>subscriber_id</td><td>account_id</td><td>Support is per connection</td></tr>
+  <tr><td><code>usage_data</code></td><td>subscriber_id</td><td>account_id</td><td>Data usage is per connection</td></tr>
+  <tr><td><code>work_orders</code></td><td>subscriber_id</td><td>account_id</td><td>Field work is per connection</td></tr>
+  <tr><td><code>surveys</code></td><td>subscriber_id</td><td>account_id</td><td>Survey is per site</td></tr>
+  <tr><td><code>onu_inventory</code></td><td>subscriber_id</td><td>account_id</td><td>Equipment is per connection</td></tr>
+  <tr><td><code>olt_onu_mappings</code></td><td>subscriber_id</td><td>account_id</td><td>Port mapping is per connection</td></tr>
+  <tr><td><code>nap_ports</code></td><td>subscriber_id</td><td>account_id</td><td>Fiber port is per connection</td></tr>
+  <tr><td><code>accounts_receivable</code></td><td>subscriber_id</td><td>account_id</td><td>AR is per connection</td></tr>
+  <tr><td><code>subscriber_radius</code></td><td>subscriber_id</td><td>account_id</td><td>PPPoE is per connection</td></tr>
+</table>
+
+<h3>Stays on subscribers (person)</h3>
+<table>
+  <tr><th>Table</th><th>FK</th><th>Reason</th></tr>
+  <tr><td><code>subscriber_auth</code></td><td>subscriber_id</td><td>Login is per person (1:1)</td></tr>
+  <tr><td><code>subscriber_notification_prefs</code></td><td>subscriber_id</td><td>Notification preferences are personal</td></tr>
+  <tr><td><code>referrals</code></td><td>referrer_id / referee_id</td><td>People refer people</td></tr>
+  <tr><td><code>call_logs</code></td><td>subscriber_id</td><td>Calls are to a person's phone</td></tr>
+  <tr><td><code>sms_logs</code></td><td>subscriber_id</td><td>SMS is to a person's phone</td></tr>
+</table>
+
+<!-- 7 -->
+<h2>7. Impact Analysis by Component</h2>
+
+<h3>Safe &mdash; No Changes Needed</h3>
+<table>
+  <tr><th>Component</th><th>Why</th></tr>
+  <tr><td>Xendit payment webhook</td><td>Resolves by <code>invoice_number</code>, not email/phone</td></tr>
+  <tr><td>Password reset email template</td><td>Includes account number for clarity</td></tr>
+  <tr><td>2FA setup/verify</td><td>Tied to <code>subscriber_auth</code> (person-level)</td></tr>
+  <tr><td>SMS/Call log recording</td><td>Already uses subscriber_id (person)</td></tr>
+</table>
+
+<h3>Needs Changes</h3>
+<table>
+  <tr><th>Component</th><th>Current</th><th>Required Change</th></tr>
+  <tr><td>Email <code>@unique</code> constraint</td><td>Blocks duplicate emails</td><td>Remove constraint</td></tr>
+  <tr><td>Email uniqueness checks (4 routes)</td><td>API rejects duplicate email</td><td>Remove checks</td></tr>
+  <tr><td>Phone uniqueness checks (3 routes)</td><td>API rejects duplicate phone</td><td>Remove checks</td></tr>
+  <tr><td>CRM Caller ID Lookup</td><td><code>findFirst</code> returns 1 result</td><td>Change to <code>findMany</code>, return all matches</td></tr>
+  <tr><td>Invoice generation loop</td><td>Iterates <code>subscribers</code></td><td>Iterate <code>subscriber_accounts</code></td></tr>
+  <tr><td>All Prisma queries on child tables</td><td>Filter by <code>subscriber_id</code></td><td>Filter by <code>account_id</code></td></tr>
+  <tr><td>CRM subscriber list/detail</td><td>Flat list</td><td>Person + accounts hierarchy</td></tr>
+  <tr><td>Portal dashboard/invoices/tickets</td><td>Single account view</td><td>Account switcher + multi-account views</td></tr>
+</table>
+
+<!-- 8 -->
+<h2>8. Portal Changes</h2>
+<table>
+  <tr><th>Area</th><th>Current Behavior</th><th>New Behavior</th></tr>
+  <tr><td><strong>Login</strong></td><td>Account number + password</td><td>Email/phone + password (person-level login), with account number as fallback option</td></tr>
+  <tr><td><strong>Dashboard</strong></td><td>One account's data</td><td>Account selector dropdown at top; shows selected account's data</td></tr>
+  <tr><td><strong>Invoices</strong></td><td>One account's invoices</td><td>Per-account view with option to see "All Accounts" in one list</td></tr>
+  <tr><td><strong>Payments</strong></td><td>Pay one account at a time</td><td>Pay per-account or "Pay All" across all accounts</td></tr>
+  <tr><td><strong>Tickets</strong></td><td>One account's tickets</td><td>Per-account with account selector</td></tr>
+  <tr><td><strong>Profile</strong></td><td>Edit name/email/phone</td><td>Edit personal info (applies across all accounts)</td></tr>
+  <tr><td><strong>My Accounts</strong></td><td>Does not exist</td><td>New page: lists all accounts with status, plan, address, balance</td></tr>
+</table>
+
+<h4>Account Switching Flow</h4>
+<ul>
+  <li>Subscriber logs in with credentials &mdash; JWT contains <code>subscriberId</code> (person)</li>
+  <li>Portal fetches all <code>subscriber_accounts</code> for that person</li>
+  <li>Dropdown shows accounts: <code>J2-00123 (Active - Plan 999)</code>, <code>J2-00456 (Active - Plan 1499)</code></li>
+  <li>Selecting an account sets the <code>accountId</code> context for all subsequent views</li>
+  <li>"All Accounts" option shows consolidated data</li>
+</ul>
+
+<!-- 9 -->
+<h2>9. CRM Changes</h2>
+<table>
+  <tr><th>Area</th><th>Current</th><th>New</th></tr>
+  <tr><td><strong>Subscriber list</strong></td><td>Flat list of subscribers</td><td>List of persons; badge shows account count (e.g., "2 accounts")</td></tr>
+  <tr><td><strong>Add subscriber</strong></td><td>One form creates everything</td><td>Step 1: Find existing person or create new &rarr; Step 2: Add account to person</td></tr>
+  <tr><td><strong>Subscriber detail</strong></td><td>Single view</td><td>Person header at top + tabbed account cards below</td></tr>
+  <tr><td><strong>Search</strong></td><td>Search by name/email/phone/account#</td><td>Same &mdash; account# search resolves to person and highlights that account</td></tr>
+  <tr><td><strong>Caller ID lookup</strong></td><td>Returns one subscriber</td><td>Returns person with all their accounts listed</td></tr>
+</table>
+
+<h4>New "Add Account" Flow for Existing Subscriber</h4>
+<ul>
+  <li>From subscriber detail page, click "Add Account"</li>
+  <li>Form collects: address, plan, installation package, status</li>
+  <li>Creates new <code>subscriber_accounts</code> row linked to the same <code>subscriber_id</code></li>
+  <li>New account gets its own auto-generated account number</li>
+</ul>
+
+<!-- 10 -->
+<h2>10. Billing Engine Changes</h2>
+<table>
+  <tr><th>Area</th><th>Current</th><th>New</th></tr>
+  <tr><td><strong>Invoice generation</strong></td><td>Loops active <code>subscribers</code></td><td>Loops active <code>subscriber_accounts</code></td></tr>
+  <tr><td><strong>Invoice record</strong></td><td><code>subscriber_id</code></td><td><code>account_id</code> (FK to subscriber_accounts)</td></tr>
+  <tr><td><strong>Payment record</strong></td><td><code>subscriber_id</code></td><td><code>account_id</code></td></tr>
+  <tr><td><strong>Balance tracking</strong></td><td><code>subscribers.balance</code></td><td><code>subscriber_accounts.balance</code></td></tr>
+  <tr><td><strong>Credit balance</strong></td><td><code>subscribers.credit_balance</code></td><td><code>subscriber_accounts.credit_balance</code></td></tr>
+  <tr><td><strong>Xendit webhook</strong></td><td>Resolves by invoice &rarr; subscriber</td><td>Resolves by invoice &rarr; account (same logic, different FK target)</td></tr>
+</table>
+
+<div class="callout">
+  <strong>Each account is billed independently.</strong> Invoices, payments, balances, and credits are all per-account, not per-person. The portal can show a consolidated view, but the billing engine treats each account separately.
+</div>
+
+<!-- 11 -->
+<h2>11. Authentication Changes</h2>
+<table>
+  <tr><th>Area</th><th>Current</th><th>New</th></tr>
+  <tr><td><strong>Login key</strong></td><td><code>account_number</code> + password</td><td><code>email</code> or <code>phone</code> + password (person-level); <code>account_number</code> remains as fallback</td></tr>
+  <tr><td><strong>JWT payload</strong></td><td><code>{ id, account, type }</code></td><td><code>{ subscriberId, type }</code> &mdash; account selection is a separate context step</td></tr>
+  <tr><td><strong>Password reset</strong></td><td><code>account_number</code> + email</td><td><code>email</code> only (person-level), since one person may have multiple account numbers</td></tr>
+  <tr><td><strong>2FA</strong></td><td>Per subscriber_auth</td><td>Unchanged &mdash; 2FA is per person</td></tr>
+  <tr><td><strong>Session</strong></td><td>One session = one account</td><td>One session = one person, with selected account context</td></tr>
+</table>
+
+<h4>Security Considerations</h4>
+<ul>
+  <li>JWT only grants access to accounts owned by the authenticated <code>subscriberId</code></li>
+  <li>Account selection validated server-side: <code>subscriber_accounts.subscriber_id === req.subscriberId</code></li>
+  <li>Audit log records which account was accessed in each action</li>
+  <li>Account number login still works &mdash; resolves to the person via <code>subscriber_accounts</code> &rarr; <code>subscribers</code></li>
+</ul>
+
+<!-- 12 -->
+<h2>12. New API Endpoints</h2>
+
+<h3>Portal Endpoints (Authenticated Subscriber)</h3>
+<table>
+  <tr><th>Method</th><th>Endpoint</th><th>Action</th></tr>
+  <tr><td>GET</td><td><code>/api/portal/accounts</code></td><td>List all accounts belonging to the logged-in subscriber</td></tr>
+  <tr><td>GET</td><td><code>/api/portal/accounts/:accountId</code></td><td>Get detail for a specific account (with balance, plan, etc.)</td></tr>
+  <tr><td>POST</td><td><code>/api/portal/accounts/select</code></td><td>Set active account context for subsequent requests</td></tr>
+  <tr><td>GET</td><td><code>/api/portal/accounts/invoices</code></td><td>Consolidated invoices across all accounts</td></tr>
+</table>
+
+<h3>Admin Endpoints</h3>
+<table>
+  <tr><th>Method</th><th>Endpoint</th><th>Action</th></tr>
+  <tr><td>POST</td><td><code>/api/admin/subscribers/:id/accounts</code></td><td>Add a new account to an existing subscriber</td></tr>
+  <tr><td>GET</td><td><code>/api/admin/subscribers/:id/accounts</code></td><td>List all accounts for a subscriber</td></tr>
+  <tr><td>PUT</td><td><code>/api/admin/accounts/:accountId</code></td><td>Update an account (plan, status, address, equipment)</td></tr>
+  <tr><td>DELETE</td><td><code>/api/admin/accounts/:accountId</code></td><td>Deactivate/remove an account</td></tr>
+</table>
+
+<!-- 13 -->
+<h2>13. Implementation Phases</h2>
+
+<h3>Phase 1 &mdash; Schema &amp; Migration</h3>
+<ul>
+  <li>Create <code>subscriber_accounts</code> table in Prisma schema</li>
+  <li>Write migration script to split existing subscriber data</li>
+  <li>Add <code>account_id</code> FK to all child tables and backfill</li>
+  <li>Remove <code>@unique</code> from email field</li>
+</ul>
+<p><strong>Risk:</strong> <span class="risk-high">HIGH</span> &mdash; Core schema change. Requires full DB backup and staging test.</p>
+
+<h3>Phase 2 &mdash; API Route Updates</h3>
+<ul>
+  <li>Update all Prisma queries to use <code>account_id</code> instead of <code>subscriber_id</code> where re-mapped</li>
+  <li>Remove email/phone uniqueness checks from admin.js, portal.js, public.js, agents.js</li>
+  <li>Fix CRM Caller ID Lookup (<code>findFirst</code> &rarr; <code>findMany</code>)</li>
+  <li>Update invoice generation to iterate <code>subscriber_accounts</code></li>
+  <li>Add new endpoints for account management</li>
+</ul>
+<p><strong>Risk:</strong> <span class="risk-high">HIGH</span> &mdash; Touches every route file. Must be done carefully with testing.</p>
+
+<h3>Phase 3 &mdash; CRM Frontend</h3>
+<ul>
+  <li>Update subscriber list to show person + account count</li>
+  <li>Update subscriber detail to show person header + account tabs</li>
+  <li>Update "Add Subscriber" flow to: find/create person &rarr; add account</li>
+  <li>Add "Add Account" button on subscriber detail page</li>
+  <li>Update search to resolve account numbers to person view</li>
+</ul>
+<p><strong>Risk:</strong> <span class="risk-medium">MEDIUM</span> &mdash; UI rework, but data layer already updated in Phase 2.</p>
+
+<h3>Phase 4 &mdash; Portal Frontend</h3>
+<ul>
+  <li>Update login to support email/phone-based authentication</li>
+  <li>Add account selector dropdown in navigation</li>
+  <li>Add "My Accounts" page listing all accounts</li>
+  <li>Update dashboard, invoices, tickets views for account context</li>
+  <li>Add consolidated "All Accounts" view for invoices</li>
+</ul>
+<p><strong>Risk:</strong> <span class="risk-medium">MEDIUM</span> &mdash; Auth flow change. Keep account_number login as fallback.</p>
+
+<h3>Phase 5 &mdash; Testing &amp; Cleanup</h3>
+<ul>
+  <li>End-to-end testing: create person, add multiple accounts, verify billing, portal login, tickets</li>
+  <li>Verify Xendit webhook chain works with new FK structure</li>
+  <li>Verify RADIUS authentication per account</li>
+  <li>Drop legacy service columns from <code>subscribers</code> table (after full verification)</li>
+  <li>Update any remaining hardcoded <code>subscriber_id</code> references</li>
+</ul>
+<p><strong>Risk:</strong> <span class="risk-low">LOW</span> &mdash; Cleanup and verification only.</p>
+
+<!-- 14 -->
+<h2>14. Risks &amp; Mitigations</h2>
+<table>
+  <tr><th>Risk</th><th>Severity</th><th>Mitigation</th></tr>
+  <tr><td>Breaking migration corrupts data</td><td><span class="risk-high">HIGH</span></td><td>Full DB backup before migration; test on staging first; migration is additive (creates new table, does not delete old columns until Phase 5)</td></tr>
+  <tr><td>Missed <code>subscriber_id</code> reference in API</td><td><span class="risk-high">HIGH</span></td><td>Grep entire codebase for <code>subscriber_id</code>; create checklist of every occurrence; test each route</td></tr>
+  <tr><td>Portal login change breaks existing users</td><td><span class="risk-medium">MEDIUM</span></td><td>Keep <code>account_number</code> login as fallback; add email/phone login as additional option</td></tr>
+  <tr><td>Xendit payment webhook fails</td><td><span class="risk-medium">MEDIUM</span></td><td>Webhook resolves by <code>invoice_number</code>, not subscriber FK; verify chain during testing</td></tr>
+  <tr><td>RADIUS auth breaks for existing connections</td><td><span class="risk-medium">MEDIUM</span></td><td>RADIUS queries by username, not subscriber_id; verify <code>subscriber_radius</code> FK update</td></tr>
+  <tr><td>CRM staff confusion during transition</td><td><span class="risk-low">LOW</span></td><td>Brief team on new workflow; single-account subscribers look identical to current system</td></tr>
+</table>
+
+<!-- 15 -->
+<h2>15. Open Decisions</h2>
+<table>
+  <tr><th>#</th><th>Question</th><th>Options</th><th>Decision</th></tr>
+  <tr><td>1</td><td>Should portal login change to email/phone, or keep account_number only?</td><td>A) Email/phone primary + account# fallback<br>B) Account number only (current)<br>C) Both as equal options</td><td><em>Pending</em></td></tr>
+  <tr><td>2</td><td>Should there be a combined invoice option for all accounts under one person?</td><td>A) Combined view only (separate invoices)<br>B) Option to generate a single combined invoice<br>C) Always separate</td><td><em>Pending</em></td></tr>
+  <tr><td>3</td><td>Can subscribers add new accounts from the portal, or admin-only?</td><td>A) Admin only<br>B) Subscriber can request (creates pending account)<br>C) Subscriber can self-create</td><td><em>Pending</em></td></tr>
+  <tr><td>4</td><td>Should the CRM subscriber list default view show persons or accounts?</td><td>A) Persons (with account count badge)<br>B) Accounts (grouped by person)<br>C) Toggle between both views</td><td><em>Pending</em></td></tr>
+  <tr><td>5</td><td>Should existing <code>subscriber_id</code> columns be kept as denormalized references or fully replaced by <code>account_id</code>?</td><td>A) Keep both for easier lookups<br>B) Replace entirely with account_id (cleaner)</td><td><em>Pending</em></td></tr>
+</table>
+
+<div class="footer">
+  Netfactory &mdash; Multi-Account Subscriber Architecture Plan &mdash; Draft v1.0 &mdash; April 12, 2026
+</div>
+
+</body>
+</html>

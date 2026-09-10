@@ -1,0 +1,803 @@
+// ============================================================
+// routes/olt.js — VSOL OLT REST API Endpoints
+// ============================================================
+// Device CRUD, PON port management, ONU operations,
+// ONU-subscriber mapping, alarms, and subscriber ONU lookup
+// Mounted at /api/admin/olt in server.js
+// ============================================================
+
+const express = require('express');
+const router = express.Router();
+const adminAuth = require('../middleware/adminAuth');
+const vsolOlt = require('../utils/vsol-olt');
+
+// ── Middleware: require device ID ───────────────────────────
+function requireDevice(req, res, next) {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id) || id <= 0) {
+    return res.status(400).json({ error: 'Invalid device ID. Must be a positive integer.' });
+  }
+  req.deviceId = id;
+  next();
+}
+
+// ============================================================
+//  DEVICE CRUD
+// ============================================================
+
+// ── GET /devices — List all OLT devices ─────────────────────
+router.get('/devices', adminAuth(), async (req, res) => {
+  try {
+    const devices = await req.prisma.olt_devices.findMany({
+      orderBy: { id: 'asc' },
+    });
+
+    // Mask ssh_password in response
+    const masked = devices.map(d => ({
+      ...d,
+      ssh_password: d.ssh_password ? '••••••••' : null,
+      enable_password: d.enable_password ? '••••••••' : null,
+    }));
+
+    res.json({ devices: masked });
+  } catch (err) {
+    console.error('[OLT] Error listing devices:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /devices — Create a new OLT device ────────────────
+router.post('/devices', adminAuth(), async (req, res) => {
+  try {
+    const {
+      label, host, olt_model, snmp_community, snmp_version, snmp_port,
+      ssh_username, ssh_password, enable_password, ssh_port, telnet_port, use_ssh,
+      pon_port_count, notes,
+    } = req.body;
+
+    if (!label || !host) {
+      return res.status(400).json({ error: 'label and host are required' });
+    }
+
+    const device = await req.prisma.olt_devices.create({
+      data: {
+        label,
+        host,
+        olt_model:      olt_model || null,
+        snmp_community: snmp_community || 'public',
+        snmp_version:   snmp_version || '2c',
+        snmp_port:      snmp_port != null ? parseInt(snmp_port, 10) : 161,
+        ssh_username:   ssh_username || null,
+        ssh_password:   ssh_password || null,
+        enable_password: enable_password || null,
+        ssh_port:       ssh_port != null ? parseInt(ssh_port, 10) : 22,
+        telnet_port:    telnet_port != null ? parseInt(telnet_port, 10) : 23,
+        use_ssh:        use_ssh != null ? Boolean(use_ssh) : true,
+        pon_port_count: pon_port_count != null ? parseInt(pon_port_count, 10) : 8,
+        notes:          notes || null,
+      },
+    });
+
+    res.json({
+      ...device,
+      ssh_password: device.ssh_password ? '••••••••' : null,
+      enable_password: device.enable_password ? '••••••••' : null,
+    });
+  } catch (err) {
+    console.error('[OLT] Error creating device:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── PUT /devices/:id — Update an OLT device ────────────────
+router.put('/devices/:id', adminAuth(), requireDevice, async (req, res) => {
+  try {
+    const {
+      label, host, olt_model, snmp_community, snmp_version, snmp_port,
+      ssh_username, ssh_password, enable_password, ssh_port, telnet_port, use_ssh,
+      pon_port_count, notes, is_active,
+    } = req.body;
+
+    const data = { updated_at: new Date() };
+
+    if (label !== undefined)          data.label = label;
+    if (host !== undefined)           data.host = host;
+    if (olt_model !== undefined)      data.olt_model = olt_model || null;
+    if (snmp_community !== undefined) data.snmp_community = snmp_community;
+    if (snmp_version !== undefined)   data.snmp_version = snmp_version;
+    if (snmp_port !== undefined)      data.snmp_port = parseInt(snmp_port, 10);
+    if (ssh_username !== undefined)   data.ssh_username = ssh_username || null;
+    if (ssh_port !== undefined)       data.ssh_port = parseInt(ssh_port, 10);
+    if (telnet_port !== undefined)    data.telnet_port = parseInt(telnet_port, 10);
+    if (use_ssh !== undefined)        data.use_ssh = Boolean(use_ssh);
+    if (pon_port_count !== undefined) data.pon_port_count = parseInt(pon_port_count, 10);
+    if (notes !== undefined)          data.notes = notes || null;
+    if (is_active !== undefined)      data.is_active = Boolean(is_active);
+
+    // Skip password update if the masked placeholder is sent back
+    if (ssh_password !== undefined && ssh_password !== '••••••••') {
+      data.ssh_password = ssh_password || null;
+    }
+    if (enable_password !== undefined && enable_password !== '••••••••') {
+      data.enable_password = enable_password || null;
+    }
+
+    const device = await req.prisma.olt_devices.update({
+      where: { id: req.deviceId },
+      data,
+    });
+
+    res.json({
+      ...device,
+      ssh_password: device.ssh_password ? '••••••••' : null,
+      enable_password: device.enable_password ? '••••••••' : null,
+    });
+  } catch (err) {
+    console.error('[OLT] Error updating device:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── DELETE /devices/:id — Delete an OLT device ──────────────
+router.delete('/devices/:id', adminAuth(), requireDevice, async (req, res) => {
+  try {
+    await req.prisma.olt_devices.delete({
+      where: { id: req.deviceId },
+    });
+    res.json({ success: true, message: `Device ${req.deviceId} deleted` });
+  } catch (err) {
+    console.error('[OLT] Error deleting device:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /devices/:id/test — Test SSH connection ────────────
+router.post('/devices/:id/test', adminAuth(), requireDevice, async (req, res) => {
+  try {
+    const results = { system: null, ssh: null };
+
+    // Test via getSystemInfo (uses SSH)
+    try {
+      results.system = await vsolOlt.getSystemInfo(req.prisma, req.deviceId);
+    } catch (sysErr) {
+      results.system = { error: sysErr.message };
+    }
+
+    // Test direct SSH command
+    const device = await vsolOlt.getDeviceConfig(req.prisma, req.deviceId);
+    if (device.use_ssh) {
+      try {
+        const sshOutput = await vsolOlt.sshShellExec(device, ['show version', 'exit'], 10000);
+        results.ssh = { connected: true, output: vsolOlt.stripAnsi(sshOutput).substring(0, 2000) };
+      } catch (sshErr) {
+        results.ssh = { connected: false, error: sshErr.message };
+      }
+    } else {
+      results.ssh = { connected: false, message: 'SSH is not enabled for this device' };
+    }
+
+    res.json({ success: true, results });
+  } catch (err) {
+    console.error('[OLT] Error testing device:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+//  SYSTEM ROUTES
+// ============================================================
+
+// ── GET /devices/:id/system — System info via SNMP ──────────
+router.get('/devices/:id/system', adminAuth(), requireDevice, async (req, res) => {
+  try {
+    const info = await vsolOlt.getSystemInfo(req.prisma, req.deviceId);
+    res.json(info);
+  } catch (err) {
+    console.error('[OLT] Error getting system info:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /devices/:id/system/temperature — Via SSH system info
+router.get('/devices/:id/system/temperature', adminAuth(), requireDevice, async (req, res) => {
+  try {
+    const info = await vsolOlt.getSystemInfo(req.prisma, req.deviceId);
+    res.json({
+      deviceId: req.deviceId,
+      temperature: info.temperature,
+      unit: 'C',
+    });
+  } catch (err) {
+    console.error('[OLT] Error getting temperature:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /devices/:id/system/fans — Fan info via SSH ──────────
+router.get('/devices/:id/system/fans', adminAuth(), requireDevice, async (req, res) => {
+  try {
+    const config = await vsolOlt.getConfig(req.prisma);
+    if (!config.enabled) return res.status(503).json({ error: 'OLT management is disabled' });
+
+    const device = await vsolOlt.getDeviceConfig(req.prisma, req.deviceId);
+
+    let fans = [];
+    try {
+      const output = await vsolOlt.sshShellExec(device, ['terminal length 0', 'show fan', 'exit'], 10000);
+      const clean = vsolOlt.stripAnsi(output);
+      // Parse fan status from output
+      const lines = clean.split('\n');
+      let idx = 0;
+      for (const line of lines) {
+        const m = line.match(/[Ff]an\s*(\d+)\s*[:=]\s*(\S+)/);
+        if (m) {
+          idx++;
+          fans.push({
+            index: idx,
+            status: m[2].toLowerCase().includes('ok') || m[2].toLowerCase().includes('run') ? 1 : 2,
+            statusText: m[2],
+          });
+        }
+      }
+    } catch (_) {
+      fans = [];
+    }
+
+    res.json({ deviceId: req.deviceId, fans });
+  } catch (err) {
+    console.error('[OLT] Error getting fan status:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+//  PON PORT ROUTES
+// ============================================================
+
+// ── GET /devices/:id/pon-ports — List PON ports ─────────────
+router.get('/devices/:id/pon-ports', adminAuth(), requireDevice, async (req, res) => {
+  try {
+    const ports = await vsolOlt.getPonPorts(req.prisma, req.deviceId);
+    res.json({ ports });
+  } catch (err) {
+    console.error('[OLT] Error getting PON ports:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /devices/:id/pon-ports/:port/onus — ONUs on a port ──
+router.get('/devices/:id/pon-ports/:port/onus', adminAuth(), requireDevice, async (req, res) => {
+  try {
+    const ponPort = parseInt(req.params.port, 10);
+    if (isNaN(ponPort) || ponPort <= 0) {
+      return res.status(400).json({ error: 'Invalid PON port number' });
+    }
+
+    const onus = await vsolOlt.getONUs(req.prisma, req.deviceId, ponPort);
+    res.json({ ponPort, onus });
+  } catch (err) {
+    console.error('[OLT] Error getting ONUs on port:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /devices/:id/pon-ports/:port/optical — Optical levels for port ONUs
+router.get('/devices/:id/pon-ports/:port/optical', adminAuth(), requireDevice, async (req, res) => {
+  try {
+    const ponPort = parseInt(req.params.port, 10);
+    if (isNaN(ponPort) || ponPort <= 0) {
+      return res.status(400).json({ error: 'Invalid PON port number' });
+    }
+
+    // Get all ONUs on the port, then fetch optical levels for each
+    const onus = await vsolOlt.getONUs(req.prisma, req.deviceId, ponPort);
+
+    const opticalData = await Promise.all(
+      onus.map(async (onu) => {
+        try {
+          const levels = await vsolOlt.getONUOpticalLevels(
+            req.prisma, req.deviceId, onu.ponPort, onu.onuId
+          );
+          return { ...onu, ...levels };
+        } catch (optErr) {
+          return { ...onu, rxPower: null, txPower: null, distance: null, signalLevel: null, error: optErr.message };
+        }
+      })
+    );
+
+    res.json({ ponPort, onus: opticalData });
+  } catch (err) {
+    console.error('[OLT] Error getting port optical levels:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+//  ONU ROUTES
+// ============================================================
+
+// ── GET /devices/:id/onus — List all ONUs (with optional search)
+router.get('/devices/:id/onus', adminAuth(), requireDevice, async (req, res) => {
+  try {
+    const onus = await vsolOlt.getONUs(req.prisma, req.deviceId, null);
+
+    // Filter by search query if provided
+    const search = (req.query.search || '').trim().toLowerCase();
+    const filtered = search
+      ? onus.filter(o =>
+          (o.serial && o.serial.toLowerCase().includes(search)) ||
+          (o.description && o.description.toLowerCase().includes(search))
+        )
+      : onus;
+
+    res.json({ onus: filtered, total: filtered.length });
+  } catch (err) {
+    console.error('[OLT] Error listing ONUs:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /devices/:id/onus/:ponPort/:onuId — ONU detail ─────
+router.get('/devices/:id/onus/:ponPort/:onuId', adminAuth(), requireDevice, async (req, res) => {
+  try {
+    const ponPort = parseInt(req.params.ponPort, 10);
+    const onuId = parseInt(req.params.onuId, 10);
+    if (isNaN(ponPort) || isNaN(onuId) || ponPort <= 0 || onuId <= 0) {
+      return res.status(400).json({ error: 'Invalid ponPort or onuId' });
+    }
+
+    const detail = await vsolOlt.getONUDetail(req.prisma, req.deviceId, ponPort, onuId);
+    res.json(detail);
+  } catch (err) {
+    console.error('[OLT] Error getting ONU detail:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /devices/:id/onus/:ponPort/:onuId/optical — Optical levels
+router.get('/devices/:id/onus/:ponPort/:onuId/optical', adminAuth(), requireDevice, async (req, res) => {
+  try {
+    const ponPort = parseInt(req.params.ponPort, 10);
+    const onuId = parseInt(req.params.onuId, 10);
+    if (isNaN(ponPort) || isNaN(onuId) || ponPort <= 0 || onuId <= 0) {
+      return res.status(400).json({ error: 'Invalid ponPort or onuId' });
+    }
+
+    const levels = await vsolOlt.getONUOpticalLevels(req.prisma, req.deviceId, ponPort, onuId);
+    res.json(levels);
+  } catch (err) {
+    console.error('[OLT] Error getting ONU optical levels:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+//  ONU ACTION ROUTES
+// ============================================================
+
+// ── POST /devices/:id/onus/register — Register an ONU ───────
+router.post('/devices/:id/onus/register', adminAuth(), requireDevice, async (req, res) => {
+  try {
+    const { ponPort, onuId, serial, profileName, description, svlan, cvlan } = req.body;
+    if (!ponPort || !onuId) {
+      return res.status(400).json({ error: 'ponPort and onuId are required' });
+    }
+
+    const result = await vsolOlt.registerONU(req.prisma, req.deviceId, {
+      ponPort: parseInt(ponPort, 10),
+      onuId: parseInt(onuId, 10),
+      serial: serial || null,
+      profileName: profileName || null,
+      description: description || null,
+      svlan: svlan != null ? parseInt(svlan, 10) : null,
+      cvlan: cvlan != null ? parseInt(cvlan, 10) : null,
+    });
+
+    res.json(result);
+  } catch (err) {
+    console.error('[OLT] Error registering ONU:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── DELETE /devices/:id/onus/:ponPort/:onuId — Deregister ONU
+router.delete('/devices/:id/onus/:ponPort/:onuId', adminAuth(), requireDevice, async (req, res) => {
+  try {
+    const ponPort = parseInt(req.params.ponPort, 10);
+    const onuId = parseInt(req.params.onuId, 10);
+    if (isNaN(ponPort) || isNaN(onuId) || ponPort <= 0 || onuId <= 0) {
+      return res.status(400).json({ error: 'Invalid ponPort or onuId' });
+    }
+
+    const result = await vsolOlt.deregisterONU(req.prisma, req.deviceId, ponPort, onuId);
+    res.json(result);
+  } catch (err) {
+    console.error('[OLT] Error deregistering ONU:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /devices/:id/onus/:ponPort/:onuId/reboot — Reboot ONU
+router.post('/devices/:id/onus/:ponPort/:onuId/reboot', adminAuth(), requireDevice, async (req, res) => {
+  try {
+    const ponPort = parseInt(req.params.ponPort, 10);
+    const onuId = parseInt(req.params.onuId, 10);
+    if (isNaN(ponPort) || isNaN(onuId) || ponPort <= 0 || onuId <= 0) {
+      return res.status(400).json({ error: 'Invalid ponPort or onuId' });
+    }
+
+    const result = await vsolOlt.rebootONU(req.prisma, req.deviceId, ponPort, onuId);
+    res.json(result);
+  } catch (err) {
+    console.error('[OLT] Error rebooting ONU:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+//  ONU MAPPING ROUTES (linking ONUs to subscribers in DB)
+// ============================================================
+
+// ── GET /devices/:id/onu-mappings — List mappings for device ─
+router.get('/devices/:id/onu-mappings', adminAuth(), requireDevice, async (req, res) => {
+  try {
+    const mappings = await req.prisma.olt_onu_mappings.findMany({
+      where: { olt_device_id: req.deviceId },
+      include: {
+        subscriber: {
+          select: {
+            id: true,
+            first_name: true,
+            last_name: true,
+            account_number: true,
+            status: true,
+          },
+        },
+        onu_inventory: {
+          select: {
+            id: true,
+            mac_address: true,
+            serial_number: true,
+            model: true,
+            status: true,
+          },
+        },
+      },
+      orderBy: [{ pon_port: 'asc' }, { onu_id: 'asc' }],
+    });
+
+    res.json({ mappings });
+  } catch (err) {
+    console.error('[OLT] Error listing ONU mappings:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /devices/:id/onu-mappings — Create/upsert mapping ──
+router.post('/devices/:id/onu-mappings', adminAuth(), requireDevice, async (req, res) => {
+  try {
+    const {
+      ponPort, onuId, serialNumber, macAddress,
+      subscriberId, onuInventoryId, lineProfile, srvProfile, description,
+    } = req.body;
+
+    if (ponPort == null || onuId == null) {
+      return res.status(400).json({ error: 'ponPort and onuId are required' });
+    }
+
+    const data = {
+      olt_device_id:    req.deviceId,
+      pon_port:         parseInt(ponPort, 10),
+      onu_id:           parseInt(onuId, 10),
+      serial_number:    serialNumber || null,
+      mac_address:      macAddress || null,
+      subscriber_id:    subscriberId != null ? parseInt(subscriberId, 10) : null,
+      onu_inventory_id: onuInventoryId != null ? parseInt(onuInventoryId, 10) : null,
+      line_profile:     lineProfile || null,
+      srv_profile:      srvProfile || null,
+      description:      description || null,
+      updated_at:       new Date(),
+    };
+
+    // Upsert: update if the same device+port+onu already exists
+    const mapping = await req.prisma.olt_onu_mappings.upsert({
+      where: {
+        uq_olt_pon_onu: {
+          olt_device_id: req.deviceId,
+          pon_port:      parseInt(ponPort, 10),
+          onu_id:        parseInt(onuId, 10),
+        },
+      },
+      create: data,
+      update: {
+        serial_number:    data.serial_number,
+        mac_address:      data.mac_address,
+        subscriber_id:    data.subscriber_id,
+        onu_inventory_id: data.onu_inventory_id,
+        line_profile:     data.line_profile,
+        srv_profile:      data.srv_profile,
+        description:      data.description,
+        updated_at:       data.updated_at,
+      },
+    });
+
+    res.json(mapping);
+  } catch (err) {
+    console.error('[OLT] Error creating ONU mapping:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── PUT /devices/:id/onu-mappings/:mappingId — Update mapping
+router.put('/devices/:id/onu-mappings/:mappingId', adminAuth(), requireDevice, async (req, res) => {
+  try {
+    const mappingId = parseInt(req.params.mappingId, 10);
+    if (isNaN(mappingId) || mappingId <= 0) {
+      return res.status(400).json({ error: 'Invalid mapping ID' });
+    }
+
+    const {
+      ponPort, onuId, serialNumber, macAddress,
+      subscriberId, onuInventoryId, lineProfile, srvProfile, description, status,
+    } = req.body;
+
+    const data = { updated_at: new Date() };
+
+    if (ponPort !== undefined)         data.pon_port = parseInt(ponPort, 10);
+    if (onuId !== undefined)           data.onu_id = parseInt(onuId, 10);
+    if (serialNumber !== undefined)    data.serial_number = serialNumber || null;
+    if (macAddress !== undefined)      data.mac_address = macAddress || null;
+    if (subscriberId !== undefined)    data.subscriber_id = subscriberId != null ? parseInt(subscriberId, 10) : null;
+    if (onuInventoryId !== undefined)  data.onu_inventory_id = onuInventoryId != null ? parseInt(onuInventoryId, 10) : null;
+    if (lineProfile !== undefined)     data.line_profile = lineProfile || null;
+    if (srvProfile !== undefined)      data.srv_profile = srvProfile || null;
+    if (description !== undefined)     data.description = description || null;
+    if (status !== undefined)          data.status = status || null;
+
+    const mapping = await req.prisma.olt_onu_mappings.update({
+      where: { id: mappingId },
+      data,
+    });
+
+    res.json(mapping);
+  } catch (err) {
+    console.error('[OLT] Error updating ONU mapping:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── DELETE /devices/:id/onu-mappings/:mappingId — Delete mapping
+router.delete('/devices/:id/onu-mappings/:mappingId', adminAuth(), requireDevice, async (req, res) => {
+  try {
+    const mappingId = parseInt(req.params.mappingId, 10);
+    if (isNaN(mappingId) || mappingId <= 0) {
+      return res.status(400).json({ error: 'Invalid mapping ID' });
+    }
+
+    await req.prisma.olt_onu_mappings.delete({
+      where: { id: mappingId },
+    });
+
+    res.json({ success: true, message: `Mapping ${mappingId} deleted` });
+  } catch (err) {
+    console.error('[OLT] Error deleting ONU mapping:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /devices/:id/onu-mappings/auto-discover — Auto-map ONUs
+router.post('/devices/:id/onu-mappings/auto-discover', adminAuth(), requireDevice, async (req, res) => {
+  try {
+    // Walk all ONUs on the device
+    const onus = await vsolOlt.getONUs(req.prisma, req.deviceId, null);
+
+    // Fetch all onu_inventory and subscriber records for matching
+    const [inventoryRecords, existingMappings] = await Promise.all([
+      req.prisma.onu_inventory.findMany({
+        include: {
+          subscriber: {
+            select: { id: true, first_name: true, last_name: true, account_number: true },
+          },
+        },
+      }),
+      req.prisma.olt_onu_mappings.findMany({
+        where: { olt_device_id: req.deviceId },
+      }),
+    ]);
+
+    // Index inventory by serial and MAC for fast lookup
+    const bySerial = {};
+    const byMac = {};
+    for (const inv of inventoryRecords) {
+      if (inv.serial_number) bySerial[inv.serial_number.toLowerCase()] = inv;
+      if (inv.mac_address) byMac[inv.mac_address.toLowerCase()] = inv;
+    }
+
+    // Index existing mappings by pon_port.onu_id
+    const existingKeys = new Set(
+      existingMappings.map(m => `${m.pon_port}.${m.onu_id}`)
+    );
+
+    const created = [];
+    const skipped = [];
+
+    for (const onu of onus) {
+      const key = `${onu.ponPort}.${onu.onuId}`;
+
+      // Skip if mapping already exists
+      if (existingKeys.has(key)) {
+        skipped.push({ ponPort: onu.ponPort, onuId: onu.onuId, reason: 'mapping already exists' });
+        continue;
+      }
+
+      // Try matching by serial number, then by MAC-like serial patterns
+      let matchedInventory = null;
+      if (onu.serial) {
+        matchedInventory = bySerial[onu.serial.toLowerCase()] || byMac[onu.serial.toLowerCase()] || null;
+      }
+
+      const mappingData = {
+        olt_device_id:    req.deviceId,
+        pon_port:         onu.ponPort,
+        onu_id:           onu.onuId,
+        serial_number:    onu.serial || null,
+        description:      onu.description || null,
+        status:           onu.status || 'unknown',
+        subscriber_id:    matchedInventory?.subscriber_id || null,
+        onu_inventory_id: matchedInventory?.id || null,
+        mac_address:      matchedInventory?.mac_address || null,
+        // The line profile is the ONU's data path. Without one it registers, reports
+        // itself working, and can never get an address — so record it here rather than
+        // leaving the mapping to imply an ONU is fine because it says "online".
+        line_profile:     onu.lineProfile || null,
+        srv_profile:      onu.srvProfile || null,
+      };
+
+      const mapping = await req.prisma.olt_onu_mappings.create({ data: mappingData });
+      created.push(mapping);
+    }
+
+    res.json({
+      success: true,
+      discovered: onus.length,
+      created: created.length,
+      skipped: skipped.length,
+      details: { created, skipped },
+    });
+  } catch (err) {
+    console.error('[OLT] Error in auto-discover:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+//  ALARM ROUTES
+// ============================================================
+
+// ── GET /devices/:id/alarms — Alarm info via SSH ─────────────
+router.get('/devices/:id/alarms', adminAuth(), requireDevice, async (req, res) => {
+  try {
+    const config = await vsolOlt.getConfig(req.prisma);
+    if (!config.enabled) return res.status(503).json({ error: 'OLT management is disabled' });
+
+    const device = await vsolOlt.getDeviceConfig(req.prisma, req.deviceId);
+
+    let alarms = [];
+    try {
+      const output = await vsolOlt.sshShellExec(device, ['terminal length 0', 'show alarm', 'exit'], 10000);
+      const clean = vsolOlt.stripAnsi(output);
+      const lines = clean.split('\n').filter(l => l.trim() && !l.includes('#') && !l.includes('show alarm'));
+      alarms = lines.filter(l => l.match(/alarm|warning|error|critical/i)).map((line, idx) => ({
+        index: idx + 1,
+        message: line.trim(),
+      }));
+    } catch (_) {
+      alarms = [];
+    }
+
+    res.json({ deviceId: req.deviceId, alarms });
+  } catch (err) {
+    console.error('[OLT] Error getting alarms:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+//  SUBSCRIBER-SPECIFIC ROUTES (no requireDevice)
+//  These look up the subscriber's mapped OLT device automatically
+// ============================================================
+
+// ── GET /subscriber/:id/onu-info — Get subscriber's ONU info ─
+router.get('/subscriber/:id/onu-info', adminAuth(), async (req, res) => {
+  try {
+    const subscriberId = parseInt(req.params.id, 10);
+    if (isNaN(subscriberId) || subscriberId <= 0) {
+      return res.status(400).json({ error: 'Invalid subscriber ID' });
+    }
+
+    // Find the subscriber's ONU mapping
+    const mapping = await req.prisma.olt_onu_mappings.findFirst({
+      where: { subscriber_id: subscriberId },
+      include: {
+        olt_device: true,
+        onu_inventory: {
+          select: { id: true, mac_address: true, serial_number: true, model: true },
+        },
+      },
+    });
+
+    if (!mapping) {
+      return res.status(404).json({ error: 'No ONU mapping found for this subscriber' });
+    }
+
+    // Fetch live ONU detail from the OLT
+    let onuDetail = null;
+    try {
+      onuDetail = await vsolOlt.getONUDetail(
+        req.prisma, mapping.olt_device_id, mapping.pon_port, mapping.onu_id
+      );
+    } catch (detailErr) {
+      onuDetail = { error: detailErr.message };
+    }
+
+    res.json({
+      mapping: {
+        id: mapping.id,
+        oltDeviceId: mapping.olt_device_id,
+        oltLabel: mapping.olt_device?.label || null,
+        oltHost: mapping.olt_device?.host || null,
+        ponPort: mapping.pon_port,
+        onuId: mapping.onu_id,
+        serialNumber: mapping.serial_number,
+        macAddress: mapping.mac_address,
+        lineProfile: mapping.line_profile,
+        srvProfile: mapping.srv_profile,
+        description: mapping.description,
+      },
+      inventory: mapping.onu_inventory || null,
+      liveStatus: onuDetail,
+    });
+  } catch (err) {
+    console.error('[OLT] Error getting subscriber ONU info:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /subscriber/:id/onu-reboot — Reboot subscriber's ONU
+router.post('/subscriber/:id/onu-reboot', adminAuth(), async (req, res) => {
+  try {
+    const subscriberId = parseInt(req.params.id, 10);
+    if (isNaN(subscriberId) || subscriberId <= 0) {
+      return res.status(400).json({ error: 'Invalid subscriber ID' });
+    }
+
+    // Find the subscriber's ONU mapping
+    const mapping = await req.prisma.olt_onu_mappings.findFirst({
+      where: { subscriber_id: subscriberId },
+      include: { olt_device: true },
+    });
+
+    if (!mapping) {
+      return res.status(404).json({ error: 'No ONU mapping found for this subscriber' });
+    }
+
+    const result = await vsolOlt.rebootONU(
+      req.prisma, mapping.olt_device_id, mapping.pon_port, mapping.onu_id
+    );
+
+    res.json({
+      success: true,
+      subscriberId,
+      oltDeviceId: mapping.olt_device_id,
+      oltLabel: mapping.olt_device?.label || null,
+      ponPort: mapping.pon_port,
+      onuId: mapping.onu_id,
+      result,
+    });
+  } catch (err) {
+    console.error('[OLT] Error rebooting subscriber ONU:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+module.exports = router;

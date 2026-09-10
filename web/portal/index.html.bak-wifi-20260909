@@ -1,0 +1,2506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+// ── Secure Fetch Interceptor ─────────────────────────────
+(function(){
+  const _fetch = window.fetch;
+  window.fetch = function(url, opts) {
+    opts = opts || {};
+    const urlStr = typeof url === 'string' ? url : (url.url || '');
+    if (urlStr.startsWith('/api') || urlStr.includes('/api/')) {
+      opts.credentials = 'include';
+      const method = (opts.method || 'GET').toUpperCase();
+      if (['POST','PUT','DELETE','PATCH'].includes(method)) {
+        opts.headers = opts.headers || {};
+        if (!opts.headers['X-CSRF-Token'] && !opts.headers['x-csrf-token']) {
+          const m = document.cookie.match(/j2_csrf=([^;]+)/);
+          if (m) opts.headers['X-CSRF-Token'] = m[1];
+        }
+      }
+    }
+    return _fetch.call(this, url, opts);
+  };
+})();
+</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Netfactory — My Account</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%233b82f6'/><text x='50%25' y='55%25' dominant-baseline='middle' text-anchor='middle' fill='white' font-size='14' font-weight='800' font-family='sans-serif'>NF</text></svg>">
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Segoe UI',system-ui,sans-serif; background:#f0f4f8; }
+  #root { min-height:100vh; }
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700;800;900&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+@keyframes slideInRight{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useMemo } = React;
+
+const Portal = () => {
+  const [loggedIn, setLoggedIn] = useState(false);
+  const [siteSettings, setSiteSettings] = useState({});
+  const [currentUser, setCurrentUser] = useState(null);
+  const [activePage, setActivePage] = useState("dashboard");
+  const [mobileNav, setMobileNav] = useState(false);
+  const [loginForm, setLoginForm] = useState({ account:"", password:"" });
+  const [loginError, setLoginError] = useState("");
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [loginAttempts, setLoginAttempts] = useState(0);
+  const [lockoutUntil, setLockoutUntil] = useState(null);
+  const [captchaA, setCaptchaA] = useState(0);
+  const [captchaB, setCaptchaB] = useState(0);
+  const [captchaOp, setCaptchaOp] = useState("+");
+  const [captchaInput, setCaptchaInput] = useState("");
+  const [pdfModal, setPdfModal] = useState(null); // { invoiceId, invoiceNumber }
+  const [payAllMode, setPayAllMode] = useState(false);
+  const [showPayModal, setShowPayModal] = useState(false);
+  const [payInvoice, setPayInvoice] = useState(null);
+  const [payMethod, setPayMethod] = useState("xendit");
+  const [payStep, setPayStep] = useState(1);
+  const [payProcessing, setPayProcessing] = useState(false);
+  const payPopupRef = React.useRef(null);
+  const payPollRef = React.useRef(null);
+  const [showChangePlan, setShowChangePlan] = useState(false);
+  const [selectedNewPlan, setSelectedNewPlan] = useState(null);
+  const [changePlanStep, setChangePlanStep] = useState(1);
+  const [supportForm, setSupportForm] = useState({ category:"connectivity", priority:"medium", subject:"", description:"" });
+  const [supportSubmitted, setSupportSubmitted] = useState(false);
+  const [showForgot, setShowForgot] = useState(false);
+  const [forgotAccount, setForgotAccount] = useState("");
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const [forgotMsg, setForgotMsg] = useState(null);
+  const [forgotError, setForgotError] = useState(null);
+  const [showEditProfile, setShowEditProfile] = useState(false);
+  const [editProfileForm, setEditProfileForm] = useState({ firstName:"", middleName:"", lastName:"", email:"", phone:"", address:"", barangay:"", municipality:"", province:"", postalCode:"" });
+  const [serviceCoverage, setServiceCoverage] = useState([]);
+  const [referrals, setReferrals] = useState([]);
+  const [referralForm, setReferralForm] = useState({ firstName:"", middleName:"", lastName:"", email:"", contactNumber:"" });
+  const [referralLoading, setReferralLoading] = useState(false);
+  const [toasts, setToasts] = useState([]);
+  const showToast = (msg, type="error") => {
+    const id = Date.now();
+    setToasts(prev => [...prev, {id, msg, type}]);
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000);
+  };
+      const [companyInfo, setCompanyInfo] = useState({});
+
+  // Fetch company info for footer
+  // Fetch company settings for portal branding
+  React.useEffect(() => {
+    fetch('/api/portal/settings')
+      .then(r=>r.json())
+      .then(d => { if(d && d.company_name) setSiteSettings(d); })
+      .catch(()=>{});
+  }, []);
+
+    useEffect(() => {
+      fetch('/api/public/settings').then(r => r.json()).then(d => {
+        if (d && !d.error) setCompanyInfo(d);
+      }).catch(() => {});
+    }, []);
+
+    // Check for Xendit payment return
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const urlToken = params.get('token');
+    if (urlToken) {
+      localStorage.setItem('j2_token', urlToken);
+      sessionStorage.setItem('j2_token_bak', urlToken);
+    }
+    const pageParam = params.get('page');
+    if (pageParam && ['billing','dashboard','support','account','plan','usage'].includes(pageParam)) {
+      setActivePage(pageParam);
+    }
+    const paymentStatus = params.get('payment');
+    const invoiceNum = params.get('invoice');
+    if (paymentStatus && invoiceNum) {
+      // Clean URL
+      window.history.replaceState({}, '', window.location.pathname);
+      if (paymentStatus === 'success') {
+        setActivePage("billing");
+        setPayInvoice({ number: invoiceNum, amount: 0 });
+        setPayRef(invoiceNum);
+        setPayStep(3);
+        setShowPayModal(true);
+        // Poll for payment confirmation
+        const pollPayment = () => {
+          const token = getToken();
+          if (!token) return;
+          fetch(`${API}/portal/invoices?limit=50`, { headers: { "Content-Type":"application/json", "Authorization":`Bearer ${token}` } })
+            .then(r => r.json()).then(inv => {
+              const paid = (inv.invoices || []).find(i => i.number === invoiceNum && i.status === 'paid');
+              if (paid) {
+                setPayInvoice(prev => ({ ...prev, amount: paid.amount }));
+                setMyInvoices((inv.invoices||[]).map(i=>{const tp=i.payments?i.payments.reduce((s,p)=>s+Number(p.amount||0),0):0;return{id:i.id, number:i.number, amount:i.amount, dueDate:i.dueDate, period:i.period, status:i.status, totalPaid:tp, balance:i.amount-tp, paidAt:i.payments?.[0]?.paidAt||null, method:i.payments?.[0]?.method||null}}));
+              }
+            }).catch(() => {});
+        };
+        setTimeout(pollPayment, 2000);
+        setTimeout(pollPayment, 5000);
+        setTimeout(pollPayment, 10000);
+      } else {
+        setActivePage("billing");
+        setPayError(`Payment was not completed for invoice ${invoiceNum}. You can try again.`);
+      }
+    }
+  }, []);
+
+  // Fetch enabled service areas on mount (public endpoint, no auth needed)
+  useEffect(() => {
+    fetch(`${API}/public/coverage`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.coverage?.length) setServiceCoverage(d.coverage); })
+      .catch(() => {});
+  }, []);
+
+  // ========== BATAAN TOWNS & BARANGAYS (static fallback) ==========
+  const coverageData = {
+    "Bataan": {
+      "Abucay": {zip:"2114", brgy:["Bangkal","Calaylayan","Capitangan","Gabon","Laon","Mabatang","Omboy","Palarong Pinoy","Pentor","Salian","Wawa"]},
+      "Bagac": {zip:"2107", brgy:["Atilano L. Ricardo","Bagumbayan","Banawang","Binuangan","Ibaba","Pag-asa","Parang","Paysawan","Quinawan","San Antonio","Saysain","Sumalo","Wakas"]},
+      "Balanga City": {zip:"2100", brgy:["Bagong Silang","Bagumbayan","Cabog-Cabog","Camacho","Cataning","Central","Cupang North","Cupang Proper","Cupang West","Dangcol","Ibayo","Malabia","Munting Batangas","Poblacion","Puerto Rivas","Pto. Rivas Ibaba","Pto. Rivas Itaas","San Jose","Sibacan","Talisay","Tanato","Tenejero","Tortugas","Tuyo"]},
+      "Dinalupihan": {zip:"2110", brgy:["Aquino","Bangal","Bayan-bayanan","Bonifacio","Colo","Daang Bago","Dalao","Del Pilar","Gen. Luna","Hernandez","Ibayo","Karsel","Lati","Liyang","Mabini","Magsaysay","Maligaya","Naparing","New San Jose","Old San Jose","Padre Dandan","Pagalanggang","Payangan","Pentor","Pinulot","Pita","Roosevelt","Roxas","Saguing","San Benito","San Isidro","San Pablo","San Ramon","San Simon","Santa Isabel","Santo Niño","Sapang Balas","Torres Bugallon","Tubo-Tubo","Tucop","Zamora"]},
+      "Hermosa": {zip:"2111", brgy:["A. Rivera","Almacen","Bacong","Balsic","Bamban","Burgos","Cataning","Culis","Daungan","Judge Roman Cruz Sr.","Mabiga","Mabuco","Maite","Mambog","Palihan","Pandatung","Pulo","Saba","San Pedro","Santo Cristo","Sumalo","Tipo"]},
+      "Limay": {zip:"2103", brgy:["Alangan","Duale","Kitang 2","Kitang I","Lamao","Landing","Reformista","St. Francis de Assisi","Townsite","Wawa"]},
+      "Mariveles": {zip:"2105", brgy:["Alas-asin","Baseco Country","Batangas II","Biaan","Cabcaben","Camaya","Ipag","Lucanin","Malaya","Maligaya","Mt. Samat","Sisiman","Townsite"]},
+      "Morong": {zip:"2108", brgy:["Binaritan","Mabayo","Nagbalayong","Sabang","Tala","Townsite"]},
+      "Orani": {zip:"2112", brgy:["Apollo","Bagong Paraiso","Balut","Bayan","Calero","Centro I","Centro II","Dona Francisca","Kabalutan","Kaparangan","Masantol","Mulawin","Paking","Palaypay","Parang Parang","Sta. Elena","Tala","Wawa"]},
+      "Orion": {zip:"2102", brgy:["Arellano","Bagumbayan","Balagtas","Balut","Bantan","Bilolo","Calungusan","Camachile","Daang Bago","Daang Bilolo","Daang Pare","General Lim","Kapunitan","Lati","Lusungan","Paking","Panilao","Parang Parang","Plaza","Puting Buhangin","Sabatan","San Vicente","Santo Domingo","Villa Angeles","Wakas"]},
+      "Pilar": {zip:"2101", brgy:["Ala-uli","Bagumbayan","Balut I","Balut II","Bantan Munti","Burgos","Del Rosario","Diwa","Landing","Liyang","Nagwaling","Panilao","Pantingan","Poblacion","Rizal","Sto. Niño","Wawa"]},
+      "Samal": {zip:"2113", brgy:["East Calaguiman","East Daang Bago","Gugo","Ibaba","Imelda","Lalawigan","San Juan","San Roque","Sapa","Section Tinio","Tabing Ilog","West Calaguiman","West Daang Bago"]}
+    },
+    "Pampanga": {
+      "Apalit": {zip:"2016", brgy:["Balucuc","Cansinala","Capalangan","Colgante","Paligui","Sampaloc","San Juan","San Vicente","Sucad","Sulipan","Tabuyuc"]},
+      "Candaba": {zip:"2013", brgy:["Bahay Pare","Bambang","Barit","Buas","Cuayang Bugtong","Dalayap","Dulong Malabon","Gulap","Lanang","Lourdes","Magumbali","Mandasig","Mandili","Mangga","Mapaniqui","Paligui","Pangclara","Pansinao","Paralaya","Pasig","Pescadores","Pulong Gubat","Salapungan","San Agustin","San Isidro","San Jose Norte","San Jose Sur","San Juan","San Nicolas","San Roque","Santa Cruz","Santa Maria","Santo Niño","Santo Rosario","Tagulod"]},
+      "Macabebe": {zip:"2018", brgy:["Batasan","Caduang Tete","Candelaria","Castuli","Consuelo","Dalayap","Mataguiti","San Esteban","San Francisco","San Isidro","San Jose","San Juan","San Nicolas 1st","San Nicolas 2nd","San Rafael","San Roque","Santa Cruz","Santa Lutgarda","Santa Maria","Santa Rita","Santa Teresa 1st","Santa Teresa 2nd","Santo Rosario","Saplad David","Tacasan","Telacsan"]},
+      "Masantol": {zip:"2017", brgy:["Alauli","Bagang","Balibago","Bebe Anac","Bebe Matua","Bulac","Cambasi","Malauli","Nigui","Palimpe","Puti","Sagrada Familia","San Agustin","San Isidro Anac","San Isidro Matua","San Nicolas","San Pedro","Santa Cruz","Santa Lucia","Santa Ursula","Santo Niño"]},
+      "Minalin": {zip:"2019", brgy:["Bulac","Dawe","Lourdes","San Francisco 1st","San Francisco 2nd","San Isidro","San Nicolas","San Pedro","Santa Catalina","Santa Maria","Santa Rita","Santo Domingo","Saplad"]},
+      "San Fernando": {zip:"2000", brgy:["Alasas","Baliti","Bulaon","Calulut","Del Carmen","Del Pilar","Del Rosario","Dolores","Juliana","Lara","Lourdes","Magliman","Maimpis","Malino","Malpitic","Pandaras","Panipuan","Pulung Bulu","Quebiawan","Saguin","San Agustin","San Felipe","San Isidro","San Jose","San Juan","San Nicolas","San Pedro","Santa Lucia","Santa Teresa","Santo Niño","Santo Rosario","Sindalan","Telabastagan"]},
+      "San Luis": {zip:"2014", brgy:["San Agustin","San Carlos","San Isidro","San Jose","San Juan","San Nicolas","San Roque","San Sebastian","Santa Catalina","Santa Cruz","Santa Lucia","Santa Maria","Santa Veronica","Santo Niño","Santo Rosario","Santo Tomas"]},
+      "San Simon": {zip:"2015", brgy:["Concepcion","Del Carmen","San Agustin","San Isidro","San Jose","San Juan","San Miguel","San Nicolas 1st","San Nicolas 2nd","San Pedro","Santa Cruz","Santa Monica","Santo Niño"]},
+      "Santo Tomas": {zip:"2012", brgy:["Moras De La Paz","Poblacion","San Bartolome","San Isidro","San Vicente","Santa Catalina","Santo Cristo"]}
+    },
+    "Batangas": {
+      "Batangas City": {zip:"4200", brgy:["Alangilan","Balagtas","Balete","Banaba Center","Banaba Ibaba","Banaba Kanluran","Banaba Silangan","Barangay 1 (Pob.)","Barangay 2 (Pob.)","Barangay 3 (Pob.)","Barangay 4 (Pob.)","Barangay 5 (Pob.)","Barangay 6 (Pob.)","Barangay 7 (Pob.)","Barangay 8 (Pob.)","Barangay 9 (Pob.)","Barangay 10 (Pob.)","Barangay 11 (Pob.)","Barangay 12 (Pob.)","Barangay 13 (Pob.)","Barangay 14 (Pob.)","Barangay 15 (Pob.)","Barangay 16 (Pob.)","Barangay 17 (Pob.)","Barangay 18 (Pob.)","Barangay 19 (Pob.)","Barangay 20 (Pob.)","Barangay 21 (Pob.)","Barangay 22 (Pob.)","Barangay 23 (Pob.)","Barangay 24 (Pob.)","Bilogo","Bolbok","Bukal","Calicanto","Catandala","Concepcion","Conde Itaas","Conde Labak","Cuta","Dalig","Dela Paz","Dela Paz Pulot Aplaya","Dela Paz Pulot Itaas","Domoclay","Dumantay","Gulod Itaas","Gulod Labak","Haligue Kanluran","Haligue Silangan","Ilihan","Kumba","Kumintang Ibaba","Kumintang Ilaya","Libjo","Liponpon, Isla Verde","Maapas","Mabacong","Mahabang Dahilig","Mahabang Parang","Mahacot Kanluran","Mahacot Silangan","Malalim","Malibayo","Malitam","Maruclap","Pagkilatan","Paharang Kanluran","Paharang Silangan","Pallocan Kanluran","Pallocan Silangan","Pinamucan","Pinamucan Ibaba","Pinamucan Silangan","Sampaga","San Agapito, Isla Verde","San Agustin Kanluran, Isla Verde","San Agustin Silangan, Isla Verde","San Andres, Isla Verde","San Antonio, Isla Verde","San Isidro","San Jose Sico","San Miguel","San Pedro","Santa Clara","Santa Rita Aplaya","Santa Rita Karsada","Santo Domingo","Santo Niño","Simlong","Sirang Lupa","Sorosoro Ibaba","Sorosoro Ilaya","Sorosoro Karsada","Tabangao Ambulong","Tabangao Aplaya","Tabangao Dao","Talahib Pandayan","Talahib Payapa","Talumpok Kanluran","Talumpok Silangan","Tinga Itaas","Tinga Labak","Tulo","Wawa"]}
+    }
+  };
+  const provinces = Object.keys(coverageData).sort();
+  const getTowns = (prov) => Object.keys(coverageData[prov] || {}).sort();
+  // Barangay lookup: prefers live coverage data (case-insensitive town match), falls back to static
+  const getBarangays = (town) => {
+    if (!town) return [];
+    const low = town.toLowerCase();
+    if (serviceCoverage.length > 0) {
+      const m = serviceCoverage.find(m => m.name.toLowerCase() === low);
+      if (m) return (m.barangays || []).map(b => b.name).sort();
+    }
+    for (const p of provinces) { if (coverageData[p]?.[town]) return (coverageData[p][town].brgy||[]).sort(); }
+    return [];
+  };
+  const getPostalCode = (town) => { if(!town) return ""; const t=town.toLowerCase(); for(const p of provinces){for(const k of Object.keys(coverageData[p]||{})){if(k.toLowerCase()===t) return coverageData[p][k].zip||"";}} return ""; };
+  const getProvinceForTown = (town) => { if(!town) return ""; const t=town.toLowerCase(); for(const p of provinces){for(const k of Object.keys(coverageData[p]||{})){if(k.toLowerCase()===t) return p;}} return ""; };
+  // Only show serviceable towns (from API), fallback to full static list
+  const allTowns = serviceCoverage.length > 0
+    ? serviceCoverage.map(m => m.name).sort()
+    : provinces.flatMap(p => Object.keys(coverageData[p])).sort();
+  // Normalize town/barangay to match coverage data casing (fixes stored ALL-CAPS values)
+  const normalizeTown = (town) => { if(!town) return ""; const low=town.toLowerCase(); const m=serviceCoverage.find(m=>m.name.toLowerCase()===low); if(m) return m.name; for(const p of provinces){for(const k of Object.keys(coverageData[p]||{})){if(k.toLowerCase()===low) return k;}} return town; };
+  const normalizeBarangay = (town, brgy) => { if(!brgy) return ""; const low=brgy.toLowerCase(); const opts=getBarangays(town); const m=opts.find(b=>b.toLowerCase()===low); return m||brgy; };
+
+  // Phone formatter: raw digits → (09##) ### - ####
+  const formatPhone = (raw) => {
+    const d = (raw || "").replace(/\D/g, "").slice(0, 11);
+    if (d.length <= 4) return d;
+    if (d.length <= 7) return `(${d.slice(0,4)}) ${d.slice(4)}`;
+    return `(${d.slice(0,4)}) ${d.slice(4,7)} - ${d.slice(7)}`;
+  };
+  const unformatPhone = (formatted) => (formatted || "").replace(/\D/g, "").slice(0, 11);
+  const [editProfileSaved, setEditProfileSaved] = useState(false);
+  const [notifPrefs, setNotifPrefs] = useState({ emailBilling:true, smsPayment:true, outageAlerts:true, promos:false });
+  const [showChangePass, setShowChangePass] = useState(false);
+  const [changePassForm, setChangePassForm] = useState({ current:"", newPass:"", confirm:"" });
+  const [changePassDone, setChangePassDone] = useState(false);
+  const [changePassError, setChangePassError] = useState("");
+  const [changePassLoading, setChangePassLoading] = useState(false);
+  const [show2FA, setShow2FA] = useState(false);
+  const [twoFAStep, setTwoFAStep] = useState(1);
+  const [twoFACode, setTwoFACode] = useState("");
+  const [twoFAEnabled, setTwoFAEnabled] = useState(false);
+  const [twoFASecret, setTwoFASecret] = useState("");
+  const [payError, setPayError] = useState("");
+  const [payRef, setPayRef] = useState("");
+  const [showDisconnect, setShowDisconnect] = useState(false);
+  const [disconnectStep, setDisconnectStep] = useState(1);
+  const [disconnectReason, setDisconnectReason] = useState("");
+  const [disconnectConfirm, setDisconnectConfirm] = useState("");
+
+  // ── AI Virtual Assistant ──
+  const [showAiChat, setShowAiChat]     = useState(false);
+  const [aiMessages, setAiMessages]     = useState([]);
+  const aiChatEndRef = useRef(null);
+  const [aiInput, setAiInput]           = useState('');
+  useEffect(() => { if (aiChatEndRef.current) aiChatEndRef.current.scrollIntoView({ behavior:"smooth" }); }, [aiMessages]);
+  const fetchReferrals = () => {
+    fetch(`${API}/portal/referrals`, {headers: authHeaders()})
+      .then(r => r.json())
+      .then(d => { if (d.referrals) setReferrals(d.referrals); })
+      .catch(() => {});
+  };
+  useEffect(() => {
+    if (!loggedIn || !getToken()) return;
+    if (activePage === 'support') {
+      fetch(`${API}/portal/tickets`, {headers: authHeaders()})
+        .then(r => r.json())
+        .then(tix => { if (tix.tickets) setMyTickets(tix.tickets.map(t=>({id:t.id,number:t.number,category:t.category,priority:t.priority,status:t.status,subject:t.subject,description:t.description,created:t.createdAt?.split('T')[0],updates:(t.updates||[]).map(u=>({date:u.date,text:u.message,by:u.by}))}))); })
+        .catch(() => {});
+    }
+    if (activePage === 'referral') { fetchReferrals(); }
+  }, [activePage]);
+  const [aiLoading, setAiLoading]       = useState(false);
+  const [aiEnabled, setAiEnabled]       = useState(true);
+  const [aiName, setAiName]             = useState('Netta');
+  const [aiHistory, setAiHistory]       = useState([]);
+
+  // ========== THEME ==========
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem("j2_portal_dark") === "true");
+  const toggleDark = () => { setDarkMode(d => { localStorage.setItem("j2_portal_dark", !d); return !d; }); };
+  const c = darkMode ? {
+    primary:"#60a5fa", primaryDk:"#3b82f6", primaryLt:"#1e3a5f",
+    bg:"#1e293b", bgCard:"#253347", bgAlt:"#1e293b",
+    text:"#e2e8f0", textSec:"#94a3b8", textMuted:"#64748b",
+    border:"#334155", borderLight:"#2d3d50",
+    input:"#1e293b", inputBorder:"#334155",
+    success:"#34d399", successLt:"#064e3b", successDk:"#059669",
+    warning:"#fbbf24", warningLt:"#78350f",
+    danger:"#f87171", dangerLt:"#7f1d1d",
+    info:"#22d3ee", infoLt:"#164e63",
+    shadow:"0 1px 3px rgba(0,0,0,.15)", shadowMd:"0 4px 12px rgba(0,0,0,.2)", shadowLg:"0 10px 40px rgba(0,0,0,.3)",
+  } : {
+    primary:"#2563eb", primaryDk:"#1d4ed8", primaryLt:"#dbeafe",
+    bg:"#f0f4f8", bgCard:"#ffffff", bgAlt:"#f8fafc",
+    text:"#0f172a", textSec:"#475569", textMuted:"#94a3b8",
+    border:"#e2e8f0", borderLight:"#f1f5f9",
+    input:"#ffffff", inputBorder:"#e2e8f0",
+    success:"#10b981", successLt:"#d1fae5", successDk:"#059669",
+    warning:"#f59e0b", warningLt:"#fef3c7",
+    danger:"#ef4444", dangerLt:"#fee2e2",
+    info:"#06b6d4", infoLt:"#cffafe",
+    shadow:"0 1px 3px rgba(0,0,0,.06)", shadowMd:"0 4px 12px rgba(0,0,0,.08)", shadowLg:"0 10px 40px rgba(0,0,0,.12)",
+  };
+
+  // ========== API INTEGRATION ==========
+  const API = "/api";
+  const [plans, setPlans] = useState([]);
+  const [myInvoices, setMyInvoices] = useState([]);
+  const [myTickets, setMyTickets] = useState([]);
+  const [ticketPage, setTicketPage] = useState(1);
+  const [ticketShowAll, setTicketShowAll] = useState(false);
+  const ticketsPerPage = 3;
+  const totalTicketPages = Math.ceil(myTickets.length / ticketsPerPage);
+  const paginatedTickets = ticketShowAll ? myTickets : myTickets.slice((ticketPage-1)*ticketsPerPage, ticketPage*ticketsPerPage);
+  const [usageData, setUsageData] = useState([]);
+  const [dashData, setDashData] = useState(null);
+  const [dataLoading, setDataLoading] = useState(false);
+
+  const getToken = () => localStorage.getItem("j2_token") || sessionStorage.getItem("j2_token_bak");
+  // Backup token to sessionStorage so it survives Xendit redirect
+  const _origToken = localStorage.getItem("j2_token");
+  if (_origToken) sessionStorage.setItem("j2_token_bak", _origToken);
+  const authHeaders = () => ({"Content-Type":"application/json","Authorization":`Bearer ${getToken()}`});
+
+  // Check for existing session on mount
+  useEffect(() => {
+    // Restore token from sessionStorage backup if missing (after Xendit redirect)
+    const bakToken = sessionStorage.getItem("j2_token_bak");
+    const bakSub = sessionStorage.getItem("j2_subscriber_bak");
+    if (!localStorage.getItem("j2_token") && bakToken) {
+      localStorage.setItem("j2_token", bakToken);
+    }
+    if (!localStorage.getItem("j2_subscriber") && bakSub) {
+      localStorage.setItem("j2_subscriber", bakSub);
+    }
+    const token = getToken();
+    const saved = localStorage.getItem("j2_subscriber");
+    if(token && saved) {
+      try {
+        const sub = JSON.parse(saved);
+        setCurrentUser(sub);
+        setLoggedIn(true);
+      } catch(e) { localStorage.removeItem("j2_token"); localStorage.removeItem("j2_subscriber"); }
+    }
+  }, []);
+
+  // Fetch all data when logged in
+  useEffect(() => {
+    if(!loggedIn || !getToken()) return;
+    setDataLoading(true);
+    const h = authHeaders();
+    Promise.all([
+      fetch(`${API}/portal/dashboard`,{headers:h}).then(r=>{if(!r.ok)throw r;return r.json();}),
+      fetch(`${API}/portal/invoices?limit=50`,{headers:h}).then(r=>r.json()),
+      fetch(`${API}/portal/tickets`,{headers:h}).then(r=>r.json()),
+      fetch(`${API}/portal/usage`,{headers:h}).then(r=>r.json()),
+      fetch(`${API}/portal/plan`,{headers:h}).then(r=>r.json()),
+      fetch(`${API}/portal/account`,{headers:h}).then(r=>r.ok?r.json():null).catch(()=>null),
+    ]).then(([dash, inv, tix, usage, planData, acctData]) => {
+      setDashData(dash);
+      if(dash.subscriber) {
+        const s = dash.subscriber;
+        const merged = {...(JSON.parse(localStorage.getItem("j2_subscriber")||"{}")), ...s, acct: s.accountNumber, planId: s.plan?.id, planObj: s.plan, installed: s.installedAt, nextBill: s.nextBillDate, creditBalance: s.creditBalance || 0,
+          connection: dash.connection || { isOnline: false },
+          ...(acctData ? { middleName:acctData.middleName||null, barangay:acctData.barangay, municipality:acctData.municipality, province:acctData.province||getProvinceForTown(acctData.municipality), postalCode:acctData.postalCode||getPostalCode(acctData.municipality) } : {})
+        };
+        setCurrentUser(prev => ({...prev, ...merged}));
+        // Persist full data to localStorage so it's available on next login
+        localStorage.setItem("j2_subscriber", JSON.stringify(merged));
+      }
+      if(acctData) {
+        if(acctData.is2faEnabled) setTwoFAEnabled(true);
+        if(acctData.notificationPrefs) setNotifPrefs(prev => ({...prev, ...acctData.notificationPrefs}));
+      }
+      setMyInvoices((inv.invoices||[]).map(i=>{const tp=i.payments?i.payments.reduce((s,p)=>s+Number(p.amount||0),0):0;return{id:i.id, number:i.number, amount:i.amount, dueDate:i.dueDate, period:i.period, status:i.status, totalPaid:tp, balance:i.amount-tp, paidAt:i.payments?.[0]?.paidAt||null, method:i.payments?.[0]?.method||null}}));
+      setMyTickets((tix.tickets||[]).map(t=>({id:t.id, number:t.number, category:t.category, priority:t.priority, status:t.status, subject:t.subject, description:t.description, created:t.createdAt?.split("T")[0], updates:(t.updates||[]).map(u=>({date:u.date, text:u.message, by:u.by}))})));
+      if(usage.daily) setUsageData(usage.daily.map(d=>({date:typeof d.date==="string"?d.date:new Date(d.date).toISOString().split("T")[0], day:new Date(d.date).toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"}), download:d.download, upload:d.upload})));
+      if(planData.availablePlans) setPlans(planData.availablePlans.map(p=>({id:p.id, name:p.name, speed: (()=>{ const s=typeof p.speed==="number"?p.speed:parseInt(String(p.speed)); return s>=1000?"1 Gbps":`${s} Mbps`; })(), speedRaw:p.speed, price:p.price, features:p.features||[], color:p.color, isPopular:p.isPopular})));
+      setDataLoading(false);
+    }).catch(err => {
+      console.error("Data fetch error:", err);
+      if(err.status === 401) { localStorage.removeItem("j2_token"); localStorage.removeItem("j2_subscriber"); setLoggedIn(false); setCurrentUser(null); }
+      setDataLoading(false);
+    });
+  }, [loggedIn]);
+
+  // ── Fetch AI assistant status on login ──
+  useEffect(() => {
+    if (!loggedIn || !getToken()) return;
+    fetch(`${API}/ai/status`, { headers: authHeaders() })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (d) {
+          setAiEnabled(d.enabled);
+          if (d.name) setAiName(d.name);
+          if (d.enabled) {
+            setAiMessages([{ role: 'assistant', content: `Kumusta! Ako si ${d.name || 'Netta'}, ang inyong virtual assistant ng ${d.companyName || siteSettings.company_name || 'Netfactory'}.\n\nPaano kita matutulungan ngayon?` }]);
+          }
+        }
+      })
+      .catch(() => {});
+  }, [loggedIn]);
+
+  // ========== HELPERS ==========
+  const fmt = (n) => `₱${Number(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`;
+  const fmtDate = (d) => { if(!d) return "—"; try { const dt = new Date(d); if(isNaN(dt)) return d; return dt.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}); } catch(e) { return d; } };
+  const getPlan = (id) => plans.find(p => p.id === id) || plans.find(p => p.name === id) || currentUser?.planObj || {};
+  const statusColor = (s) => ({paid:c.success,pending:c.warning,partial:c.warning,unpaid:c.warning,balance:c.info,overdue:c.danger,open:c.warning,in_progress:c.info,resolved:c.success,closed:c.textMuted,active:c.success,suspended:c.danger}[s]||c.textMuted);
+  const statusBg = (s) => ({paid:c.successLt,pending:c.warningLt,partial:c.warningLt,unpaid:c.warningLt,overdue:c.dangerLt,open:c.warningLt,in_progress:c.infoLt,resolved:c.successLt,active:c.successLt,suspended:c.dangerLt}[s]||c.borderLight);
+
+  const getQRUrl = (secret) => {
+    if (!secret) return "";
+    const acct = currentUser?.acct || currentUser?.accountNumber || "J2User";
+    const email = currentUser?.email || acct;
+    const secretClean = secret.replace(/[\s\-=]/g, "").toUpperCase();
+    const totpUri = `otpauth://totp/J2%20Network:${encodeURIComponent(email)}?secret=${secretClean}&issuer=J2%20Network&digits=6&period=30`;
+    return `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(totpUri)}`;
+  };
+
+  const formatSecret = (secret) =>
+    secret ? secret.replace(/[\s\-=]/g, "").toUpperCase().match(/.{1,4}/g)?.join(" ") ?? secret : "";
+
+  const generateCaptcha = () => {
+    const a = Math.floor(Math.random() * 20) + 5;
+    const b = Math.floor(Math.random() * 10) + 1;
+    const ops = ["+", "-"];
+    const op = ops[Math.floor(Math.random() * ops.length)];
+    setCaptchaA(a); setCaptchaB(b); setCaptchaOp(op); setCaptchaInput("");
+  };
+
+  const getCaptchaAnswer = () => captchaOp === "+" ? captchaA + captchaB : captchaA - captchaB;
+
+  const handleLogin = () => {
+    setLoginError("");
+    // Check lockout
+    if (lockoutUntil && new Date() < lockoutUntil) {
+      const secs = Math.ceil((lockoutUntil - new Date()) / 1000);
+      setLoginError(`Account temporarily locked. Try again in ${secs} seconds.`);
+      return;
+    }
+    // Require CAPTCHA after 3 failed attempts
+    if (loginAttempts >= 3) {
+      if (!captchaInput || parseInt(captchaInput) !== getCaptchaAnswer()) {
+        setLoginError("Incorrect CAPTCHA answer. Please try again.");
+        generateCaptcha();
+        return;
+      }
+    }
+    setLoginLoading(true);
+    fetch(`${API}/portal/login`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({account:loginForm.account,password:loginForm.password})})
+    .then(r=>r.json()).then(data=>{
+      if(data.token){
+        localStorage.setItem("j2_token",data.token); sessionStorage.setItem("j2_token_bak",data.token);
+        // Immediately fetch full account data so profile is complete from the start
+        const h = {"Authorization":"Bearer "+data.token,"Content-Type":"application/json"};
+        return fetch(`${API}/portal/account`,{headers:h}).then(r=>r.ok?r.json():null).catch(()=>null)
+        .then(acctData => {
+          const fullSub = {...data.subscriber,
+            ...(acctData ? { middleName:acctData.middleName||null, phone:acctData.phone, address:acctData.address, barangay:acctData.barangay, municipality:acctData.municipality, province:acctData.province||"", postalCode:acctData.postalCode } : {})
+          };
+          localStorage.setItem("j2_subscriber",JSON.stringify(fullSub)); sessionStorage.setItem("j2_subscriber_bak",JSON.stringify(fullSub));
+          setCurrentUser(fullSub);
+          setLoggedIn(true);
+          setLoginLoading(false);
+        });
+      } else {
+        setLoginLoading(false);
+        if (data.lockedSeconds) {
+          setLockoutUntil(new Date(Date.now() + data.lockedSeconds * 1000));
+          setLoginError(data.error);
+        } else {
+          setLoginError(data.error||"Login failed");
+          setLoginAttempts(prev => { const n = prev + 1; if (n >= 3) generateCaptcha(); if (n >= 6) { setLockoutUntil(new Date(Date.now() + 15*60*1000)); setLoginError("Too many failed attempts. Account locked for 15 minutes."); } return n; });
+        }
+      }
+    }).catch(()=>{ setLoginError("Network error. Please try again."); setLoginLoading(false); setLoginAttempts(prev => { const n = prev + 1; if (n >= 3) generateCaptcha(); if (n >= 6) { setLockoutUntil(new Date(Date.now() + 5*60*1000)); setLoginError("Too many failed attempts. Account locked for 5 minutes."); } return n; }); });
+  };
+
+  const handleLogout = () => {
+    fetch(`${API}/portal/logout`,{method:"POST",headers:authHeaders()}).catch(()=>{});
+    localStorage.removeItem("j2_token"); localStorage.removeItem("j2_subscriber");
+    sessionStorage.removeItem("j2_token_bak"); sessionStorage.removeItem("j2_subscriber_bak");
+    document.cookie = 'j2_portal_token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+    document.cookie = 'j2_csrf=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+    setLoggedIn(false); setCurrentUser(null); setActivePage("dashboard");
+  };
+
+  const handlePay = () => {
+    setPayProcessing(true);
+    setPayError("");
+
+    if (payMethod === "xendit") {
+      const endpoint = payAllMode
+        ? `${API}/portal/invoices/pay-all`
+        : `${API}/portal/invoices/${payInvoice.id}/pay`;
+
+      // Open new tab immediately on user click (before async) so browser allows it
+      const popup = window.open('about:blank', '_blank');
+
+      // Build rich payload for Xendit checkout display
+      const customerData = {
+        given_names: currentUser.firstName || "",
+        surname: currentUser.lastName || "",
+        email: currentUser.email || "",
+        mobile_number: currentUser.phone || "",
+        address: {
+          street: currentUser.address || "",
+          barangay: currentUser.barangay || "",
+          city: currentUser.municipality || "",
+          province: currentUser.province || getProvinceForTown(currentUser.municipality) || "",
+          postal_code: currentUser.postalCode || getPostalCode(currentUser.municipality) || ""
+        }
+      };
+
+      const planInfo = getPlan(currentUser.planId);
+      const invoiceItems = payAllMode
+        ? unpaidInvoices.map(inv => ({
+            name: `${planInfo.name || "Internet Service"} — ${inv.period ? fmtDate(inv.period) : inv.number}`,
+            quantity: 1,
+            price: inv.balance > 0 ? inv.balance : inv.amount,
+            category: "Internet Subscription"
+          }))
+        : [{
+            name: `${planInfo.name || "Internet Service"} — ${payInvoice.period ? fmtDate(payInvoice.period) : "Monthly"}`,
+            quantity: 1,
+            price: payInvoice.amount,
+            category: "Internet Subscription"
+          }];
+
+      const body = payAllMode
+        ? { method: "xendit", invoiceIds: unpaidInvoices.map(i => i.id), customer: customerData, items: invoiceItems, plan: { name: planInfo.name, speed: planInfo.speed, price: planInfo.price }, account_number: currentUser.acct }
+        : { method: "xendit", customer: customerData, items: invoiceItems, plan: { name: planInfo.name, speed: planInfo.speed, price: planInfo.price }, account_number: currentUser.acct, invoice_number: payInvoice.number, billing_period: payInvoice.period, due_date: payInvoice.dueDate };
+
+      fetch(endpoint, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify(body)
+      })
+      .then(r => r.json().then(data => ({ ok: r.ok, data })))
+      .then(({ ok, data }) => {
+        if (ok && data.checkoutUrl) {
+          if (!popup || popup.closed) {
+            // Popup was blocked — fall back to redirect
+            window.location.href = data.checkoutUrl;
+            return;
+          }
+          // Navigate the already-open popup to the checkout URL
+          popup.location.href = data.checkoutUrl;
+          payPopupRef.current = popup;
+          setPayStep(2);
+          setPayProcessing(false);
+          const invoiceId = payAllMode ? null : payInvoice.id;
+          payPollRef.current = setInterval(async () => {
+            // User closed the popup
+            if (payPopupRef.current?.closed) {
+              clearInterval(payPollRef.current);
+              payPollRef.current = null;
+              payPopupRef.current = null;
+              setPayStep(1);
+              setPayProcessing(false);
+              setPayError("Payment tab was closed. You can try again when ready.");
+              return;
+            }
+            // Poll payment status
+            if (!invoiceId) return;
+            try {
+              const r = await fetch(`${API}/portal/invoices/${invoiceId}/payment-status`, { headers: authHeaders() });
+              if (!r.ok) return;
+              const s = await r.json();
+              if (s.status === 'paid') {
+                clearInterval(payPollRef.current);
+                payPollRef.current = null;
+                if (payPopupRef.current && !payPopupRef.current.closed) payPopupRef.current.close();
+                payPopupRef.current = null;
+                fetch(`${API}/portal/invoices?limit=50`, { headers: authHeaders() })
+                  .then(r => r.json()).then(inv => {
+                    setMyInvoices((inv.invoices||[]).map(i=>{const tp=i.payments?i.payments.reduce((sum,p)=>sum+Number(p.amount||0),0):0;return{id:i.id,number:i.number,amount:i.amount,dueDate:i.dueDate,period:i.period,status:i.status,totalPaid:tp,balance:i.amount-tp,paidAt:i.payments?.[0]?.paidAt||null,method:i.payments?.[0]?.method||null};}));
+                    const paid = (inv.invoices||[]).find(i => i.id === invoiceId);
+                    if (paid) setPayInvoice(prev => ({ ...prev, amount: Number(paid.amount) }));
+                  }).catch(()=>{});
+                setPayStep(3);
+              }
+            } catch(e) {}
+          }, 3000);
+        } else {
+          if (popup && !popup.closed) popup.close();
+          setPayStep(1);
+          setPayError(data.error || "Failed to create payment. Please try again.");
+          setPayProcessing(false);
+        }
+      })
+      .catch(() => {
+        if (popup && !popup.closed) popup.close();
+        setPayStep(1);
+        setPayError("Network error. Please check your connection and try again.");
+        setPayProcessing(false);
+      });
+    } else {
+      // Other methods — show instructions
+      setPayStep(4); // New step for offline payment instructions
+      setPayProcessing(false);
+    }
+  };
+
+  const handleCreateTicket = () => {
+    fetch(`${API}/portal/tickets`,{method:"POST",headers:authHeaders(),body:JSON.stringify(supportForm)})
+    .then(r=>r.json()).then(data=>{
+      if(data.ticket){ setSupportSubmitted(true);
+        // Refresh tickets
+        fetch(`${API}/portal/tickets`,{headers:authHeaders()}).then(r=>r.json()).then(tix=>{
+          setMyTickets((tix.tickets||[]).map(t=>({id:t.id,number:t.number,category:t.category,priority:t.priority,status:t.status,subject:t.subject,description:t.description,created:t.createdAt?.split("T")[0],updates:(t.updates||[]).map(u=>({date:u.date,text:u.message,by:u.by}))})));
+        });
+      } else { showToast(data.error||"Failed to create ticket"); }
+    }).catch(()=>showToast("Network error. Please try again."));
+  };
+
+  const handlePlanChange = () => {
+    if(!selectedNewPlan) return;
+    fetch(`${API}/portal/plan/change`,{method:"POST",headers:authHeaders(),body:JSON.stringify({planId:selectedNewPlan.id})})
+    .then(r=>r.json()).then(data=>{
+      if(data.ticketNumber){ setChangePlanStep(2); }
+      else { showToast(data.error||"Plan change request failed"); }
+    }).catch(()=>showToast("Network error"));
+  };
+
+  const handleChangePassword = () => {
+    setChangePassError("");
+    setChangePassLoading(true);
+    fetch(`${API}/portal/change-password`,{method:"POST",headers:authHeaders(),body:JSON.stringify({currentPassword:changePassForm.current, newPassword:changePassForm.newPass})})
+    .then(r=>{
+      if(!r.ok) return r.json().then(d => { throw d; });
+      return r.json();
+    }).then(data=>{
+      setChangePassDone(true);
+      setChangePassLoading(false);
+    }).catch(err=>{ setChangePassError(err.error||"Failed to change password. Check your current password."); setChangePassLoading(false); });
+  };
+
+  const handleUpdateProfile = () => {
+    fetch(`${API}/portal/account`,{method:"PUT",headers:authHeaders(),body:JSON.stringify(editProfileForm)})
+    .then(r=>{
+      if(!r.ok) return r.json().then(d => { throw d; });
+      return r.json();
+    }).then(data=>{
+      // Update currentUser directly from the form data (PUT succeeded)
+      setCurrentUser(prev => ({...prev,
+        firstName:editProfileForm.firstName, middleName:editProfileForm.middleName, lastName:editProfileForm.lastName,
+        email:editProfileForm.email, phone:editProfileForm.phone, address:editProfileForm.address,
+        barangay:editProfileForm.barangay, municipality:editProfileForm.municipality,
+        province:editProfileForm.province, postalCode:editProfileForm.postalCode
+      }));
+      localStorage.setItem("j2_subscriber", JSON.stringify({...currentUser,
+        firstName:editProfileForm.firstName, middleName:editProfileForm.middleName, lastName:editProfileForm.lastName,
+        email:editProfileForm.email, phone:editProfileForm.phone, address:editProfileForm.address,
+        barangay:editProfileForm.barangay, municipality:editProfileForm.municipality,
+        province:editProfileForm.province, postalCode:editProfileForm.postalCode
+      }));
+      setEditProfileSaved(true);
+    }).catch(err=>showToast(err.error||"Failed to update profile"));
+  };
+
+  const handleDisconnect = () => {
+    fetch(`${API}/portal/disconnect`,{method:"POST",headers:authHeaders(),body:JSON.stringify({reason:disconnectReason})})
+    .then(r=>{
+      if(!r.ok) return r.json().then(d => { throw d; });
+      return r.json();
+    }).then(data=>{
+      setDisconnectStep(3);
+    }).catch(err=>{ showToast(err.error||"Request failed"); setDisconnectStep(1); });
+  };
+
+  const handleEnable2FA = () => {
+    fetch(`${API}/portal/2fa/verify`,{method:"POST",headers:authHeaders(),body:JSON.stringify({code:twoFACode})})
+    .then(r=>{ if(!r.ok) return r.json().then(d=>{throw d;}); return r.json(); })
+    .then(()=>{ setTwoFAStep(3); setTwoFAEnabled(true); })
+    .catch(err=>showToast(err.error||"Invalid code. Please try again."));
+  };
+
+  const handleDisable2FA = () => {
+    fetch(`${API}/portal/2fa/disable`,{method:"POST",headers:authHeaders(),body:JSON.stringify({code:twoFACode})})
+    .then(r=>{ if(!r.ok) return r.json().then(d=>{throw d;}); return r.json(); })
+    .then(()=>{ setTwoFAEnabled(false); setShow2FA(false); showToast("Two-factor authentication disabled."); })
+    .catch(err=>showToast(err.error||"Invalid code. Please try again."));
+  };
+
+  const totalUsageDown = usageData.length ? usageData.reduce((s,d) => s + d.download, 0).toFixed(1) : "0";
+  const totalUsageUp = usageData.length ? usageData.reduce((s,d) => s + d.upload, 0).toFixed(1) : "0";
+  const avgDown = usageData.length ? (totalUsageDown / usageData.length).toFixed(1) : "0";
+  const maxDown = usageData.length ? Math.max(...usageData.map(d => d.download)).toFixed(1) : "0";
+  const maxBarVal = usageData.length ? Math.max(...usageData.map(d => d.download + d.upload)) : 1;
+
+  // ========== AI ASSISTANT HANDLER ==========
+  const handleAiSend = async () => {
+    if (!aiInput.trim() || aiLoading) return;
+    const userMsg = aiInput.trim();
+    setAiInput('');
+    const newMessages = [...aiMessages, { role: 'user', content: userMsg }];
+    setAiMessages(newMessages);
+    setAiLoading(true);
+    try {
+      const res = await fetch(`${API}/ai/chat`, {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: userMsg,
+          history: aiHistory
+        })
+      });
+      const data = await res.json();
+      const reply = data.reply || 'Sorry, I could not respond right now. Please try again.';
+      if (data.ticketCreated) { setAiMessages(prev => [...prev, { role: 'assistant', content: 'Ticket created! Ticket number: ' + data.ticketCreated.number + '. Our support team will get back to you soon.' }]); setTimeout(()=>fetch(`${API}/portal/tickets`,{headers:authHeaders()}).then(r=>r.json()).then(tix=>{ if(tix.tickets) setMyTickets(tix.tickets.map(t=>({id:t.id,number:t.number,category:t.category,priority:t.priority,status:t.status,subject:t.subject,description:t.description,created:t.createdAt?.split('T')[0],updates:(t.updates||[]).map(u=>({date:u.date,text:u.message,by:u.by}))}))); }).catch(()=>{}),500); }
+      setAiMessages(prev => [...prev, { role: 'assistant', content: reply }]);
+      // Keep rolling history (last 6 turns)
+      setAiHistory(prev => [...prev, { role: 'user', content: userMsg }, { role: 'assistant', content: reply }].slice(-12));
+    } catch (e) {
+      setAiMessages(prev => [...prev, { role: 'assistant', content: 'Connection error. Please check your internet and try again.' }]);
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  // ========== STYLES ==========
+  const font = "'DM Sans','Segoe UI',system-ui,sans-serif";
+  const fontMono = "'Space Grotesk','SF Mono',monospace";
+
+  const Card = useMemo(() => function Card({children, style={}}) {
+    return React.createElement("div", {style:{background:c.bgCard, borderRadius:16, border:`1px solid ${c.border}`, boxShadow:c.shadow, padding:24, ...style}}, children);
+  }, [darkMode]);
+
+  const Badge = useMemo(() => function Badge({status, large}) {
+    const s = status || "unknown";
+    const sc = {paid:c.success,pending:c.warning,partial:c.warning,unpaid:c.warning,balance:c.info,overdue:c.danger,open:c.warning,in_progress:c.info,resolved:c.success,closed:c.textMuted,active:c.success,suspended:c.danger}[s]||c.textMuted;
+    const sb = {paid:c.successLt,pending:c.warningLt,partial:c.warningLt,unpaid:c.warningLt,overdue:c.dangerLt,open:c.warningLt,in_progress:c.infoLt,resolved:c.successLt,active:c.successLt,suspended:c.dangerLt}[s]||c.borderLight;
+    return React.createElement("span", {style:{display:"inline-flex",alignItems:"center",gap:5,padding:large?"6px 16px":"4px 12px",borderRadius:20,fontSize:large?13:11,fontWeight:600,background:sb,color:sc,textTransform:"capitalize"}},
+      React.createElement("span", {style:{width:6,height:6,borderRadius:"50%",background:sc}}),
+      s.replace("_"," ")
+    );
+  }, [darkMode]);
+
+  const Btn = useMemo(() => function Btn({children, primary, danger, outline, small, disabled, onClick, style={}}) {
+    return React.createElement("button", {disabled, onClick, style:{
+      padding: small ? "8px 16px" : "12px 24px", borderRadius:12,
+      background: disabled ? c.border : danger ? c.danger : primary ? `linear-gradient(135deg,${c.primary},${c.primaryDk})` : outline ? "transparent" : c.bgCard,
+      color: disabled ? c.textMuted : primary || danger ? "#fff" : outline ? c.primary : c.textSec,
+      border: outline ? `2px solid ${c.primary}` : primary || danger ? "none" : `1px solid ${c.border}`,
+      fontSize: small ? 12 : 14, fontWeight:600, cursor: disabled ? "not-allowed" : "pointer", transition:"all .2s", fontFamily:font,
+      display:"inline-flex", alignItems:"center", justifyContent:"center", gap:8, ...style,
+    }}, children);
+  }, [darkMode]);
+
+  // ============================================================
+  // LOGIN PAGE
+  // ============================================================
+  if(!loggedIn) {
+    return (
+      <div style={{fontFamily:font, minHeight:"100vh", background:`linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%)`, display:"flex", alignItems:"center", justifyContent:"center", padding:20, position:"relative", overflow:"hidden"}}>
+        <style>{`
+          @keyframes float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-20px)} }
+          @keyframes pulse { 0%,100%{opacity:.3} 50%{opacity:.6} }
+          @keyframes slideUp { from{opacity:0;transform:translateY(30px)} to{opacity:1;transform:translateY(0)} }
+          @keyframes spin { to{transform:rotate(360deg)} }
+        `}</style>
+
+        {/* Background orbs */}
+        <div style={{position:"absolute",width:400,height:400,borderRadius:"50%",background:"radial-gradient(circle,rgba(37,99,235,.15),transparent)",top:"-10%",left:"-5%",animation:"float 8s ease-in-out infinite"}} />
+        <div style={{position:"absolute",width:300,height:300,borderRadius:"50%",background:"radial-gradient(circle,rgba(6,182,212,.1),transparent)",bottom:"-5%",right:"-5%",animation:"float 10s ease-in-out infinite 2s"}} />
+
+        <div style={{maxWidth:440, width:"100%", animation:"slideUp .6s ease-out"}}>
+          {/* Logo */}
+          <div style={{textAlign:"center", marginBottom:36}}>
+            <div style={{width:64, height:64, borderRadius:16, background:`linear-gradient(135deg,${c.primary},${c.primaryDk})`, display:"inline-flex", alignItems:"center", justifyContent:"center", color:"#fff", fontWeight:800, fontSize:24, fontFamily:fontMono, marginBottom:16, boxShadow:"0 8px 32px rgba(37,99,235,.3)"}}>{siteSettings.company_short_name||"J2"}</div>
+            <h1 style={{fontSize:26, fontWeight:800, color:"#fff", fontFamily:fontMono, marginBottom:6}}>My Account</h1>
+            <p style={{color:"rgba(255,255,255,.5)", fontSize:14}}>{(siteSettings.company_name || 'Netfactory') + ' — Customer Portal'}</p>
+          </div>
+
+          {/* Login Card */}
+          <div style={{background:"rgba(255,255,255,.06)", backdropFilter:"blur(20px)", borderRadius:24, border:"1px solid rgba(255,255,255,.1)", padding:36, boxShadow:"0 20px 60px rgba(0,0,0,.3)"}}>
+            {!showForgot ? (
+              <>
+                <h2 style={{fontSize:20, fontWeight:700, color:"#fff", marginBottom:6}}>Welcome back</h2>
+                <p style={{color:"rgba(255,255,255,.4)", fontSize:13, marginBottom:28}}>Sign in with your 10-digit account number and password</p>
+
+                {loginError && (
+                  <div style={{background:"rgba(239,68,68,.15)", border:"1px solid rgba(239,68,68,.3)", borderRadius:12, padding:"12px 16px", marginBottom:20, display:"flex", alignItems:"center", gap:10}}>
+                    <span style={{fontSize:16}}><i className="fas fa-exclamation-triangle" style={{color:"#f59e0b"}}></i></span>
+                    <span style={{color:"#fca5a5", fontSize:13}}>{loginError}</span>
+                  </div>
+                )}
+
+                <div style={{marginBottom:18}}>
+                  <label style={{fontSize:12, fontWeight:600, color:"rgba(255,255,255,.6)", marginBottom:8, display:"block"}}>Account Number</label>
+                  <input value={loginForm.account} onChange={e => setLoginForm({...loginForm, account:e.target.value})}
+                    placeholder="2602000000"
+                    onKeyDown={e => e.key === "Enter" && handleLogin()}
+                    style={{width:"100%", padding:"14px 16px", background:"rgba(255,255,255,.06)", border:"1px solid rgba(255,255,255,.12)", borderRadius:12, color:"#fff", fontSize:14, fontFamily:fontMono, outline:"none", letterSpacing:1}} />
+                </div>
+
+                <div style={{marginBottom:12}}>
+                  <label style={{fontSize:12, fontWeight:600, color:"rgba(255,255,255,.6)", marginBottom:8, display:"block"}}>Password</label>
+                  <div style={{position:"relative"}}>
+                    <input type={showPassword ? "text" : "password"} value={loginForm.password} onChange={e => setLoginForm({...loginForm, password:e.target.value})}
+                      placeholder="Enter your password"
+                      onKeyDown={e => e.key === "Enter" && handleLogin()}
+                      style={{width:"100%", padding:"14px 48px 14px 16px", background:"rgba(255,255,255,.06)", border:"1px solid rgba(255,255,255,.12)", borderRadius:12, color:"#fff", fontSize:14, fontFamily:font, outline:"none"}} />
+                    <span onClick={() => setShowPassword(!showPassword)} style={{position:"absolute", right:14, top:"50%", transform:"translateY(-50%)", cursor:"pointer", color:"rgba(255,255,255,.4)", fontSize:18, userSelect:"none", lineHeight:1}}>{showPassword ? <i className="fas fa-eye-slash"></i> : <i className="fas fa-eye"></i>}</span>
+                  </div>
+                </div>
+
+                <div style={{display:"flex", justifyContent:"flex-end", marginBottom:24}}>
+                  <span onClick={() => setShowForgot(true)} style={{color:c.primary, fontSize:13, cursor:"pointer", fontWeight:500}}>Forgot password?</span>
+                </div>
+
+                {/* Math CAPTCHA — appears after 3 failed attempts */}
+                {lockoutUntil && new Date() < lockoutUntil && (
+                  <div style={{marginBottom:16,padding:"12px 16px",background:"rgba(239,68,68,.15)",border:"1px solid rgba(239,68,68,.3)",borderRadius:12,fontSize:13,color:"#f87171",textAlign:"center",fontWeight:600}}>
+                    <i className="fas fa-lock" style={{marginRight:6}}></i> Too many failed attempts. Please wait {Math.ceil((lockoutUntil-new Date())/1000)} seconds before trying again.
+                  </div>
+                )}
+                {loginAttempts >= 3 && !(lockoutUntil && new Date() < lockoutUntil) && (
+                  <div style={{marginBottom:20, padding:16, background:"rgba(251,191,36,.08)", border:"1px solid rgba(251,191,36,.2)", borderRadius:12}}>
+                    <div style={{fontSize:11, fontWeight:700, color:"#f59e0b", textTransform:"uppercase", letterSpacing:1, marginBottom:10}}><i className="fas fa-lock" style={{marginRight:6}}></i> Security Verification</div>
+                    <div style={{display:"flex", alignItems:"center", gap:12}}>
+                      <div style={{padding:"10px 16px", background:"rgba(255,255,255,.06)", borderRadius:8, fontSize:18, fontWeight:800, color:"#fff", fontFamily:fontMono, letterSpacing:2, whiteSpace:"nowrap"}}>
+                        {captchaA} {captchaOp} {captchaB} = ?
+                      </div>
+                      <input value={captchaInput} onChange={e => setCaptchaInput(e.target.value.replace(/[^0-9-]/g,""))}
+                        placeholder="Answer"
+                        onKeyDown={e => e.key === "Enter" && handleLogin()}
+                        style={{flex:1, minWidth:0, width:"100%", padding:"12px 14px", background:"rgba(255,255,255,.06)", border:"1px solid rgba(255,255,255,.12)", borderRadius:8, color:"#fff", fontSize:16, fontFamily:fontMono, outline:"none", textAlign:"center", letterSpacing:2}} />
+                      <span onClick={generateCaptcha} style={{cursor:"pointer", fontSize:20, padding:4, color:"rgba(255,255,255,.4)"}} title="New question"><i className="fas fa-rotate"></i></span>
+                    </div>
+                  </div>
+                )}
+
+                <button onClick={handleLogin} disabled={loginLoading || !loginForm.account || !loginForm.password} style={{
+                  width:"100%", padding:"15px", borderRadius:12, border:"none", fontSize:15, fontWeight:700, fontFamily:font,
+                  background: loginLoading || !loginForm.account || !loginForm.password ? "rgba(255,255,255,.1)" : `linear-gradient(135deg,${c.primary},${c.primaryDk})`,
+                  color: loginLoading || !loginForm.account || !loginForm.password ? "rgba(255,255,255,.3)" : "#fff",
+                  cursor: loginLoading ? "wait" : "pointer", transition:"all .2s",
+                  boxShadow: loginLoading ? "none" : "0 4px 20px rgba(37,99,235,.3)",
+                  display:"flex", alignItems:"center", justifyContent:"center", gap:10,
+                }}>
+                  {loginLoading && <span style={{width:18,height:18,border:"2px solid rgba(255,255,255,.3)",borderTopColor:"#fff",borderRadius:"50%",animation:"spin .8s linear infinite",display:"inline-block"}} />}
+                  {loginLoading ? "Signing in..." : "Sign In"}
+                </button>
+
+              </>
+            ) : (
+              <>
+                <div style={{cursor:"pointer", color:c.primary, fontSize:13, fontWeight:600, marginBottom:20, display:"flex", alignItems:"center", gap:6}} onClick={() => { setShowForgot(false); setForgotMsg(null); setForgotError(null); setForgotAccount(""); setForgotEmail(""); }}>← Back to login</div>
+                <h2 style={{fontSize:20, fontWeight:700, color:"#fff", marginBottom:6}}>Reset Password</h2>
+                <p style={{color:"rgba(255,255,255,.4)", fontSize:13, marginBottom:28}}>Enter your account number and registered email. We'll send a reset link to your email and an SMS code to your phone.</p>
+                {forgotMsg && <div style={{background:"rgba(34,197,94,.15)",border:"1px solid rgba(34,197,94,.3)",borderRadius:10,padding:"12px 16px",marginBottom:16,fontSize:13,color:"#4ade80"}}>{forgotMsg}</div>}
+                {forgotError && <div style={{background:"rgba(239,68,68,.15)",border:"1px solid rgba(239,68,68,.3)",borderRadius:10,padding:"12px 16px",marginBottom:16,fontSize:13,color:"#f87171"}}>{forgotError}</div>}
+                {!forgotMsg && <>
+                  <div style={{marginBottom:18}}>
+                    <label style={{fontSize:12, fontWeight:600, color:"rgba(255,255,255,.6)", marginBottom:8, display:"block"}}>Account Number</label>
+                    <input value={forgotAccount} onChange={e=>setForgotAccount(e.target.value)} placeholder="2602000000" style={{width:"100%", padding:"14px 16px", background:"rgba(255,255,255,.06)", border:"1px solid rgba(255,255,255,.12)", borderRadius:12, color:"#fff", fontSize:14, fontFamily:fontMono, outline:"none"}} />
+                  </div>
+                  <div style={{marginBottom:24}}>
+                    <label style={{fontSize:12, fontWeight:600, color:"rgba(255,255,255,.6)", marginBottom:8, display:"block"}}>Registered Email</label>
+                    <input type="email" value={forgotEmail} onChange={e=>setForgotEmail(e.target.value)} placeholder="your@email.com" style={{width:"100%", padding:"14px 16px", background:"rgba(255,255,255,.06)", border:"1px solid rgba(255,255,255,.12)", borderRadius:12, color:"#fff", fontSize:14, fontFamily:font, outline:"none"}} />
+                  </div>
+                  <button disabled={forgotLoading} onClick={async()=>{
+                    setForgotError(null);
+                    if(!forgotAccount.trim()||!forgotEmail.trim()){setForgotError("Please fill in all fields.");return;}
+                    setForgotLoading(true);
+                    try{
+                      const r=await fetch(`${API}/portal/forgot-password`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({account:forgotAccount.trim(),email:forgotEmail.trim().toLowerCase()})});
+                      const d=await r.json();
+                      if(!r.ok)throw new Error(d.error||"Request failed");
+                      setForgotMsg(d.message||"If the account exists, a reset link has been sent to your email and SMS to your phone.");
+                    }catch(e){setForgotError(e.message);}
+                    finally{setForgotLoading(false);}
+                  }} style={{width:"100%",padding:"15px",borderRadius:12,border:"none",fontSize:15,fontWeight:700,fontFamily:font,background:forgotLoading?"rgba(255,255,255,.1)":`linear-gradient(135deg,${c.primary},${c.primaryDk})`,color:"#fff",cursor:forgotLoading?"not-allowed":"pointer",boxShadow:"0 4px 20px rgba(37,99,235,.3)",opacity:forgotLoading?0.7:1}}>{forgotLoading?"Sending...":"Send Reset Link"}</button>
+                </>}
+              </>
+            )}
+          </div>
+
+          <p style={{textAlign:"center", color:"rgba(255,255,255,.25)", fontSize:12, marginTop:24}}>© 2026 {siteSettings.company_name || "Netfactory"}. All Rights Reserved.</p>
+        </div>
+      </div>
+    );
+  }
+
+  // ============================================================
+  // PORTAL PAGES (AFTER LOGIN)
+  // ============================================================
+
+  const plan = getPlan(currentUser.planId);
+  // Only these statuses are actually owed. Filtering on "not paid" swept in
+  // cancelled invoices, so the portal billed subscribers for invoices that had
+  // been voided and offered to collect the money.
+  const PAYABLE_STATUSES = ["pending", "overdue", "partial"];
+  const unpaidInvoices = myInvoices.filter(i => PAYABLE_STATUSES.includes(i.status)).map(i => {
+    const dueDate = i.dueDate ? new Date(i.dueDate) : null;
+    const now = new Date();
+    const daysPastDue = dueDate ? Math.floor((now - dueDate) / (1000 * 60 * 60 * 24)) : 0;
+    const displayStatus = daysPastDue >= 7 ? "overdue" : (i.totalPaid > 0 ? "balance" : "unpaid");
+    return { ...i, displayStatus };
+  });
+  const paidInvoices = myInvoices.filter(i => i.status === "paid");
+
+  const navItems = [
+    { id:"dashboard", icon:"fas fa-chart-line", label:"Dashboard" },
+    { id:"billing", icon:"fas fa-file-invoice-dollar", label:"Billing & Payments" },
+    { id:"usage", icon:"fas fa-chart-area", label:"Data Usage" },
+    { id:"plan", icon:"fas fa-clipboard-list", label:"Subscription" },
+    { id:"support", icon:"fas fa-headset", label:"Support" },
+    { id:"referral", icon:"fas fa-user-plus", label:"Referral" },
+    { id:"account", icon:"fas fa-user-cog", label:"Account Settings" },
+  ];
+
+  // ---------- Dashboard ----------
+  const DashboardPage = () => (
+    <div>
+      {/* Account Status Banner */}
+      {currentUser.status === "suspended" && (
+        <div style={{background:c.dangerLt, border:`1px solid ${c.danger}30`, borderRadius:16, padding:"18px 24px", marginBottom:20, display:"flex", alignItems:"center", gap:14, flexWrap:"wrap"}}>
+          <span style={{fontSize:24}}><i className="fas fa-exclamation-triangle" style={{color:"#f59e0b"}}></i></span>
+          <div style={{flex:1, minWidth:200}}>
+            <div style={{fontWeight:700, color:c.danger, fontSize:15}}>Account Suspended</div>
+            <div style={{fontSize:13, color:c.textSec, marginTop:2}}>Your account has been suspended due to overdue payments. Please settle your balance to restore service.</div>
+          </div>
+          <Btn danger small onClick={() => setActivePage("billing")}>Pay Now</Btn>
+        </div>
+      )}
+
+      {unpaidInvoices.length > 0 && currentUser.status !== "suspended" && (
+        <div style={{background:c.warningLt, border:`1px solid ${c.warning}30`, borderRadius:16, padding:"18px 24px", marginBottom:20, display:"flex", alignItems:"center", gap:14, flexWrap:"wrap"}}>
+          <span style={{fontSize:24}}><i className="fas fa-file-alt" style={{color:"#3b82f6"}}></i></span>
+          <div style={{flex:1, minWidth:200}}>
+            <div style={{fontWeight:700, color:darkMode?"#fff":"#92400e", fontSize:15}}>You have {unpaidInvoices.length} unpaid invoice{unpaidInvoices.length > 1 ? "s" : ""}</div>
+            <div style={{fontSize:13, color:c.textSec, marginTop:2}}>Total outstanding: {fmt(unpaidInvoices.reduce((s,i)=>s+(i.balance>0?i.balance:i.amount),0))}</div>
+          </div>
+          <Btn primary small onClick={() => setActivePage("billing")}>View & Pay</Btn>
+        </div>
+      )}
+
+      {/* KPI Cards */}
+      <div style={{display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(200px, 1fr))", gap:16, marginBottom:24}}>
+        {[
+          {icon:"fas fa-clipboard-list", label:"Current Plan", value:plan.name||"—", sub:plan.speed||"", color:c.primary},
+          {icon:"fas fa-money-bill-wave", label:"Monthly Rate", value:plan.price ? fmt(plan.price) : "—", sub:"per month", color:c.success},
+          {icon:"fas fa-wallet", label:"Account Balance", value: currentUser.balance > 0 ? fmt(currentUser.balance) : "₱0", sub: currentUser.balance > 0 ? "Outstanding" : "All paid", color: currentUser.balance > 0 ? c.danger : c.success},
+          {icon:"fas fa-coins", label:"Credit Balance", value: currentUser.creditBalance > 0 ? fmt(currentUser.creditBalance) : "₱0.00", sub: currentUser.creditBalance > 0 ? "Available credit" : "No credit", color: currentUser.creditBalance > 0 ? "#059669" : c.textMuted},
+          {icon:"fas fa-calendar-alt", label:"Next Bill Date", value: currentUser.nextBill ? fmtDate(currentUser.nextBill) : "—", sub:"Auto-generated", color:c.info},
+        ].map((k,i) => (
+          <Card key={i} style={{display:"flex", gap:14, alignItems:"center"}}>
+            <div style={{width:48, height:48, borderRadius:14, background:`${k.color}12`, display:"flex", alignItems:"center", justifyContent:"center"}}><i className={k.icon} style={{fontSize:18}}></i></div>
+            <div>
+              <div style={{fontSize:11, color:c.textMuted, fontWeight:600, textTransform:"uppercase", letterSpacing:.5}}>{k.label}</div>
+              <div style={{fontSize:20, fontWeight:800, color:c.text, fontFamily:fontMono}}>{k.value}</div>
+              <div style={{fontSize:11, color:c.textMuted}}>{k.sub}</div>
+            </div>
+          </Card>
+        ))}
+      </div>
+
+      {/* Quick Actions + Recent Activity */}
+      <div style={{display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(300px, 1fr))", gap:16}}>
+        <Card>
+          <h3 style={{fontSize:16, fontWeight:700, color:c.text, marginBottom:16}}>Quick Actions</h3>
+          <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:10}}>
+            {[
+              {icon:"fas fa-credit-card", label:"Pay Bill", onClick:() => setActivePage("billing")},
+              {icon:"fas fa-exchange-alt", label:"Change Plan", onClick:() => { setActivePage("plan"); }},
+              {icon:"fas fa-plus-circle", label:"New Ticket", onClick:() => setActivePage("support")},
+              {icon:"fas fa-chart-area", label:"View Usage", onClick:() => setActivePage("usage")},
+            ].map((a,i) => (
+              <div key={i} onClick={a.onClick} style={{padding:"16px 14px", borderRadius:12, border:`1px solid ${c.border}`, cursor:"pointer", textAlign:"center", transition:"all .2s", background:c.bgAlt}}>
+                <div style={{marginBottom:6}}><i className={a.icon} style={{fontSize:22}}></i></div>
+                <div style={{fontSize:13, fontWeight:600, color:c.textSec}}>{a.label}</div>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        <Card>
+          <h3 style={{fontSize:16, fontWeight:700, color:c.text, marginBottom:16}}>Recent Invoices</h3>
+          {myInvoices.slice(0, 4).map(inv => (
+            <div key={inv.id} style={{display:"flex", justifyContent:"space-between", alignItems:"center", padding:"12px 0", borderBottom:`1px solid ${c.borderLight}`}}>
+              <div>
+                <div style={{fontSize:13, fontWeight:600, color:c.text}}>{fmtDate(inv.period)}</div>
+                <div style={{fontSize:11, color:c.textMuted, fontFamily:fontMono}}>{inv.number}</div>
+              </div>
+              <div style={{display:"flex", alignItems:"center", gap:10}}>
+                <span style={{fontSize:14, fontWeight:700, color:c.text}}>{fmt(inv.amount)}</span>
+                <Badge status={inv.status} />
+              </div>
+            </div>
+          ))}
+          <div style={{marginTop:14}}>
+            <Btn small outline onClick={() => setActivePage("billing")} style={{width:"100%"}}>View All Invoices</Btn>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+
+  // ---------- Billing & Payments ----------
+  const BillingPage = () => (
+    <div>
+      {/* Payment Error Banner */}
+      {payError && !showPayModal && (
+        <Card style={{marginBottom:20, background:c.dangerLt, border:`1px solid ${c.danger}30`, padding:18}}>
+          <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", gap:12}}>
+            <div style={{display:"flex", alignItems:"center", gap:10}}>
+              <span style={{fontSize:22}}><i className="fas fa-exclamation-triangle" style={{color:"#f59e0b"}}></i></span>
+              <div>
+                <div style={{fontWeight:700, color:"#991b1b", fontSize:14}}>Payment Not Completed</div>
+                <div style={{fontSize:13, color:"#991b1b", marginTop:2}}>{payError}</div>
+              </div>
+            </div>
+            <div style={{cursor:"pointer", fontSize:16, color:"#991b1b", padding:4}} onClick={() => setPayError("")}><i className="fas fa-xmark"></i></div>
+          </div>
+        </Card>
+      )}
+
+      {/* Outstanding Balance */}
+      {unpaidInvoices.length > 0 && (
+        <Card style={{marginBottom:24, background:`linear-gradient(135deg, ${c.primary}08, ${c.primaryLt})`, border:`1px solid ${c.primary}20`}}>
+          <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:16}}>
+            <div>
+              <div style={{fontSize:12, fontWeight:600, color:c.primary, textTransform:"uppercase", letterSpacing:1, marginBottom:4}}>Outstanding Balance</div>
+              <div style={{fontSize:36, fontWeight:800, color:c.text, fontFamily:fontMono}}>{fmt(unpaidInvoices.reduce((s,i)=>s+(i.balance>0?i.balance:i.amount),0))}</div>
+              <div style={{fontSize:13, color:c.textMuted, marginTop:2}}>{unpaidInvoices.length} unpaid invoice{unpaidInvoices.length > 1 ? "s" : ""}</div>
+            </div>
+            <div style={{display:"flex", gap:10, flexWrap:"wrap"}}>
+              {unpaidInvoices.length > 1 && (
+                <Btn primary onClick={() => { setPayAllMode(true); setPayInvoice({ id:"all", number:"ALL", amount:unpaidInvoices.reduce((s,i)=>s+(i.balance>0?i.balance:i.amount),0), invoiceIds:unpaidInvoices.map(i=>i.id) }); setShowPayModal(true); setPayStep(1); setPayError(""); setPayMethod("xendit"); }}><i className="fas fa-credit-card" style={{marginRight:6}}></i>Pay All ({fmt(unpaidInvoices.reduce((s,i)=>s+(i.balance>0?i.balance:i.amount),0))})</Btn>
+              )}
+              <Btn primary onClick={() => { setPayAllMode(false); setPayInvoice(unpaidInvoices[0]); setShowPayModal(true); setPayStep(1); setPayError(""); setPayMethod("xendit"); }}><i className="fas fa-credit-card" style={{marginRight:6}}></i>Pay Now</Btn>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {/* Unpaid Invoices */}
+      {unpaidInvoices.length > 0 && (
+        <>
+          <h3 style={{fontSize:16, fontWeight:700, color:c.text, marginBottom:14}}>Unpaid Invoices</h3>
+          <div style={{display:"grid", gap:12, marginBottom:28}}>
+            {unpaidInvoices.map(inv => (
+              <Card key={inv.id} style={{padding:18, border:`1px solid ${statusColor(inv.displayStatus)}25`}}>
+                <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:12}}>
+                  <div style={{display:"flex", alignItems:"center", gap:14}}>
+                    <div style={{width:44, height:44, borderRadius:12, background:statusBg(inv.displayStatus), display:"flex", alignItems:"center", justifyContent:"center"}}><i className="fas fa-file-invoice" style={{fontSize:20,color:"inherit"}}></i></div>
+                    <div>
+                      <div style={{fontSize:14, fontWeight:700, color:c.text}}>{fmtDate(inv.period)}</div>
+                      <div style={{fontSize:12, color:c.textMuted, fontFamily:fontMono}}>{inv.number}</div>
+                      <div style={{fontSize:11, color:c.textMuted, marginTop:2}}>Due: {fmtDate(inv.dueDate)}</div>
+                    </div>
+                  </div>
+                  <div style={{display:"flex", alignItems:"center", gap:14}}>
+                    <div style={{textAlign:"right"}}>
+                      <div style={{fontSize:20, fontWeight:800, color:c.text, fontFamily:fontMono}}>{fmt(inv.balance > 0 ? inv.balance : inv.amount)}</div>
+                      <Badge status={inv.displayStatus} />
+                    </div>
+                    <span onClick={() => setPdfModal({ invoiceId: inv.id, invoiceNumber: inv.number })} style={{cursor:"pointer", color:c.textMuted, fontSize:18, padding:4}} title="View PDF"><i className="fas fa-file-pdf"></i></span>
+                    <Btn primary small onClick={() => { setPayAllMode(false); setPayInvoice(inv); setShowPayModal(true); setPayStep(1); setPayError(""); setPayMethod("xendit"); }}>Pay</Btn>
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* Payment History */}
+      <h3 style={{fontSize:16, fontWeight:700, color:c.text, marginBottom:14}}>Payment History</h3>
+      <Card style={{padding:0, overflow:"hidden"}}>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%", borderCollapse:"collapse", minWidth:600}}>
+            <thead>
+              <tr>
+                {["Invoice","Period","Amount","Paid","Balance","Due Date","Status","Payment",""].map(h => (
+                  <th key={h} style={{padding:"12px 16px", textAlign:["Amount","Paid","Balance"].includes(h)?"right":"left", fontSize:11, fontWeight:700, color:c.textMuted, textTransform:"uppercase", letterSpacing:.5, borderBottom:`2px solid ${c.border}`, background:c.bgAlt, whiteSpace:"nowrap"}}>{h}</th>
+                ))}
+                <div ref={aiChatEndRef} />
+              </tr>
+            </thead>
+            <tbody>
+              {myInvoices.map(inv => {
+                const tp = inv.totalPaid || 0;
+                const bal = inv.balance || 0;
+                const methodNames = {cash:"Cash",bank_transfer:"Bank Transfer",gcash:"GCash",maya:"Maya",check:"Check",online:"Online","7-eleven":"7-Eleven",bayad_center:"Bayad Center",xendit:"Xendit"};
+                return <tr key={inv.id}>
+                  <td style={{padding:"14px 16px", fontSize:12, fontFamily:fontMono, fontWeight:600, color:c.primary, borderBottom:`1px solid ${c.borderLight}`}}>{inv.number}</td>
+                  <td style={{padding:"14px 16px", fontSize:13, color:c.text, fontWeight:600, borderBottom:`1px solid ${c.borderLight}`}}>{fmtDate(inv.period)}</td>
+                  <td style={{padding:"14px 16px", fontSize:14, fontWeight:700, color:c.text, fontFamily:fontMono, textAlign:"right", borderBottom:`1px solid ${c.borderLight}`}}>{fmt(inv.amount)}</td>
+                  <td style={{padding:"14px 16px", fontSize:14, fontWeight:700, color:tp>0?c.success:c.textMuted, fontFamily:fontMono, textAlign:"right", borderBottom:`1px solid ${c.borderLight}`}}>{fmt(tp)}</td>
+                  <td style={{padding:"14px 16px", fontSize:14, fontWeight:700, color:bal>0?c.danger:c.success, fontFamily:fontMono, textAlign:"right", borderBottom:`1px solid ${c.borderLight}`}}>{fmt(bal)}</td>
+                  <td style={{padding:"14px 16px", fontSize:13, color:c.textSec, borderBottom:`1px solid ${c.borderLight}`}}>{fmtDate(inv.dueDate)}</td>
+                  <td style={{padding:"14px 16px", borderBottom:`1px solid ${c.borderLight}`}}><Badge status={inv.status==="paid"?"paid":(()=>{const dd=inv.dueDate?new Date(inv.dueDate):null;const dp=dd?Math.floor((new Date()-dd)/(1000*60*60*24)):0;if(dp>=7)return "overdue";return(inv.totalPaid||0)>0?"balance":"unpaid";})()} /></td>
+                  <td style={{padding:"14px 16px", fontSize:13, color:c.textSec, borderBottom:`1px solid ${c.borderLight}`}}>{methodNames[inv.method] || inv.method || "\u2014"}</td>
+                  <td style={{padding:"14px 16px", borderBottom:`1px solid ${c.borderLight}`}}>
+                    <span onClick={() => setPdfModal({ invoiceId: inv.id, invoiceNumber: inv.number })} style={{cursor:"pointer", color:c.primary, fontSize:12, fontWeight:600, display:"inline-flex", alignItems:"center", gap:4, padding:"6px 10px", background:`${c.primary}12`, borderRadius:6, border:`1px solid ${c.primary}25`, transition:"all .15s"}} title="View Invoice PDF"><i className="fas fa-file-pdf" style={{marginRight:4}}></i>PDF</span>
+                  </td>
+                </tr>;
+              })}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
+  );
+
+  // ---------- Usage ----------
+  const UsagePage = () => (
+    <div>
+      {/* Heading moved to header */}
+
+      {/* Usage Summary */}
+      <div style={{display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(180px, 1fr))", gap:16, marginBottom:24}}>
+        {[
+          {icon:"fas fa-download", label:"Total Downloaded", value:`${totalUsageDown} GB`, color:c.primary},
+          {icon:"fas fa-upload", label:"Total Uploaded", value:`${totalUsageUp} GB`, color:c.info},
+          {icon:"fas fa-chart-bar", label:"Daily Average", value:`${avgDown} GB`, color:c.success},
+          {icon:"fas fa-arrow-up", label:"Peak Usage Day", value:`${maxDown} GB`, color:c.warning},
+        ].map((s,i) => (
+          <Card key={i} style={{textAlign:"center", padding:20}}>
+            <div style={{marginBottom:8}}><i className={s.icon} style={{fontSize:22}}></i></div>
+            <div style={{fontSize:11, color:c.textMuted, fontWeight:600, textTransform:"uppercase", letterSpacing:.5, marginBottom:4}}>{s.label}</div>
+            <div style={{fontSize:22, fontWeight:800, color:s.color, fontFamily:fontMono}}>{s.value}</div>
+          </Card>
+        ))}
+      </div>
+
+      {/* Speed Test Info */}
+      <Card style={{marginBottom:24, background:`linear-gradient(135deg, #0f172a, #1e293b)`, border:"none"}}>
+        <div style={{display:"flex", justifyContent:"space-around", alignItems:"center", flexWrap:"wrap", gap:20, padding:"8px 0"}}>
+          <div style={{textAlign:"center"}}>
+            <div style={{fontSize:11, color:"rgba(255,255,255,.4)", fontWeight:600, textTransform:"uppercase", letterSpacing:1, marginBottom:8}}>Your Plan Speed</div>
+            <div style={{fontSize:42, fontWeight:800, color:"#fff", fontFamily:fontMono, lineHeight:1}}>{(plan.speed||"").replace(" Mbps","")}</div>
+            <div style={{fontSize:13, color:"rgba(255,255,255,.5)", marginTop:4}}>Mbps Download</div>
+          </div>
+          <div style={{width:1, height:60, background:"rgba(255,255,255,.1)"}} />
+          <div style={{textAlign:"center"}}>
+            <div style={{fontSize:11, color:"rgba(255,255,255,.4)", fontWeight:600, textTransform:"uppercase", letterSpacing:1, marginBottom:8}}>Data Cap</div>
+            <div style={{fontSize:42, fontWeight:800, color:c.success, fontFamily:fontMono, lineHeight:1}}>∞</div>
+            <div style={{fontSize:13, color:"rgba(255,255,255,.5)", marginTop:4}}>Unlimited Data</div>
+          </div>
+          <div style={{width:1, height:60, background:"rgba(255,255,255,.1)"}} />
+          <div style={{textAlign:"center"}}>
+            <div style={{fontSize:11, color:"rgba(255,255,255,.4)", fontWeight:600, textTransform:"uppercase", letterSpacing:1, marginBottom:8}}>Connection</div>
+            <div style={{fontSize:42, fontWeight:800, color:currentUser.connection?.isOnline ? c.success : "#ef4444", fontFamily:fontMono, lineHeight:1}}>●</div>
+            <div style={{fontSize:13, color:currentUser.connection?.isOnline ? c.success : "#ef4444", marginTop:4, fontWeight:600}}>{currentUser.connection?.isOnline ? "Online" : "Offline"}</div>
+          </div>
+        </div>
+      </Card>
+
+      {/* Usage Chart (Bar chart) */}
+      <Card>
+        <h3 style={{fontSize:16, fontWeight:700, color:c.text, marginBottom:4}}>Daily Usage — Last 30 Days</h3>
+        <div style={{display:"flex", gap:16, marginBottom:16}}>
+          <span style={{display:"flex", alignItems:"center", gap:6, fontSize:12, color:c.textMuted}}><span style={{width:10,height:10,borderRadius:3,background:c.primary}} /> Download</span>
+          <span style={{display:"flex", alignItems:"center", gap:6, fontSize:12, color:c.textMuted}}><span style={{width:10,height:10,borderRadius:3,background:c.info}} /> Upload</span>
+        </div>
+        <div style={{overflowX:"auto", paddingBottom:8}}>
+          <div style={{display:"flex", alignItems:"flex-end", gap:3, minWidth:700, height:180}}>
+            {usageData.map((d,i) => (
+              <div key={i} style={{flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:2, cursor:"pointer"}} title={`${d.day}\nDown: ${d.download} GB\nUp: ${d.upload} GB`}>
+                <div style={{width:"100%", display:"flex", flexDirection:"column", gap:1, height:160, justifyContent:"flex-end"}}>
+                  <div style={{width:"100%", borderRadius:"3px 3px 0 0", background:c.primary, transition:"height .3s", height:`${(d.download/maxBarVal)*140}px`, minHeight:2}} />
+                  <div style={{width:"100%", borderRadius:"0 0 3px 3px", background:c.info, transition:"height .3s", height:`${(d.upload/maxBarVal)*140}px`, minHeight:1}} />
+                </div>
+                {i % 5 === 0 && <div style={{fontSize:9, color:c.textMuted, whiteSpace:"nowrap", marginTop:4}}>{d.day.split(",")[0]}</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+
+  // ---------- Plan Management ----------
+  const PlanPage = () => (
+    <div>
+      {/* Heading moved to header */}
+
+      {/* Current Plan */}
+      <Card style={{marginBottom:28, background:`linear-gradient(135deg, ${c.primary}08, ${c.primaryLt})`, border:`1px solid ${c.primary}20`}}>
+        <div style={{display:"flex", alignItems:"center", gap:8, marginBottom:16}}>
+          <Badge status="active" large />
+          <span style={{fontSize:12, color:c.textMuted}}>Since {fmtDate(currentUser.installed)}</span>
+        </div>
+        <div style={{display:"flex", justifyContent:"space-between", alignItems:"flex-end", flexWrap:"wrap", gap:16}}>
+          <div>
+            <div style={{fontSize:12, fontWeight:700, color:c.primary, textTransform:"uppercase", letterSpacing:2, marginBottom:4}}>Current Plan</div>
+            <div style={{fontSize:32, fontWeight:800, color:c.text, fontFamily:fontMono}}>{plan.name||"—"}</div>
+            <div style={{fontSize:16, color:c.textSec, fontWeight:500, marginTop:2}}>{plan.speed||""}</div>
+          </div>
+          <div style={{textAlign:"right"}}>
+            <div style={{fontSize:36, fontWeight:800, color:c.text, fontFamily:fontMono}}>{plan.price ? fmt(plan.price) : "—"}</div>
+            <div style={{fontSize:13, color:c.textMuted}}>/month</div>
+          </div>
+        </div>
+        <div style={{display:"flex", flexWrap:"wrap", gap:8, marginTop:18, paddingTop:18, borderTop:`1px solid ${c.primary}15`}}>
+          {(plan.features||[]).map((f,i) => (
+            <span key={i} style={{padding:"6px 14px", borderRadius:20, background:`${c.primary}10`, color:c.primary, fontSize:12, fontWeight:500}}><i className="fas fa-check" style={{marginRight:6}}></i> {f}</span>
+          ))}
+        </div>
+      </Card>
+
+      {/* Available Plans */}
+      <h3 style={{fontSize:18, fontWeight:700, color:c.text, marginBottom:16}}>Change Your Plan</h3>
+      <div style={{display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(280px, 1fr))", gap:16}}>
+        {plans.map(p => {
+          const isCurrent = String(p.id) === String(currentUser.planId) || p.name === plan.name;
+          const isUpgrade = p.price > plan.price;
+          return (
+            <Card key={p.id} style={{border: isCurrent ? `2px solid ${c.primary}` : `1px solid ${c.border}`, position:"relative", opacity: isCurrent ? 1 : .95}}>
+              {isCurrent && <div style={{position:"absolute", top:-12, left:"50%", transform:"translateX(-50%)", background:c.primary, color:"#fff", fontSize:11, fontWeight:700, padding:"4px 16px", borderRadius:20}}>CURRENT PLAN</div>}
+              <div style={{textAlign:"center", paddingTop: isCurrent ? 8 : 0}}>
+                <div style={{fontSize:12, fontWeight:700, color:c.primary, textTransform:"uppercase", letterSpacing:2, marginBottom:4}}>{p.name}</div>
+                <div style={{fontSize:20, fontWeight:800, color:c.text, fontFamily:fontMono, marginBottom:2}}>{p.speed}</div>
+                <div style={{fontSize:28, fontWeight:800, color:c.text, fontFamily:fontMono, marginTop:8}}>{fmt(p.price)}<span style={{fontSize:14, fontWeight:400, color:c.textMuted}}>/mo</span></div>
+              </div>
+              <div style={{marginTop:16, paddingTop:16, borderTop:`1px solid ${c.border}`}}>
+                {(p.features||[]).slice(0,4).map((f,i) => (
+                  <div key={i} style={{fontSize:12, color:c.textSec, padding:"4px 0", display:"flex", alignItems:"center", gap:8}}>
+                    <span style={{color:c.success, fontWeight:700}}><i className="fas fa-check"></i></span> {f}
+                  </div>
+                ))}
+                <div ref={aiChatEndRef} />
+                {(p.features||[]).length > 4 && <div style={{fontSize:11, color:c.textMuted, marginTop:4}}>+{(p.features||[]).length-4} more features</div>}
+              </div>
+              <div style={{marginTop:16}}>
+                {isCurrent ? (
+                  <Btn disabled style={{width:"100%"}}>Current Plan</Btn>
+                ) : (
+                  <Btn primary={isUpgrade} outline={!isUpgrade} style={{width:"100%"}} onClick={() => { setSelectedNewPlan(p); setShowChangePlan(true); setChangePlanStep(1); }}>
+                    {isUpgrade ? <><i className="fas fa-arrow-up" style={{marginRight:4}}></i> Upgrade</> : <><i className="fas fa-arrow-down" style={{marginRight:4}}></i> Downgrade</>}
+                  </Btn>
+                )}
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+    </div>
+  );
+
+  // ---------- Support ----------
+  const SupportPage = () => (
+    <div>
+
+      <div style={{display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(340px, 1fr))", gap:20}}>
+        {/* Submit Ticket */}
+        <Card>
+          <h3 style={{fontSize:18, fontWeight:700, color:c.text, marginBottom:20}}>Submit a Support Request</h3>
+          {supportSubmitted ? (
+            <div style={{textAlign:"center", padding:"40px 20px"}}>
+              <div style={{width:64, height:64, borderRadius:"50%", background:c.successLt, display:"inline-flex", alignItems:"center", justifyContent:"center", fontSize:30, marginBottom:16}}><i className="fas fa-check-circle" style={{color:"#22c55e"}}></i></div>
+              <h3 style={{fontSize:18, fontWeight:700, color:c.text, marginBottom:6}}>Ticket Submitted!</h3>
+              <p style={{color:c.textMuted, fontSize:14, marginBottom:20}}>Your support request has been submitted successfully. Our team will respond within 24 hours.</p>
+              <Btn primary onClick={() => { setSupportSubmitted(false); setSupportForm({category:"connectivity",priority:"medium",subject:"",description:""}); }}>Submit Another Request</Btn>
+            </div>
+          ) : (
+            <>
+              <div style={{marginBottom:16}}>
+                <label style={{fontSize:12, fontWeight:600, color:c.textSec, marginBottom:6, display:"block"}}>Category</label>
+                <select value={supportForm.category} onChange={e => { const v = e.target.value; setSupportForm(prev => ({...prev, category:v})); }}
+                  style={{width:"100%", padding:"12px 14px", border:`1px solid ${c.border}`, borderRadius:12, fontSize:13, background:c.bgAlt, color:c.text, fontFamily:font, outline:"none"}}>
+                  <option value="connectivity">Connectivity / Internet Issue</option>
+                  <option value="billing">Billing & Payments</option>
+                  <option value="speed">Speed Issue</option>
+                  <option value="equipment">Equipment / Router</option>
+                  <option value="installation">Installation</option>
+                  <option value="account">Account Related</option>
+                  <option value="general">General Inquiry</option>
+                </select>
+              </div>
+              <div style={{marginBottom:16}}>
+                <label style={{fontSize:12, fontWeight:600, color:c.textSec, marginBottom:6, display:"block"}}>Priority</label>
+                <div style={{display:"flex", gap:8}}>
+                  {[{v:"low",l:"Low",cl:c.success},{v:"medium",l:"Medium",cl:c.warning},{v:"high",l:"High",cl:"#f97316"},{v:"critical",l:"Critical",cl:c.danger}].map(p => (
+                    <button key={p.v} onClick={() => setSupportForm(prev => ({...prev, priority:p.v}))} style={{
+                      flex:1, padding:"10px 8px", borderRadius:10, border: supportForm.priority === p.v ? `2px solid ${p.cl}` : `1px solid ${c.border}`,
+                      background: supportForm.priority === p.v ? `${p.cl}12` : c.bgAlt,
+                      color: supportForm.priority === p.v ? p.cl : c.textMuted, fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:font
+                    }}>{p.l}</button>
+                  ))}
+                <div ref={aiChatEndRef} />
+                </div>
+              </div>
+              <div style={{marginBottom:16}}>
+                <label style={{fontSize:12, fontWeight:600, color:c.textSec, marginBottom:6, display:"block"}}>Subject</label>
+                <input value={supportForm.subject} onChange={e => { const v = e.target.value; setSupportForm(prev => ({...prev, subject:v})); }}
+                  placeholder="Brief description of your issue"
+                  style={{width:"100%", padding:"12px 14px", border:`1px solid ${c.border}`, borderRadius:12, fontSize:13, background:c.bgAlt, color:c.text, fontFamily:font, outline:"none"}} />
+              </div>
+              <div style={{marginBottom:20}}>
+                <label style={{fontSize:12, fontWeight:600, color:c.textSec, marginBottom:6, display:"block"}}>Description</label>
+                <textarea value={supportForm.description} onChange={e => { const v = e.target.value; setSupportForm(prev => ({...prev, description:v})); }}
+                  placeholder="Please describe your issue in detail. Include any error messages, time it started, and steps you've already tried."
+                  rows={5}
+                  style={{width:"100%", padding:"12px 14px", border:`1px solid ${c.border}`, borderRadius:12, fontSize:13, background:c.bgAlt, color:c.text, fontFamily:font, outline:"none", resize:"vertical"}} />
+              </div>
+              <Btn primary style={{width:"100%"}} disabled={!supportForm.subject || !supportForm.description} onClick={handleCreateTicket}><i className="fas fa-paper-plane" style={{marginRight:6}}></i>Submit Support Request</Btn>
+            </>
+          )}
+        </Card>
+
+        {/* Existing Tickets */}
+        <div>
+          
+          {myTickets.length === 0 ? (
+            <Card style={{textAlign:"center", padding:"40px 20px"}}>
+              <div style={{fontSize:40, marginBottom:12}}><i className="fas fa-ticket-alt" style={{color:"#6366f1"}}></i></div>
+              <p style={{color:c.textMuted, fontSize:14}}>No support tickets yet.</p>
+            </Card>
+          ) : (<>
+            <div style={{display:"grid", gap:12, ...(ticketShowAll ? {maxHeight:480, overflowY:"auto", paddingRight:4} : {})}}>
+              {paginatedTickets.map(tk => (
+                <Card key={tk.id} style={{padding:18}}>
+                  <div style={{display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:8, flexWrap:"wrap", marginBottom:10}}>
+                    <div style={{display:"flex", alignItems:"center", gap:8, flexWrap:"wrap"}}>
+                      <span style={{fontFamily:fontMono, fontSize:12, fontWeight:600, color:c.primary}}>{tk.number}</span>
+                      <Badge status={tk.status} />
+                      <Badge status={tk.priority} />
+                    </div>
+                    <span style={{fontSize:12, color:c.textMuted}}>{tk.created}</span>
+                  </div>
+                  <h4 style={{fontSize:14, fontWeight:600, color:c.text, marginBottom:6}}>{tk.subject}</h4>
+                  <p style={{fontSize:12, color:c.textMuted, marginBottom:12}}>{tk.description}</p>
+
+                  {/* Timeline */}
+                  <div style={{borderTop:`1px solid ${c.borderLight}`, paddingTop:12}}>
+                    <div style={{fontSize:11, fontWeight:700, color:c.textMuted, textTransform:"uppercase", letterSpacing:.5, marginBottom:10}}>Updates</div>
+                    {tk.updates.map((u,i) => (
+                      <div key={i} style={{display:"flex", gap:12, marginBottom:10, position:"relative", paddingLeft:16}}>
+                        <div style={{position:"absolute", left:0, top:6, width:8, height:8, borderRadius:"50%", background: i === tk.updates.length-1 ? c.primary : c.border}} />
+                        {i < tk.updates.length - 1 && <div style={{position:"absolute", left:3, top:14, width:2, height:"calc(100% + 2px)", background:c.borderLight}} />}
+                        <div>
+                          <div style={{fontSize:12, color:c.text}}>{u.text}</div>
+                          <div style={{fontSize:10, color:c.textMuted, marginTop:2}}>{u.date} • {u.by}</div>
+                        </div>
+                      </div>
+                    ))}
+                <div ref={aiChatEndRef} />
+                  </div>
+                </Card>
+              ))}
+            </div>
+            {myTickets.length > ticketsPerPage && (
+              <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginTop:14, gap:8, flexWrap:"wrap"}}>
+                <div style={{display:"flex", alignItems:"center", gap:4}}>
+                  <button onClick={() => { setTicketShowAll(false); setTicketPage(p => Math.max(1,p-1)); }} disabled={ticketShowAll || ticketPage===1} style={{padding:"6px 12px", borderRadius:8, border:`1px solid ${c.border}`, background:ticketShowAll||ticketPage===1?c.bgAlt:c.bg, color:ticketShowAll||ticketPage===1?c.textMuted:c.text, fontSize:12, fontWeight:600, fontFamily:font, cursor:ticketShowAll||ticketPage===1?"default":"pointer"}}>← Prev</button>
+                  {!ticketShowAll && Array.from({length:totalTicketPages},(_,i)=>i+1).map(n => (
+                    <button key={n} onClick={() => setTicketPage(n)} style={{padding:"6px 10px", borderRadius:8, border:n===ticketPage?`1px solid ${c.primary}`:`1px solid ${c.border}`, background:n===ticketPage?c.primary:c.bg, color:n===ticketPage?"#fff":c.text, fontSize:12, fontWeight:700, fontFamily:font, cursor:"pointer", minWidth:32}}>{n}</button>
+                  ))}
+                  <button onClick={() => { setTicketShowAll(false); setTicketPage(p => Math.min(totalTicketPages,p+1)); }} disabled={ticketShowAll || ticketPage===totalTicketPages} style={{padding:"6px 12px", borderRadius:8, border:`1px solid ${c.border}`, background:ticketShowAll||ticketPage===totalTicketPages?c.bgAlt:c.bg, color:ticketShowAll||ticketPage===totalTicketPages?c.textMuted:c.text, fontSize:12, fontWeight:600, fontFamily:font, cursor:ticketShowAll||ticketPage===totalTicketPages?"default":"pointer"}}>Next →</button>
+                </div>
+                <button onClick={() => { setTicketShowAll(!ticketShowAll); if(!ticketShowAll) setTicketPage(1); }} style={{padding:"6px 14px", borderRadius:8, border:`1px solid ${c.border}`, background:ticketShowAll?`${c.primary}15`:c.bg, color:ticketShowAll?c.primary:c.textSec, fontSize:12, fontWeight:600, fontFamily:font, cursor:"pointer"}}>
+                  {ticketShowAll ? "Paginate" : "Show All"}
+                </button>
+              </div>
+            )}
+           </>)}
+
+          {/* Contact Info */}
+          <Card style={{marginTop:16, background:c.bgAlt}}>
+            <h4 style={{fontSize:14, fontWeight:700, color:c.text, marginBottom:12}}>Need Immediate Help?</h4>
+            <div style={{display:"grid", gap:10}}>
+              {[
+                {icon:"fas fa-phone-alt", label:"Hotline", value:companyInfo.company_phone||""},
+                {icon:"fas fa-envelope", label:"Email", value:"support@netfactory.com.ph"},
+                {icon:"fab fa-facebook-messenger", label:"Messenger", value:siteSettings.company_facebook || "fb.com/j2network"},
+                {icon:"fas fa-clock", label:"Hours", value:"Mon-Sat 8AM-6PM"},
+              ].map((ct,i) => (
+                <div key={i} style={{display:"flex", alignItems:"center", gap:10}}>
+                  <span><i className={ct.icon} style={{fontSize:14}}></i></span>
+                  <div>
+                    <div style={{fontSize:11, color:c.textMuted, fontWeight:600}}>{ct.label}</div>
+                    <div style={{fontSize:13, color:c.text, fontWeight:500}}>{ct.value}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+
+  // ---------- Account Settings ----------
+  const AccountPage = () => (
+    <div>
+      {/* Heading moved to header */}
+
+      <div style={{display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(340px, 1fr))", gap:20}}>
+        <Card>
+          <h3 style={{fontSize:16, fontWeight:700, color:c.text, marginBottom:20}}>Personal Information</h3>
+          {[
+            {l:"Account Number", v:currentUser.acct, mono:true},
+            {l:"Full Name", v:[currentUser.firstName, currentUser.middleName, currentUser.lastName].filter(Boolean).join(" ")},
+            {l:"Email", v:currentUser.email},
+            {l:"Phone", v:formatPhone(currentUser.phone)},
+            {l:"Address", v:currentUser.address},
+            {l:"Barangay", v:currentUser.barangay || "—"},
+            {l:"Town / Municipality", v:currentUser.municipality || "—"},
+            {l:"Province", v:currentUser.province || "—"},
+            {l:"Postal Code", v:currentUser.postalCode || getPostalCode(currentUser.municipality) || "—"},
+            {l:"Account Status", v:currentUser.status, badge:true},
+            {l:"Installed Date", v:fmtDate(currentUser.installed)},
+          ].map((f,i,arr) => (
+            <div key={i} style={{display:"flex", justifyContent:"space-between", alignItems:"center", padding:"12px 0", borderBottom: i < arr.length - 1 ? `1px solid ${c.borderLight}` : "none"}}>
+              <span style={{fontSize:12, fontWeight:600, color:c.textMuted, textTransform:"uppercase", letterSpacing:.3}}>{f.l}</span>
+              {f.badge ? <Badge status={f.v} large /> : <span style={{fontSize:14, fontWeight:500, color:c.text, fontFamily: f.mono ? fontMono : font}}>{f.v}</span>}
+            </div>
+          ))}
+          <div style={{marginTop:16}}>
+            <Btn outline style={{width:"100%"}} onClick={() => {
+              const normTown = normalizeTown(currentUser.municipality);
+              const normBrgy = normalizeBarangay(normTown, currentUser.barangay);
+              setEditProfileForm({ firstName:currentUser.firstName||"", middleName:currentUser.middleName||"", lastName:currentUser.lastName||"", email:currentUser.email||"", phone:currentUser.phone||"", address:currentUser.address||"", barangay:normBrgy, municipality:normTown, province:getProvinceForTown(normTown)||currentUser.province||"", postalCode:getPostalCode(normTown)||currentUser.postalCode||"" });
+              setEditProfileSaved(false);
+              setShowEditProfile(true);
+            }}><i className="fas fa-pen-to-square" style={{marginRight:6}}></i> Update Profile Information</Btn>
+          </div>
+        </Card>
+
+        <div style={{display:"grid", gap:20}}>
+          <Card>
+            <h3 style={{fontSize:16, fontWeight:700, color:c.text, marginBottom:16}}>Security</h3>
+            <Btn outline style={{width:"100%", marginBottom:10}} onClick={() => { setChangePassForm({current:"",newPass:"",confirm:""}); setChangePassDone(false); setChangePassError(""); setShowChangePass(true); }}><i className="fas fa-key" style={{marginRight:6}}></i> Change Password</Btn>
+            <Btn outline style={{width:"100%", borderColor: twoFAEnabled ? c.success : undefined, color: twoFAEnabled ? c.success : undefined}} onClick={() => {
+              setTwoFACode(""); setShow2FA(true);
+              if (twoFAEnabled) {
+                setTwoFAStep(4);
+              } else {
+                setTwoFAStep(1); setTwoFASecret("");
+                fetch(`${API}/portal/2fa/setup`,{method:"POST",headers:authHeaders()})
+                  .then(r=>r.ok?r.json():null)
+                  .then(data=>{ if(data?.secret) setTwoFASecret(data.secret); })
+                  .catch(()=>showToast("Failed to start 2FA setup. Please try again."));
+              }
+            }}>{twoFAEnabled ? <><i className="fas fa-shield-halved" style={{marginRight:6}}></i> Two-Factor Auth Enabled</> : <><i className="fas fa-mobile-screen" style={{marginRight:6}}></i> Enable Two-Factor Auth</>}</Btn>
+          </Card>
+          <Card>
+            <h3 style={{fontSize:16, fontWeight:700, color:c.text, marginBottom:16}}>Notification Preferences</h3>
+            {[
+              {l:"Email billing reminders", k:"emailBilling"},
+              {l:"SMS payment confirmations", k:"smsPayment"},
+              {l:"Service outage alerts", k:"outageAlerts"},
+              {l:"Promotional offers", k:"promos"},
+            ].map((n,i) => (
+              <div key={i} style={{display:"flex", justifyContent:"space-between", alignItems:"center", padding:"10px 0", borderBottom: i < 3 ? `1px solid ${c.borderLight}` : "none"}}>
+                <span style={{fontSize:13, color:c.textSec}}>{n.l}</span>
+                <div onClick={() => {
+                  const newVal = !notifPrefs[n.k];
+                  setNotifPrefs(prev => ({...prev, [n.k]: newVal}));
+                  fetch(`${API}/portal/notifications/preferences`,{method:"PUT",headers:authHeaders(),body:JSON.stringify({...notifPrefs, [n.k]: newVal})}).then(r=>{if(!r.ok) throw r; showToast("Notification preference updated","success");}).catch(()=>{setNotifPrefs(prev=>({...prev,[n.k]:!newVal})); showToast("Failed to save notification preference. Please try again.");});
+                }} style={{width:44, height:24, borderRadius:12, background: notifPrefs[n.k] ? c.success : c.border, cursor:"pointer", position:"relative", transition:"all .2s"}}>
+                  <div style={{width:20, height:20, borderRadius:10, background:"#fff", position:"absolute", top:2, left: notifPrefs[n.k] ? 22 : 2, transition:"left .2s", boxShadow:"0 1px 3px rgba(0,0,0,.15)"}} />
+                </div>
+              </div>
+            ))}
+          </Card>
+          <Card style={{background:darkMode?`${c.danger}15`:c.dangerLt, border:`1px solid ${c.danger}${darkMode?"40":"20"}`}}>
+            <h3 style={{fontSize:16, fontWeight:700, color:c.danger, marginBottom:8}}>Disconnect Service</h3>
+            {unpaidInvoices.length > 0 ? (
+              <>
+                <p style={{fontSize:13, color:c.danger, marginBottom:16, fontWeight:600}}><i className="fas fa-ban" style={{marginRight:6}}></i> Not allowed | Disabled due to unsettled balance on this account.</p>
+                <Btn danger small disabled style={{opacity:.6, cursor:"not-allowed"}}>Request Disconnection</Btn>
+              </>
+            ) : (
+              <>
+                <p style={{fontSize:13, color:c.textSec, marginBottom:16}}>Request to permanently disconnect your internet service. This action requires approval.</p>
+                <Btn danger small onClick={() => { setDisconnectStep(1); setDisconnectReason(""); setDisconnectConfirm(""); setShowDisconnect(true); }}>Request Disconnection</Btn>
+              </>
+            )}
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+
+  // ---------- Referral Page ----------
+  const handleSubmitReferral = () => {
+    const { firstName, lastName, contactNumber } = referralForm;
+    if (!firstName.trim() || !lastName.trim() || !contactNumber.trim()) {
+      showToast("First name, last name, and contact number are required");
+      return;
+    }
+    setReferralLoading(true);
+    fetch(`${API}/portal/referrals`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify(referralForm)
+    }).then(r => r.json().then(d => ({ ok: r.ok, data: d })))
+      .then(({ ok, data }) => {
+        if (!ok) { showToast(data.error || "Failed to submit referral"); return; }
+        showToast("Referral submitted successfully!", "success");
+        setReferralForm({ firstName:"", middleName:"", lastName:"", email:"", contactNumber:"" });
+        fetchReferrals();
+      })
+      .catch(() => showToast("Network error. Please try again."))
+      .finally(() => setReferralLoading(false));
+  };
+
+  const ReferralPage = () => {
+    const statusColor = (s) => ({ pending:c.warning, contacted:c.info, converted:c.success, expired:c.danger, declined:c.textMuted }[s] || c.textMuted);
+    const statusBg = (s) => ({ pending:c.warningLt, contacted:c.infoLt, converted:c.successLt, expired:c.dangerLt, declined:c.borderLight }[s] || c.borderLight);
+    return (
+      <div>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:20, marginBottom:24 }}>
+          {/* Referral Form */}
+          <Card>
+            <h3 style={{fontSize:16, fontWeight:700, color:c.text, marginBottom:4}}><i className="fas fa-user-plus" style={{marginRight:8, color:c.primary}}></i>Refer a Friend</h3>
+            <p style={{fontSize:12, color:c.textMuted, marginBottom:20}}>Know someone who needs internet? Submit their details and we'll reach out.</p>
+            <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:12}}>
+              <div>
+                <label style={{fontSize:11, fontWeight:600, color:c.textMuted, display:"block", marginBottom:4}}>First Name *</label>
+                <input value={referralForm.firstName} onChange={e => setReferralForm(f => ({...f, firstName:e.target.value}))} placeholder="First name" style={{width:"100%", padding:"10px 12px", background:c.bg, border:`1px solid ${c.border}`, borderRadius:10, color:c.text, fontSize:13, outline:"none", fontFamily:font}} />
+              </div>
+              <div>
+                <label style={{fontSize:11, fontWeight:600, color:c.textMuted, display:"block", marginBottom:4}}>Middle Name</label>
+                <input value={referralForm.middleName} onChange={e => setReferralForm(f => ({...f, middleName:e.target.value}))} placeholder="Middle name (optional)" style={{width:"100%", padding:"10px 12px", background:c.bg, border:`1px solid ${c.border}`, borderRadius:10, color:c.text, fontSize:13, outline:"none", fontFamily:font}} />
+              </div>
+            </div>
+            <div style={{marginBottom:12}}>
+              <label style={{fontSize:11, fontWeight:600, color:c.textMuted, display:"block", marginBottom:4}}>Last Name *</label>
+              <input value={referralForm.lastName} onChange={e => setReferralForm(f => ({...f, lastName:e.target.value}))} placeholder="Last name" style={{width:"100%", padding:"10px 12px", background:c.bg, border:`1px solid ${c.border}`, borderRadius:10, color:c.text, fontSize:13, outline:"none", fontFamily:font}} />
+            </div>
+            <div style={{marginBottom:12}}>
+              <label style={{fontSize:11, fontWeight:600, color:c.textMuted, display:"block", marginBottom:4}}>Contact Number *</label>
+              <input value={referralForm.contactNumber} onChange={e => setReferralForm(f => ({...f, contactNumber:e.target.value}))} placeholder="09XX XXX XXXX" style={{width:"100%", padding:"10px 12px", background:c.bg, border:`1px solid ${c.border}`, borderRadius:10, color:c.text, fontSize:13, outline:"none", fontFamily:font}} />
+            </div>
+            <div style={{marginBottom:20}}>
+              <label style={{fontSize:11, fontWeight:600, color:c.textMuted, display:"block", marginBottom:4}}>Email Address</label>
+              <input value={referralForm.email} onChange={e => setReferralForm(f => ({...f, email:e.target.value}))} placeholder="email@example.com (optional)" style={{width:"100%", padding:"10px 12px", background:c.bg, border:`1px solid ${c.border}`, borderRadius:10, color:c.text, fontSize:13, outline:"none", fontFamily:font}} />
+            </div>
+            <Btn primary onClick={handleSubmitReferral} disabled={referralLoading} style={{width:"100%"}}>
+              {referralLoading ? <><i className="fas fa-spinner fa-spin" style={{marginRight:6}}></i>Submitting...</> : <><i className="fas fa-paper-plane" style={{marginRight:6}}></i>Submit Referral</>}
+            </Btn>
+          </Card>
+
+          {/* Stats */}
+          <div>
+            <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:20}}>
+              {[
+                { label:"Total Referrals", value:referrals.length, icon:"fa-users", color:c.primary },
+                { label:"Pending", value:referrals.filter(r=>r.status==="pending").length, icon:"fa-hourglass-half", color:c.warning },
+                { label:"Converted", value:referrals.filter(r=>r.status==="converted").length, icon:"fa-check-circle", color:c.success },
+                { label:"Expired", value:referrals.filter(r=>r.status==="expired").length, icon:"fa-clock", color:c.danger },
+              ].map(s => (
+                <Card key={s.label} style={{padding:16, textAlign:"center"}}>
+                  <i className={`fas ${s.icon}`} style={{fontSize:20, color:s.color, marginBottom:8, display:"block"}}></i>
+                  <div style={{fontSize:22, fontWeight:800, color:s.color, fontFamily:"'Space Grotesk',monospace"}}>{s.value}</div>
+                  <div style={{fontSize:11, fontWeight:600, color:c.textMuted, marginTop:4}}>{s.label}</div>
+                </Card>
+              ))}
+            </div>
+            <Card style={{padding:16}}>
+              <div style={{display:"flex", alignItems:"center", gap:8, marginBottom:8}}>
+                <i className="fas fa-info-circle" style={{color:c.info}}></i>
+                <span style={{fontSize:13, fontWeight:600, color:c.text}}>How it works</span>
+              </div>
+              <ul style={{fontSize:12, color:c.textSec, lineHeight:1.8, paddingLeft:16, margin:0}}>
+                <li>Submit your friend's contact details</li>
+                <li>They will be added as a prospective subscriber</li>
+                <li>Our team will reach out to them</li>
+                <li>Referrals expire after 60 days if not converted</li>
+              </ul>
+            </Card>
+          </div>
+        </div>
+
+        {/* Referral History */}
+        <Card style={{padding:0, overflow:"hidden"}}>
+          <div style={{padding:"16px 24px", borderBottom:`1px solid ${c.border}`}}>
+            <h3 style={{fontSize:14, fontWeight:700, color:c.text, margin:0}}><i className="fas fa-history" style={{marginRight:8, color:c.textMuted}}></i>Referral History</h3>
+          </div>
+          {referrals.length === 0 ? (
+            <div style={{padding:40, textAlign:"center"}}>
+              <i className="fas fa-user-friends" style={{fontSize:32, color:c.border, marginBottom:12, display:"block"}}></i>
+              <p style={{fontSize:13, color:c.textMuted}}>No referrals yet. Start referring friends!</p>
+            </div>
+          ) : (
+            <div style={{overflowX:"auto"}}>
+              <table style={{width:"100%", borderCollapse:"collapse"}}>
+                <thead>
+                  <tr>
+                    {["Name","Contact","Email","Status","Submitted","Expires"].map(h => (
+                      <th key={h} style={{padding:"10px 16px", textAlign:"left", fontSize:11, fontWeight:700, color:c.textMuted, textTransform:"uppercase", letterSpacing:.5, borderBottom:`2px solid ${c.border}`, background:c.bgCard, whiteSpace:"nowrap"}}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {referrals.map(r => (
+                    <tr key={r.id} style={{borderBottom:`1px solid ${c.border}`}}>
+                      <td style={{padding:"12px 16px", fontSize:13, color:c.text, fontWeight:600}}>{r.referee?.name || "—"}</td>
+                      <td style={{padding:"12px 16px", fontSize:13, color:c.textSec}}>{r.referee?.phone || "—"}</td>
+                      <td style={{padding:"12px 16px", fontSize:13, color:c.textSec}}>{r.referee?.email || "—"}</td>
+                      <td style={{padding:"12px 16px"}}>
+                        <span style={{display:"inline-flex", alignItems:"center", gap:5, padding:"4px 12px", borderRadius:20, fontSize:11, fontWeight:600, background:statusBg(r.status), color:statusColor(r.status), textTransform:"capitalize"}}>
+                          <span style={{width:6, height:6, borderRadius:"50%", background:statusColor(r.status)}}></span>
+                          {r.status}
+                        </span>
+                      </td>
+                      <td style={{padding:"12px 16px", fontSize:12, color:c.textMuted}}>{new Date(r.createdAt).toLocaleDateString('en-PH', {month:'short', day:'numeric', year:'numeric'})}</td>
+                      <td style={{padding:"12px 16px", fontSize:12, color: r.status==="expired" ? c.danger : c.textMuted}}>{new Date(r.expiresAt).toLocaleDateString('en-PH', {month:'short', day:'numeric', year:'numeric'})}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+      </div>
+    );
+  };
+
+  const pages = { dashboard:DashboardPage, billing:BillingPage, usage:UsagePage, plan:PlanPage, support:SupportPage, account:AccountPage, referral:ReferralPage };
+  const ActivePage = pages[activePage] || DashboardPage;
+
+  // ============================================================
+  // PORTAL LAYOUT
+  // ============================================================
+  return (
+    <div style={{fontFamily:font, color:c.text, background:c.bg, minHeight:"100vh", display:"flex"}}>
+      <style>{`
+        @keyframes fadeIn { from{opacity:0} to{opacity:1} }
+        @keyframes slideIn { from{opacity:0;transform:translateX(-20px)} to{opacity:1;transform:translateX(0)} }
+        @keyframes spin { to{transform:rotate(360deg)} }
+        ::-webkit-scrollbar { width:6px; height:6px; }
+        ::-webkit-scrollbar-track { background:transparent; }
+        ::-webkit-scrollbar-thumb { background:${c.border}; border-radius:3px; }
+        @media(max-width:768px) {
+          .portal-sidebar { position:fixed !important; z-index:200 !important; transform:translateX(-100%); transition:transform .3s !important; }
+          .portal-sidebar.open { transform:translateX(0) !important; }
+          .portal-main { margin-left:0 !important; }
+          .portal-hamburger { display:flex !important; }
+          .portal-overlay { display:block !important; }
+        }
+        @media(min-width:769px) {
+          .portal-hamburger { display:none !important; }
+          .portal-overlay { display:none !important; }
+        }
+      `}</style>
+
+      {/* Mobile Overlay */}
+      {mobileNav && <div className="portal-overlay" onClick={() => setMobileNav(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:199}} />}
+
+      {/* Sidebar */}
+      <aside className={`portal-sidebar ${mobileNav ? "open" : ""}`} style={{width:260, background:darkMode?"#111827":"#0f172a", height:"100vh", position:"sticky", top:0, display:"flex", flexDirection:"column", flexShrink:0, overflow:"hidden"}}>
+        <div style={{padding:"20px 18px", borderBottom:"1px solid rgba(255,255,255,.08)"}}>
+          <div style={{display:"flex", alignItems:"center", justifyContent:"center", gap:10}}>
+            <div style={{width:38, height:38, borderRadius:10, background:`linear-gradient(135deg,${c.primary},${c.primaryDk})`, display:"flex", alignItems:"center", justifyContent:"center", color:"#fff", fontWeight:800, fontSize:16, fontFamily:fontMono, flexShrink:0}}>{siteSettings.company_short_name||"J2"}</div>
+            <div style={{minWidth:0}}>
+              <div style={{color:"#fff", fontWeight:700, fontSize:13, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"}}>{siteSettings.company_name||"Netfactory"}</div>
+              <div style={{fontSize:9, color:"rgba(255,255,255,.4)", letterSpacing:.5, lineHeight:1.6}}>{siteSettings.company_tagline||""}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Nav */}
+        <div style={{flex:1, padding:"12px 10px", overflowY:"auto"}}>
+          {navItems.map(n => (
+            <div key={n.id} onClick={() => { setActivePage(n.id); setMobileNav(false); }} style={{
+              display:"flex", alignItems:"center", gap:12, padding:"12px 14px",
+              borderRadius:10, marginBottom:2, cursor:"pointer", transition:"all .2s",
+              background: activePage === n.id ? `${c.primary}20` : "transparent",
+              color: activePage === n.id ? "#fff" : "rgba(255,255,255,.6)",
+            }}>
+              <span style={{width:20, textAlign:"center", display:"inline-flex", justifyContent:"center"}}><i className={n.icon} style={{fontSize:15}}></i></span>
+              <span style={{fontSize:13, fontWeight: activePage === n.id ? 700 : 500}}>{n.label}</span>
+              {n.id === "billing" && unpaidInvoices.length > 0 && (
+                <span style={{marginLeft:"auto",width:20,height:20,borderRadius:10,background:c.danger,color:"#fff",fontSize:10,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center"}}>{unpaidInvoices.length}</span>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* Dark Mode Toggle */}
+        <div style={{padding:"12px 20px", borderTop:"1px solid rgba(255,255,255,.08)"}}>
+          <div style={{display:"flex", alignItems:"center", justifyContent:"space-between"}}>
+            <span style={{fontSize:13, fontWeight:500, color:"rgba(255,255,255,.6)"}}><i className={darkMode?"fas fa-moon":"fas fa-sun"} style={{marginRight:8}}></i>{darkMode?"Dark":"Light"}</span>
+            <div onClick={toggleDark} style={{width:42, height:24, borderRadius:12, background:darkMode?"#3b82f6":"#475569", cursor:"pointer", position:"relative", transition:"background .3s"}}>
+              <div style={{width:18, height:18, borderRadius:"50%", background:"#fff", position:"absolute", top:3, left:darkMode?21:3, transition:"left .3s", boxShadow:"0 1px 3px rgba(0,0,0,.3)"}}></div>
+            </div>
+          </div>
+        </div>
+        {/* Logout */}
+        <div style={{padding:"12px 10px", borderTop:"1px solid rgba(255,255,255,.08)"}}>
+          <div onClick={() => { handleLogout(); window.location.href = "/index.html"; }}
+            style={{display:"flex", alignItems:"center", gap:12, padding:"12px 14px", borderRadius:10, cursor:"pointer", color:"rgba(255,255,255,.4)", transition:"all .2s"}}>
+            <span><i className="fas fa-sign-out-alt" style={{fontSize:16}}></i></span>
+            <span style={{fontSize:13, fontWeight:500}}>Sign Out</span>
+          </div>
+        </div>
+      </aside>
+
+      {/* Main */}
+      <div className="portal-main" style={{flex:1, display:"flex", flexDirection:"column", minWidth:0}}>
+        {/* Top Bar */}
+        <header style={{height:60, background:darkMode?"#253347":c.bgCard, borderBottom:`1px solid ${c.border}`, display:"flex", alignItems:"center", justifyContent:"space-between", padding:"0 24px", position:"sticky", top:0, zIndex:50, boxShadow:c.shadow}}>
+          <div style={{display:"flex", alignItems:"center", gap:12}}>
+            <div className="portal-hamburger" onClick={() => setMobileNav(!mobileNav)} style={{cursor:"pointer", padding:8, alignItems:"center", gap:4, flexDirection:"column", display:"none"}}>
+              <div style={{width:20,height:2,background:c.textSec,marginBottom:4}} />
+              <div style={{width:20,height:2,background:c.textSec,marginBottom:4}} />
+              <div style={{width:20,height:2,background:c.textSec}} />
+            </div>
+            <div>
+              <h2 style={{fontSize:16, fontWeight:700, color:c.text}}>{activePage==="dashboard" ? <>Good {new Date().getHours() < 12 ? "morning" : new Date().getHours() < 18 ? "afternoon" : "evening"}, {currentUser.firstName}!</> : activePage==="support" ? <>Need assistance? Talk to <strong onClick={() => setShowAiChat(true)} style={{color:"#8b5cf6", cursor:"pointer"}}>{aiName}</strong> or send us a ticket.</> : activePage==="plan" ? "Current Subscription" : (navItems.find(n=>n.id===activePage)?.label || "Dashboard")}</h2>
+              {activePage==="dashboard" && <p style={{fontSize:12, color:c.textMuted, marginTop:2}}>Here's your account overview for today.</p>}
+              {activePage==="billing" && <p style={{fontSize:12, color:c.textMuted, marginTop:2}}>View your invoices and make payments online.</p>}
+              {activePage==="usage" && <p style={{fontSize:12, color:c.textMuted, marginTop:2}}>Your internet usage over the last 30 days.</p>}
+              {activePage==="plan" && <p style={{fontSize:12, color:c.textMuted, marginTop:2}}>View your current plan and upgrade or downgrade anytime.</p>}
+              {activePage==="account" && <p style={{fontSize:12, color:c.textMuted, marginTop:2}}>Manage your personal information and preferences.</p>}
+              {activePage==="referral" && <p style={{fontSize:12, color:c.textMuted, marginTop:2}}>Refer friends and family to Netfactory.</p>}
+            </div>
+          </div>
+          <div style={{display:"flex", alignItems:"center", gap:12}}>
+            {activePage !== "support" && <span onClick={() => setShowAiChat(true)} style={{fontSize:12, color:c.textMuted, cursor:"pointer", whiteSpace:"nowrap"}}>Need assistance? <span style={{color:"#8b5cf6", fontWeight:600}}>Talk to our virtual assistant</span></span>}
+            <Badge status={currentUser.status} large />
+            <div style={{fontSize:13, color:c.textMuted, fontFamily:fontMono}}>{currentUser.acct}</div>
+          </div>
+        </header>
+
+        {/* Page Content */}
+        <main style={{flex:1, padding:24, overflowY:"auto"}}>
+          {activePage === "dashboard" && DashboardPage()}
+          {activePage === "billing" && BillingPage()}
+          {activePage === "usage" && UsagePage()}
+          {activePage === "plan" && PlanPage()}
+          {activePage === "support" && SupportPage()}
+          {activePage === "account" && AccountPage()}
+          {activePage === "referral" && ReferralPage()}
+        </main>
+
+        {/* Footer */}
+        <footer style={{padding:"12px 24px", borderTop:`1px solid ${c.border}`, background:c.bgCard, display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8}}>
+          <span style={{fontSize:11, color:c.textMuted}}>© 2026 {siteSettings.company_name || 'Netfactory'}. All Rights Reserved.</span>
+          <span style={{fontSize:11, color:c.textMuted}}>{(companyInfo.company_address||"") + (companyInfo.company_address && companyInfo.company_phone ? " • " : "") + (companyInfo.company_phone||"")}</span>
+        </footer>
+      </div>
+
+      {/* ========== PAYMENT MODAL ========== */}
+      {showPayModal && payInvoice && (
+        <div style={{position:"fixed", inset:0, background:"rgba(0,0,0,.6)", backdropFilter:"blur(6px)", zIndex:300, display:"flex", alignItems:"center", justifyContent:"center", padding:16, animation:"fadeIn .2s"}}
+          onClick={e => { if(e.target === e.currentTarget) { if(payStep === 2) return; clearInterval(payPollRef.current); payPollRef.current = null; if(payPopupRef.current && !payPopupRef.current.closed) payPopupRef.current.close(); payPopupRef.current = null; setShowPayModal(false); setPayAllMode(false); setPayStep(1); setPayError(""); } }}>
+          <div style={{background:c.bgCard, borderRadius:24, maxWidth:480, width:"100%", maxHeight:"90vh", overflowY:"auto", boxShadow:"0 40px 80px rgba(0,0,0,.3)", border:`1px solid ${c.border}`}}>
+            {/* Header */}
+            <div style={{padding:"22px 28px", borderBottom:`1px solid ${c.border}`, display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+              <h2 style={{fontSize:20, fontWeight:700, color:c.text, fontFamily:fontMono}}>
+                {payStep === 1 ? (payAllMode ? "Pay All Invoices" : "Pay Invoice") : payStep === 2 ? "Awaiting Payment" : payStep === 3 ? "Payment Complete" : "Payment Instructions"}
+              </h2>
+              <div style={{cursor:"pointer", fontSize:18, color:c.textMuted}} onClick={() => { clearInterval(payPollRef.current); payPollRef.current = null; if(payPopupRef.current && !payPopupRef.current.closed) payPopupRef.current.close(); payPopupRef.current = null; setShowPayModal(false); setPayAllMode(false); setPayStep(1); setPayError(""); }}><i className="fas fa-xmark"></i></div>
+            </div>
+
+            <div style={{padding:28}}>
+              {/* Step 1: Select Payment Method */}
+              {payStep === 1 && (
+                <>
+                  {/* Invoice Summary */}
+                  {payAllMode ? (
+                    <div style={{background:c.bgAlt, borderRadius:14, padding:18, marginBottom:24, border:`1px solid ${c.border}`}}>
+                      <div style={{fontSize:12, fontWeight:700, color:c.primary, textTransform:"uppercase", letterSpacing:1, marginBottom:12}}><i className="fas fa-receipt" style={{marginRight:6}}></i>Paying {unpaidInvoices.length} Invoices</div>
+                      <div style={{maxHeight:180, overflowY:"auto", marginBottom:14}}>
+                        {unpaidInvoices.map(inv => (
+                          <div key={inv.id} style={{display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px 0", borderBottom:`1px solid ${c.borderLight}`}}>
+                            <div>
+                              <div style={{fontSize:12, fontFamily:fontMono, color:c.textSec}}>{inv.number}</div>
+                              <div style={{fontSize:11, color:c.textMuted}}>{fmtDate(inv.period)} — Due: {fmtDate(inv.dueDate)}</div>
+                            </div>
+                            <div style={{fontSize:14, fontWeight:700, color:c.text, fontFamily:fontMono}}>{fmt(inv.amount)}</div>
+                          </div>
+                        ))}
+                <div ref={aiChatEndRef} />
+                      </div>
+                      <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", paddingTop:10, borderTop:`2px solid ${c.border}`}}>
+                        <span style={{fontSize:14, fontWeight:700, color:c.text}}>Total Amount</span>
+                        <span style={{fontSize:28, fontWeight:800, color:c.text, fontFamily:fontMono}}>{fmt(unpaidInvoices.reduce((s,i)=>s+(i.balance>0?i.balance:i.amount),0))}</span>
+                      </div>
+                    </div>
+                  ) : (
+                  <div style={{background:c.bgAlt, borderRadius:14, padding:18, marginBottom:24, border:`1px solid ${c.border}`}}>
+                    <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10}}>
+                      <span style={{fontSize:12, color:c.textMuted, fontFamily:fontMono}}>{payInvoice.number}</span>
+                      <Badge status={payInvoice.status} />
+                    </div>
+                    <div style={{fontSize:14, fontWeight:600, color:c.text, marginBottom:2}}>{fmtDate(payInvoice.period)}</div>
+                    <div style={{fontSize:11, color:c.textMuted}}>Due: {fmtDate(payInvoice.dueDate)}</div>
+                    <div style={{fontSize:28, fontWeight:800, color:c.text, fontFamily:fontMono, marginTop:10}}>{fmt(payInvoice.amount)}</div>
+                  </div>
+                  )}
+
+                  {/* Error Message */}
+                  {payError && (
+                    <div style={{background:c.dangerLt, border:`1px solid ${c.danger}30`, borderRadius:12, padding:"12px 16px", marginBottom:16, display:"flex", alignItems:"center", gap:10}}>
+                      <span style={{fontSize:18}}><i className="fas fa-exclamation-triangle" style={{color:"#f59e0b"}}></i></span>
+                      <span style={{fontSize:13, color:"#991b1b"}}>{payError}</span>
+                    </div>
+                  )}
+
+                  {/* Payment Methods */}
+                  <div style={{fontSize:14, fontWeight:700, color:c.text, marginBottom:14}}>Select Payment Method</div>
+
+                  {[
+                    {id:"xendit", name:"Pay Online", desc:"Credit/Debit Card, GCash, Maya, Bank Transfer, 7-Eleven & more", icon:"fas fa-credit-card", color:"#2563eb", recommended:true},
+                    // hidden:true removes the option from the modal without deleting it.
+                    // Direct wallet transfers are off while there is no automatic way to
+                    // match an incoming GCash/Maya send to an invoice — every one had to be
+                    // reconciled by hand. Delete the hidden flag to bring either one back.
+                    {id:"gcash", name:"GCash Direct", desc:"Send to our GCash number directly", icon:"fas fa-wallet", color:"#007DFE", hidden:true},
+                    {id:"maya", name:"Maya Direct", desc:"Send to our Maya number directly", icon:"fas fa-wallet", color:"#35B566", hidden:true},
+                  ].filter(m => !m.hidden).map(m => (
+                    <div key={m.id} onClick={() => { if(!m.disabled){ setPayMethod(m.id); setPayError(""); } }} style={{
+                      display:"flex", alignItems:"center", gap:14, padding:"14px 16px", borderRadius:14, marginBottom:8, position:"relative",
+                      cursor: m.disabled ? "not-allowed" : "pointer", opacity: m.disabled ? 0.45 : 1,
+                      border: payMethod === m.id ? `2px solid ${c.primary}` : `1px solid ${c.border}`,
+                      background: payMethod === m.id ? `${c.primary}06` : c.bgCard, transition:"all .2s",
+                    }}>
+                      {m.recommended && <div style={{position:"absolute", top:-8, right:12, background:c.primary, color:"#fff", fontSize:10, fontWeight:700, padding:"2px 10px", borderRadius:10}}>RECOMMENDED</div>}
+                      {m.disabled && <div style={{position:"absolute", top:-8, right:12, background:c.border, color:c.textMuted, fontSize:10, fontWeight:600, padding:"2px 10px", borderRadius:10}}>COMING SOON</div>}
+                      <div style={{width:44,height:44,borderRadius:12,background:`${m.color}12`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22}}><i className={m.icon} style={{color:m.disabled ? c.textMuted : m.color}}></i></div>
+                      <div style={{flex:1}}>
+                        <div style={{fontSize:14, fontWeight:600, color: m.disabled ? c.textMuted : c.text}}>{m.name}</div>
+                        <div style={{fontSize:12, color:c.textMuted}}>{m.desc}</div>
+                      </div>
+                      <div style={{width:20,height:20,borderRadius:10,border: payMethod === m.id ? `6px solid ${c.primary}` : `2px solid ${c.border}`}} />
+                    </div>
+                  ))}
+                <div ref={aiChatEndRef} />
+
+                  <Btn primary style={{width:"100%", marginTop:16}} onClick={() => { setPayStep(2); handlePay(); }}>
+                    {payMethod === "xendit" ? `Pay ${fmt(payInvoice.amount)} — Secure Checkout` : `Pay ${fmt(payInvoice.amount)} — ${payMethod === "gcash" ? "GCash" : payMethod === "maya" ? "Maya" : payMethod === "bank" ? "Bank Transfer" : "Over-the-Counter"}`}
+                  </Btn>
+                </>
+              )}
+
+              {/* Step 2: Processing / Redirecting */}
+              {payStep === 2 && (
+                <div style={{textAlign:"center", padding:"40px 20px"}}>
+                  <div style={{width:64, height:64, borderRadius:"50%", border:`4px solid ${c.border}`, borderTopColor:c.primary, animation:"spin 1s linear infinite", display:"inline-block", marginBottom:20}} />
+                  <h3 style={{fontSize:18, fontWeight:700, color:c.text, marginBottom:8}}>Complete Your Payment</h3>
+                  <p style={{color:c.textMuted, fontSize:14, marginBottom:20}}>
+                    A secure payment window has opened. Complete your payment there — this page will update automatically once confirmed.
+                  </p>
+                  <p style={{color:c.textMuted, fontSize:12, marginBottom:20}}>You can close this dialog and return to your account. The payment window will remain open.</p>
+                  <button onClick={() => { if(payPopupRef.current && !payPopupRef.current.closed) payPopupRef.current.focus(); else setPayError("Payment tab was closed. Please try again."); }}
+                    style={{background:c.primary, color:"#fff", border:"none", borderRadius:10, padding:"10px 24px", fontSize:14, fontWeight:600, cursor:"pointer"}}>
+                    <i className="fas fa-external-link-alt" style={{marginRight:8}}/>Return to Payment Tab
+                  </button>
+                </div>
+              )}
+
+              {/* Step 3: Success */}
+              {payStep === 3 && (
+                <div style={{textAlign:"center", padding:"30px 20px"}}>
+                  <div style={{width:72, height:72, borderRadius:"50%", background:c.successLt, display:"inline-flex", alignItems:"center", justifyContent:"center", fontSize:36, marginBottom:20}}><i className="fas fa-check-circle" style={{color:"#22c55e"}}></i></div>
+                  <h3 style={{fontSize:20, fontWeight:700, color:c.text, marginBottom:6}}>Payment Successful!</h3>
+                  <p style={{color:c.textMuted, fontSize:14, marginBottom:20}}>
+                    {payInvoice.amount > 0 
+                      ? `Your payment of ${fmt(payInvoice.amount)} has been received.`
+                      : `Your payment for invoice ${payInvoice.number} has been received.`}
+                  </p>
+
+                  <div style={{background:c.bgAlt, borderRadius:14, padding:18, textAlign:"left", marginBottom:20, border:`1px solid ${c.border}`}}>
+                    {[
+                      {l:"Invoice", v:payInvoice.number || payRef},
+                      ...(payInvoice.amount > 0 ? [{l:"Amount", v:fmt(payInvoice.amount)}] : []),
+                      {l:"Method", v:"Online Payment (Xendit)"},
+                      {l:"Date", v: new Date().toLocaleString()},
+                    ].map((r,i,arr) => (
+                      <div key={i} style={{display:"flex", justifyContent:"space-between", padding:"8px 0", borderBottom: i < arr.length-1 ? `1px solid ${c.borderLight}` : "none"}}>
+                        <span style={{fontSize:12, color:c.textMuted}}>{r.l}</span>
+                        <span style={{fontSize:13, fontWeight:600, color:c.text, fontFamily:fontMono}}>{r.v}</span>
+                      </div>
+                    ))}
+                <div ref={aiChatEndRef} />
+                  </div>
+
+                  <p style={{fontSize:12, color:c.textMuted, marginBottom:16}}>A confirmation has been sent to your email and phone.</p>
+                  <Btn primary style={{width:"100%"}} onClick={() => { setShowPayModal(false); setPayStep(1); setPayError(""); setPayRef(""); setPayAllMode(false); }}>Done</Btn>
+                </div>
+              )}
+
+              {/* Step 4: Offline Payment Instructions */}
+              {payStep === 4 && (
+                <div style={{padding:"10px 0"}}>
+                  <div style={{textAlign:"center", marginBottom:20}}>
+                    <div style={{width:64, height:64, borderRadius:"50%", background:c.infoLt, display:"inline-flex", alignItems:"center", justifyContent:"center", fontSize:30, marginBottom:12}}><i className="fas fa-clipboard-check" style={{color:"#3b82f6"}}></i></div>
+                    <h3 style={{fontSize:18, fontWeight:700, color:c.text, marginBottom:4}}>Payment Instructions</h3>
+                    <p style={{color:c.textMuted, fontSize:13}}>Follow the steps below to complete your payment of <strong style={{color:c.text}}>{fmt(payInvoice.amount)}</strong></p>
+                  </div>
+
+                  <div style={{background:c.bgAlt, borderRadius:14, padding:18, marginBottom:16, border:`1px solid ${c.border}`}}>
+                    <div style={{fontSize:12, fontWeight:700, color:c.textMuted, textTransform:"uppercase", letterSpacing:1, marginBottom:12}}>Reference Details</div>
+                    {[
+                      {l:"Invoice #", v:payInvoice.number},
+                      {l:"Account", v:currentUser?.acct || "—"},
+                      {l:"Amount", v:fmt(payInvoice.amount)},
+                    ].map((r,i) => (
+                      <div key={i} style={{display:"flex", justifyContent:"space-between", padding:"8px 0", borderBottom:`1px solid ${c.borderLight}`}}>
+                        <span style={{fontSize:12, color:c.textMuted}}>{r.l}</span>
+                        <span style={{fontSize:13, fontWeight:700, color:c.text, fontFamily:fontMono}}>{r.v}</span>
+                      </div>
+                    ))}
+                <div ref={aiChatEndRef} />
+                  </div>
+
+                  {payMethod === "gcash" && (
+                    <div style={{background:"#007DFE08", borderRadius:14, padding:18, marginBottom:16, border:"1px solid #007DFE20"}}>
+                      <div style={{fontWeight:700, color:c.text, marginBottom:8}}><i className="fas fa-circle" style={{color:"#007DFE", marginRight:6, fontSize:12}}></i> GCash Instructions</div>
+                      <ol style={{paddingLeft:20, fontSize:13, color:c.textSec, lineHeight:1.8}}>
+                        <li>Open GCash app → Send Money</li>
+                        <li>Send to: <strong>{siteSettings.gcash_number||siteSettings.company_phone||""}</strong></li>
+                        <li>Amount: <strong>{fmt(payInvoice.amount)}</strong></li>
+                        <li>Add message: <strong>{payInvoice.number}</strong></li>
+                        <li>Take a screenshot of your receipt</li>
+                        <li>Send screenshot to our Viber/FB: <strong>{siteSettings.viber_number||siteSettings.company_phone||""}</strong></li>
+                      </ol>
+                    </div>
+                  )}
+
+                  {payMethod === "maya" && (
+                    <div style={{background:"#35B56608", borderRadius:14, padding:18, marginBottom:16, border:"1px solid #35B56620"}}>
+                      <div style={{fontWeight:700, color:c.text, marginBottom:8}}><i className="fas fa-circle" style={{color:"#35B566", marginRight:6, fontSize:12}}></i> Maya Instructions</div>
+                      <ol style={{paddingLeft:20, fontSize:13, color:c.textSec, lineHeight:1.8}}>
+                        <li>Open Maya app → Send Money</li>
+                        <li>Send to: <strong>{siteSettings.maya_number||siteSettings.company_phone||""}</strong></li>
+                        <li>Amount: <strong>{fmt(payInvoice.amount)}</strong></li>
+                        <li>Add note: <strong>{payInvoice.number}</strong></li>
+                        <li>Take a screenshot of your receipt</li>
+                        <li>Send screenshot to our Viber/FB: <strong>{siteSettings.viber_number||siteSettings.company_phone||""}</strong></li>
+                      </ol>
+                    </div>
+                  )}
+
+                  {payMethod === "bank" && (
+                    <div style={{background:"#1a365d08", borderRadius:14, padding:18, marginBottom:16, border:"1px solid #1a365d20"}}>
+                      <div style={{fontWeight:700, color:c.text, marginBottom:8}}><i className="fas fa-university" style={{marginRight:6, fontSize:12}}></i> Bank Transfer Instructions</div>
+                      <div style={{fontSize:13, color:c.textSec, lineHeight:1.8}}>
+                        <div style={{marginBottom:8}}><strong>BDO</strong> — Acct: {siteSettings.bank_bdo_account || 'Contact us for details'} — {siteSettings.bank_account_name || siteSettings.company_name || 'Netfactory'}</div>
+                        <div style={{marginBottom:8}}><strong>BPI</strong> — Acct: {siteSettings.bank_bpi_account || 'Contact us for details'} — {siteSettings.bank_account_name || siteSettings.company_name || 'Netfactory'}</div>
+                        <div style={{marginBottom:12}}>Amount: <strong>{fmt(payInvoice.amount)}</strong></div>
+                        <div>After transferring, send your deposit slip or screenshot to:</div>
+                        <div><strong>Viber/FB: {companyInfo.company_phone||""}</strong> with your invoice number <strong>{payInvoice.number}</strong></div>
+                      </div>
+                    </div>
+                  )}
+
+                  {payMethod === "otc" && (
+                    <div style={{background:"#f9731608", borderRadius:14, padding:18, marginBottom:16, border:"1px solid #f9731620"}}>
+                      <div style={{fontWeight:700, color:c.text, marginBottom:8}}><i className="fas fa-store" style={{marginRight:6, fontSize:12}}></i> Over-the-Counter</div>
+                      <div style={{fontSize:13, color:c.textSec, lineHeight:1.8}}>
+                        <div style={{marginBottom:8}}>Visit our office to pay in person:</div>
+                        <div style={{fontWeight:600, color:c.text}}>{siteSettings.bank_account_name || siteSettings.company_name || 'Netfactory'}</div>
+                        <div>{companyInfo.company_address||""}</div>
+                        <div style={{marginTop:8}}>Office Hours: Mon-Sat, 8AM-5PM</div>
+                        <div>Contact: {companyInfo.company_phone||""}</div>
+                        <div style={{marginTop:12, fontWeight:600}}>Bring your invoice number: {payInvoice.number}</div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div style={{display:"flex", gap:10}}>
+                    <Btn style={{flex:1}} onClick={() => { setPayStep(1); setPayError(""); }}>← Back</Btn>
+                    <Btn primary style={{flex:1}} onClick={() => { setShowPayModal(false); setPayStep(1); setPayError(""); setPayAllMode(false); }}>Got It</Btn>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========== CHANGE PLAN MODAL ========== */}
+      {showChangePlan && selectedNewPlan && (
+        <div style={{position:"fixed", inset:0, background:"rgba(0,0,0,.6)", backdropFilter:"blur(6px)", zIndex:300, display:"flex", alignItems:"center", justifyContent:"center", padding:16, animation:"fadeIn .2s"}}
+>
+          <div style={{background:c.bgCard, borderRadius:24, maxWidth:500, width:"100%", maxHeight:"90vh", overflowY:"auto", boxShadow:"0 40px 80px rgba(0,0,0,.3)", border:`1px solid ${c.border}`}}>
+            <div style={{padding:"22px 28px", borderBottom:`1px solid ${c.border}`, display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+              <h2 style={{fontSize:20, fontWeight:700, color:c.text, fontFamily:fontMono}}>
+                {changePlanStep === 1 ? "Confirm Plan Change" : "Request Submitted"}
+              </h2>
+              <div style={{cursor:"pointer", fontSize:18, color:c.textMuted}} onClick={() => setShowChangePlan(false)}><i className="fas fa-xmark"></i></div>
+            </div>
+            <div style={{padding:28}}>
+              {changePlanStep === 1 ? (
+                <>
+                  {/* Comparison */}
+                  <div style={{display:"grid", gridTemplateColumns:"1fr auto 1fr", gap:16, alignItems:"center", marginBottom:24}}>
+                    <div style={{textAlign:"center", padding:16, borderRadius:14, border:`1px solid ${c.border}`, background:c.bgAlt}}>
+                      <div style={{fontSize:10, fontWeight:700, color:c.textMuted, textTransform:"uppercase", letterSpacing:1, marginBottom:6}}>Current</div>
+                      <div style={{fontSize:16, fontWeight:800, color:c.text, fontFamily:fontMono}}>{plan.name}</div>
+                      <div style={{fontSize:13, color:c.textSec}}>{plan.speed}</div>
+                      <div style={{fontSize:18, fontWeight:800, color:c.text, fontFamily:fontMono, marginTop:6}}>{fmt(plan.price)}/mo</div>
+                    </div>
+                    <div style={{fontSize:24, color:c.primary}}>→</div>
+                    <div style={{textAlign:"center", padding:16, borderRadius:14, border:`2px solid ${c.primary}`, background:`${c.primary}06`}}>
+                      <div style={{fontSize:10, fontWeight:700, color:c.primary, textTransform:"uppercase", letterSpacing:1, marginBottom:6}}>New Plan</div>
+                      <div style={{fontSize:16, fontWeight:800, color:c.text, fontFamily:fontMono}}>{selectedNewPlan.name}</div>
+                      <div style={{fontSize:13, color:c.textSec}}>{selectedNewPlan.speed}</div>
+                      <div style={{fontSize:18, fontWeight:800, color:c.primary, fontFamily:fontMono, marginTop:6}}>{fmt(selectedNewPlan.price)}/mo</div>
+                    </div>
+                  </div>
+
+                  {/* Price Difference */}
+                  <div style={{background:c.bgAlt, borderRadius:14, padding:16, marginBottom:20, border:`1px solid ${c.border}`}}>
+                    <div style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+                      <span style={{fontSize:14, fontWeight:600, color:c.text}}>Monthly Difference</span>
+                      <span style={{fontSize:18, fontWeight:800, color: selectedNewPlan.price > plan.price ? c.danger : c.success, fontFamily:fontMono}}>
+                        {selectedNewPlan.price > plan.price ? "+" : ""}{fmt(selectedNewPlan.price - plan.price)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div style={{background:c.infoLt, borderRadius:12, padding:"12px 16px", marginBottom:20, fontSize:13, color:c.textSec}}>
+                    <i className="fas fa-thumbtack" style={{marginRight:6}}></i> Plan changes take effect on your next billing cycle. A prorated amount may apply for the remaining days of the current cycle.
+                  </div>
+
+                  <div style={{display:"flex", gap:12}}>
+                    <Btn style={{flex:1}} onClick={() => setShowChangePlan(false)}>Cancel</Btn>
+                    <Btn primary style={{flex:2}} onClick={handlePlanChange}>Confirm Change</Btn>
+                  </div>
+                </>
+              ) : (
+                <div style={{textAlign:"center", padding:"30px 20px"}}>
+                  <div style={{width:72, height:72, borderRadius:"50%", background:c.successLt, display:"inline-flex", alignItems:"center", justifyContent:"center", fontSize:36, marginBottom:20}}><i className="fas fa-check-circle" style={{color:"#22c55e"}}></i></div>
+                  <h3 style={{fontSize:20, fontWeight:700, color:c.text, marginBottom:6}}>Plan Change Requested!</h3>
+                  <p style={{color:c.textMuted, fontSize:14, marginBottom:6}}>Your plan change from <strong>{plan.name}</strong> to <strong>{selectedNewPlan.name}</strong> has been submitted.</p>
+                  <p style={{color:c.textMuted, fontSize:13, marginBottom:24}}>The change will take effect on your next billing cycle. You will receive an email confirmation shortly.</p>
+                  <Btn primary style={{width:"100%"}} onClick={() => setShowChangePlan(false)}>Done</Btn>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========== EDIT PROFILE MODAL ========== */}
+      {showEditProfile && (
+        <div style={{position:"fixed", inset:0, background:"rgba(0,0,0,.6)", backdropFilter:"blur(6px)", zIndex:300, display:"flex", alignItems:"center", justifyContent:"center", padding:16, animation:"fadeIn .2s"}}
+>
+          <div style={{background:c.bgCard, borderRadius:24, maxWidth:520, width:"100%", maxHeight:"90vh", overflowY:"auto", boxShadow:"0 40px 80px rgba(0,0,0,.3)", border:`1px solid ${c.border}`}}>
+            <div style={{padding:"22px 28px", borderBottom:`1px solid ${c.border}`, display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+              <h2 style={{fontSize:20, fontWeight:700, color:c.text, fontFamily:fontMono}}>
+                {editProfileSaved ? "Profile Updated" : "Update Profile"}
+              </h2>
+              <div style={{cursor:"pointer", fontSize:18, color:c.textMuted}} onClick={() => setShowEditProfile(false)}><i className="fas fa-xmark"></i></div>
+            </div>
+            <div style={{padding:28}}>
+              {editProfileSaved ? (
+                <div style={{textAlign:"center", padding:"20px 0"}}>
+                  <div style={{width:72, height:72, borderRadius:"50%", background:c.successLt, display:"inline-flex", alignItems:"center", justifyContent:"center", fontSize:36, marginBottom:20}}><i className="fas fa-check-circle" style={{color:"#22c55e"}}></i></div>
+                  <h3 style={{fontSize:18, fontWeight:700, color:c.text, marginBottom:8}}>Profile Updated Successfully</h3>
+                  <p style={{fontSize:13, color:c.textMuted, marginBottom:24}}>Your information has been saved.</p>
+                  <Btn primary onClick={() => setShowEditProfile(false)} style={{width:"100%"}}>Done</Btn>
+                </div>
+              ) : (
+                <>
+                  <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14}}>
+                    {[{l:"First Name", k:"firstName"}, {l:"Last Name", k:"lastName"}].map(f => (
+                      <div key={f.k}>
+                        <label style={{fontSize:12, fontWeight:600, color:c.textMuted, marginBottom:6, display:"block", textTransform:"uppercase", letterSpacing:.3}}>{f.l}</label>
+                        <input value={editProfileForm[f.k]} onChange={e => setEditProfileForm(prev => ({...prev, [f.k]:e.target.value}))}
+                          style={{width:"100%", padding:"12px 14px", border:`1px solid ${c.border}`, borderRadius:12, fontSize:14, background:c.bgAlt, color:c.text, fontFamily:font, outline:"none"}} />
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{marginBottom:14}}>
+                    <label style={{fontSize:12, fontWeight:600, color:c.textMuted, marginBottom:6, display:"block", textTransform:"uppercase", letterSpacing:.3}}>Middle Name <span style={{fontWeight:400, textTransform:"none"}}>(optional)</span></label>
+                    <input value={editProfileForm.middleName} onChange={e => setEditProfileForm(prev => ({...prev, middleName:e.target.value}))}
+                      placeholder="Leave blank if none"
+                      style={{width:"100%", padding:"12px 14px", border:`1px solid ${c.border}`, borderRadius:12, fontSize:14, background:c.bgAlt, color:c.text, fontFamily:font, outline:"none"}} />
+                  </div>
+                  {[{l:"Email Address", k:"email", type:"email"}, {l:"Street Address", k:"address", type:"text"}].map(f => (
+                    <div key={f.k} style={{marginBottom:14}}>
+                      <label style={{fontSize:12, fontWeight:600, color:c.textMuted, marginBottom:6, display:"block", textTransform:"uppercase", letterSpacing:.3}}>{f.l}</label>
+                      <input type={f.type} value={editProfileForm[f.k]} onChange={e => setEditProfileForm(prev => ({...prev, [f.k]:e.target.value}))}
+                        style={{width:"100%", padding:"12px 14px", border:`1px solid ${c.border}`, borderRadius:12, fontSize:14, background:c.bgAlt, color:c.text, fontFamily:font, outline:"none"}} />
+                    </div>
+                  ))}
+                  <div style={{marginBottom:14}}>
+                    <label style={{fontSize:12, fontWeight:600, color:c.textMuted, marginBottom:6, display:"block", textTransform:"uppercase", letterSpacing:.3}}>Phone Number</label>
+                    <input type="tel" value={formatPhone(editProfileForm.phone)} placeholder="(09##) ### - ####"
+                      onChange={e => setEditProfileForm(prev => ({...prev, phone:unformatPhone(e.target.value)}))}
+                      style={{width:"100%", padding:"12px 14px", border:`1px solid ${c.border}`, borderRadius:12, fontSize:14, background:c.bgAlt, color:c.text, fontFamily:font, outline:"none", letterSpacing:1}} />
+                  </div>
+                  <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14}}>
+                    <div>
+                      <label style={{fontSize:12, fontWeight:600, color:c.textMuted, marginBottom:6, display:"block", textTransform:"uppercase", letterSpacing:.3}}>Town / Municipality</label>
+                      <select value={editProfileForm.municipality} onChange={e => { const town = e.target.value; setEditProfileForm(prev => ({...prev, municipality:town, barangay:"", province:getProvinceForTown(town), postalCode:getPostalCode(town)})); }}                        style={{width:"100%", padding:"12px 14px", border:`1px solid ${c.border}`, borderRadius:12, fontSize:14, background:c.bgAlt, color:c.text, fontFamily:font, outline:"none", cursor:"pointer", appearance:"auto"}}>
+                        <option value="">— Select Town —</option>
+                        {allTowns.map(t => <option key={t} value={t}>{t}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{fontSize:12, fontWeight:600, color:c.textMuted, marginBottom:6, display:"block", textTransform:"uppercase", letterSpacing:.3}}>Barangay</label>
+                      <select value={editProfileForm.barangay} onChange={e => setEditProfileForm(prev => ({...prev, barangay:e.target.value}))}
+                        disabled={!editProfileForm.municipality}
+                        style={{width:"100%", padding:"12px 14px", border:`1px solid ${c.border}`, borderRadius:12, fontSize:14, background:c.bgAlt, color: editProfileForm.municipality ? c.text : c.textMuted, fontFamily:font, outline:"none", cursor: editProfileForm.municipality ? "pointer" : "not-allowed", appearance:"auto", opacity: editProfileForm.municipality ? 1 : 0.6}}>
+                        <option value="">{editProfileForm.municipality ? "— Select Barangay —" : "— Select Town First —"}</option>
+                        {getBarangays(editProfileForm.municipality).map(b => <option key={b} value={b}>{b}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14}}>
+                    <div>
+                      <label style={{fontSize:12, fontWeight:600, color:c.textMuted, marginBottom:6, display:"block", textTransform:"uppercase", letterSpacing:.3}}>Province</label>
+                      <input value={getProvinceForTown(editProfileForm.municipality)||editProfileForm.province||"—"} readOnly
+                        style={{width:"100%", padding:"12px 14px", border:`1px solid ${c.border}`, borderRadius:12, fontSize:14, background:c.bgAlt, color:c.textMuted, fontFamily:font, outline:"none", cursor:"default"}} />
+                    </div>
+                    <div>
+                      <label style={{fontSize:12, fontWeight:600, color:c.textMuted, marginBottom:6, display:"block", textTransform:"uppercase", letterSpacing:.3}}>Postal Code</label>
+                      <input value={editProfileForm.postalCode} readOnly
+                        style={{width:"100%", padding:"12px 14px", border:`1px solid ${c.border}`, borderRadius:12, fontSize:14, background:c.bgAlt, color:c.textMuted, fontFamily:font, outline:"none", cursor:"default"}} />
+                    </div>
+                  </div>
+                  <Btn primary style={{width:"100%", marginTop:8}} disabled={!editProfileForm.firstName || !editProfileForm.lastName || !editProfileForm.email || !editProfileForm.phone}
+                    onClick={handleUpdateProfile}>
+                    <i className="fas fa-floppy-disk" style={{marginRight:6}}></i> Save Changes
+                  </Btn>
+                  <Btn outline style={{width:"100%", marginTop:8}} onClick={() => setShowEditProfile(false)}>Cancel</Btn>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========== CHANGE PASSWORD MODAL ========== */}
+      {showChangePass && (
+        <div style={{position:"fixed", inset:0, background:"rgba(0,0,0,.6)", backdropFilter:"blur(6px)", zIndex:300, display:"flex", alignItems:"center", justifyContent:"center", padding:16, animation:"fadeIn .2s"}}
+>
+          <div style={{background:c.bgCard, borderRadius:24, maxWidth:440, width:"100%", maxHeight:"90vh", overflowY:"auto", boxShadow:"0 40px 80px rgba(0,0,0,.3)", border:`1px solid ${c.border}`}}>
+            <div style={{padding:"22px 28px", borderBottom:`1px solid ${c.border}`, display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+              <h2 style={{fontSize:20, fontWeight:700, color:c.text, fontFamily:fontMono}}>
+                {changePassDone ? "Password Changed" : "Change Password"}
+              </h2>
+              {!changePassLoading && <div style={{cursor:"pointer", fontSize:18, color:c.textMuted}} onClick={() => setShowChangePass(false)}><i className="fas fa-xmark"></i></div>}
+            </div>
+            <div style={{padding:28}}>
+              {changePassDone ? (
+                <div style={{textAlign:"center", padding:"20px 0"}}>
+                  <div style={{width:72, height:72, borderRadius:"50%", background:c.successLt, display:"inline-flex", alignItems:"center", justifyContent:"center", fontSize:36, marginBottom:20}}><i className="fas fa-lock" style={{fontSize:36}}></i></div>
+                  <h3 style={{fontSize:18, fontWeight:700, color:c.text, marginBottom:8}}>Password Changed</h3>
+                  <p style={{fontSize:13, color:c.textMuted, marginBottom:24}}>Your password has been updated successfully.</p>
+                  <Btn primary onClick={() => setShowChangePass(false)} style={{width:"100%"}}>Done</Btn>
+                </div>
+              ) : (
+                <>
+                  {[{l:"Current Password", k:"current"}, {l:"New Password", k:"newPass"}, {l:"Confirm New Password", k:"confirm"}].map(f => (
+                    <div key={f.k} style={{marginBottom:14}}>
+                      <label style={{fontSize:12, fontWeight:600, color:c.textMuted, marginBottom:6, display:"block", textTransform:"uppercase", letterSpacing:.3}}>{f.l}</label>
+                      <input type="password" value={changePassForm[f.k]} onChange={e => setChangePassForm(prev => ({...prev, [f.k]:e.target.value}))}
+                        style={{width:"100%", padding:"12px 14px", border:`1px solid ${c.border}`, borderRadius:12, fontSize:14, background:c.bgAlt, color:c.text, fontFamily:font, outline:"none"}} />
+                    </div>
+                  ))}
+                <div ref={aiChatEndRef} />
+                  {changePassForm.newPass && changePassForm.confirm && changePassForm.newPass !== changePassForm.confirm && (
+                    <div style={{fontSize:12, color:c.danger, marginBottom:10}}><i className="fas fa-triangle-exclamation" style={{marginRight:6}}></i> Passwords do not match</div>
+                  )}
+                  {changePassForm.newPass && changePassForm.newPass.length > 0 && changePassForm.newPass.length < 8 && (
+                    <div style={{fontSize:12, color:c.warning, marginBottom:10}}>Password must be at least 8 characters</div>
+                  )}
+                  {changePassError && (
+                    <div style={{fontSize:12, color:c.danger, marginBottom:10, padding:"10px 14px", background:c.dangerLt, borderRadius:10}}><i className="fas fa-triangle-exclamation" style={{marginRight:6}}></i> {changePassError}</div>
+                  )}
+                  <Btn primary style={{width:"100%", marginTop:8}}
+                    disabled={changePassLoading || !changePassForm.current || !changePassForm.newPass || changePassForm.newPass.length < 8 || changePassForm.newPass !== changePassForm.confirm}
+                    onClick={handleChangePassword}>
+                    {changePassLoading ? "Saving..." : <><i className="fas fa-key" style={{marginRight:6}}></i> Update Password</>}
+                  </Btn>
+                  <Btn outline style={{width:"100%", marginTop:8}} onClick={() => setShowChangePass(false)} disabled={changePassLoading}>Cancel</Btn>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========== TWO-FACTOR AUTH MODAL ========== */}
+      {show2FA && (
+        <div style={{position:"fixed", inset:0, background:"rgba(0,0,0,.6)", backdropFilter:"blur(6px)", zIndex:300, display:"flex", alignItems:"center", justifyContent:"center", padding:16, animation:"fadeIn .2s"}}
+>
+          <div style={{background:c.bgCard, borderRadius:24, maxWidth:440, width:"100%", maxHeight:"90vh", overflowY:"auto", boxShadow:"0 40px 80px rgba(0,0,0,.3)", border:`1px solid ${c.border}`}}>
+            <div style={{padding:"22px 28px", borderBottom:`1px solid ${c.border}`, display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+              <h2 style={{fontSize:20, fontWeight:700, color:c.text, fontFamily:fontMono}}>
+                {twoFAStep === 3 ? "2FA Enabled!" : twoFAStep === 4 ? "Disable Two-Factor Auth" : "Enable Two-Factor Auth"}
+              </h2>
+              <div style={{cursor:"pointer", fontSize:18, color:c.textMuted}} onClick={() => setShow2FA(false)}><i className="fas fa-xmark"></i></div>
+            </div>
+            <div style={{padding:28}}>
+              {twoFAStep === 1 && (
+                <>
+                  <div style={{textAlign:"center", marginBottom:24}}>
+                    <div style={{width:64, height:64, borderRadius:"50%", background:c.primaryLt, display:"inline-flex", alignItems:"center", justifyContent:"center", fontSize:32, marginBottom:16}}><i className="fas fa-mobile-screen" style={{fontSize:32}}></i></div>
+                    <h3 style={{fontSize:16, fontWeight:700, color:c.text, marginBottom:8}}>Set Up Authenticator App</h3>
+                    <p style={{fontSize:13, color:c.textMuted, lineHeight:1.6}}>Install an authenticator app (Google Authenticator, Authy, or similar) on your phone, then scan the QR code below.</p>
+                  </div>
+                  <div style={{background:c.bgAlt, borderRadius:16, padding:24, textAlign:"center", marginBottom:20, border:`1px solid ${c.border}`}}>
+                    <div style={{width:180, height:180, background:"#fff", borderRadius:12, display:"inline-flex", alignItems:"center", justifyContent:"center", marginBottom:12, border:`1px solid ${c.border}`, overflow:"hidden"}}>
+                      {twoFASecret ? (
+                        <img src={getQRUrl(twoFASecret)} alt="Scan this QR code with your authenticator app" width="160" height="160" style={{display:"block"}} />
+                      ) : (
+                        <div style={{fontSize:13, color:c.textMuted, padding:16}}>Generating QR code...</div>
+                      )}
+                    </div>
+                    <div style={{fontSize:11, color:c.textMuted, marginTop:8}}>Or enter this code manually in your app:</div>
+                    <div style={{fontSize:14, fontWeight:700, color:c.text, fontFamily:fontMono, marginTop:6, letterSpacing:3, background:c.bgAlt, padding:"8px 16px", borderRadius:8, display:"inline-block", border:`1px solid ${c.border}`, wordBreak:"break-all"}}>{twoFASecret ? formatSecret(twoFASecret) : "Loading..."}</div>
+                  </div>
+                  <Btn primary style={{width:"100%"}} onClick={() => setTwoFAStep(2)}>I've Scanned the QR Code → Next</Btn>
+                </>
+              )}
+              {twoFAStep === 2 && (
+                <>
+                  <div style={{textAlign:"center", marginBottom:20}}>
+                    <h3 style={{fontSize:16, fontWeight:700, color:c.text, marginBottom:8}}>Enter Verification Code</h3>
+                    <p style={{fontSize:13, color:c.textMuted}}>Enter the 6-digit code from your authenticator app to verify setup.</p>
+                  </div>
+                  <div style={{marginBottom:20}}>
+                    <label style={{fontSize:12, fontWeight:600, color:c.textMuted, marginBottom:6, display:"block", textTransform:"uppercase", letterSpacing:.3}}>Verification Code</label>
+                    <input value={twoFACode} onChange={e => setTwoFACode(e.target.value.replace(/\D/g,"").slice(0,6))} placeholder="000000" maxLength={6}
+                      style={{width:"100%", padding:"16px 14px", border:`1px solid ${c.border}`, borderRadius:12, fontSize:24, background:c.bgAlt, color:c.text, fontFamily:fontMono, outline:"none", textAlign:"center", letterSpacing:8}} />
+                  </div>
+                  <Btn primary style={{width:"100%"}} disabled={twoFACode.length !== 6} onClick={handleEnable2FA}><i className="fas fa-circle-check" style={{marginRight:6}}></i> Verify & Enable 2FA</Btn>
+                  <Btn outline style={{width:"100%", marginTop:8}} onClick={() => setTwoFAStep(1)}>← Back</Btn>
+                </>
+              )}
+              {twoFAStep === 3 && (
+                <div style={{textAlign:"center", padding:"20px 0"}}>
+                  <div style={{width:72, height:72, borderRadius:"50%", background:c.successLt, display:"inline-flex", alignItems:"center", justifyContent:"center", fontSize:36, marginBottom:20}}><i className="fas fa-shield-halved" style={{color:"#22c55e",fontSize:36}}></i></div>
+                  <h3 style={{fontSize:18, fontWeight:700, color:c.text, marginBottom:8}}>Two-Factor Auth Enabled!</h3>
+                  <p style={{fontSize:13, color:c.textMuted, marginBottom:24}}>Your account is now protected with two-factor authentication. You'll need your authenticator app each time you log in.</p>
+                  <Btn primary onClick={() => setShow2FA(false)} style={{width:"100%"}}>Done</Btn>
+                </div>
+              )}
+              {twoFAStep === 4 && (
+                <>
+                  <div style={{textAlign:"center", marginBottom:20}}>
+                    <div style={{width:64, height:64, borderRadius:"50%", background:c.dangerLt, display:"inline-flex", alignItems:"center", justifyContent:"center", fontSize:32, marginBottom:16}}><i className="fas fa-shield-halved" style={{color:c.danger, fontSize:28}}></i></div>
+                    <h3 style={{fontSize:16, fontWeight:700, color:c.text, marginBottom:8}}>Disable Two-Factor Auth?</h3>
+                    <p style={{fontSize:13, color:c.textMuted, lineHeight:1.6}}>Enter the 6-digit code from your authenticator app to confirm. This will remove 2FA protection from your account.</p>
+                  </div>
+                  <div style={{marginBottom:16}}>
+                    <label style={{fontSize:12, fontWeight:600, color:c.textMuted, marginBottom:6, display:"block", textTransform:"uppercase", letterSpacing:.3}}>Authenticator Code</label>
+                    <input value={twoFACode} onChange={e => setTwoFACode(e.target.value.replace(/\D/g,"").slice(0,6))} placeholder="000000" maxLength={6} autoFocus
+                      style={{width:"100%", padding:"16px 14px", border:`1px solid ${c.border}`, borderRadius:12, fontSize:24, background:c.bgAlt, color:c.text, fontFamily:fontMono, outline:"none", textAlign:"center", letterSpacing:8}} />
+                  </div>
+                  <Btn style={{width:"100%", background:c.danger, color:"#fff", border:"none", borderRadius:10, padding:"12px 0", fontWeight:700, cursor: twoFACode.length!==6?"not-allowed":"pointer", opacity:twoFACode.length!==6?.5:1}} disabled={twoFACode.length!==6} onClick={handleDisable2FA}><i className="fas fa-shield-xmark" style={{marginRight:6}}></i> Disable 2FA</Btn>
+                  <Btn outline style={{width:"100%", marginTop:8}} onClick={() => setShow2FA(false)}>Cancel</Btn>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========== DISCONNECT SERVICE MODAL ========== */}
+      {showDisconnect && (
+        <div style={{position:"fixed", inset:0, background:"rgba(0,0,0,.6)", backdropFilter:"blur(6px)", zIndex:300, display:"flex", alignItems:"center", justifyContent:"center", padding:16, animation:"fadeIn .2s"}}
+>
+          <div style={{background:c.bgCard, borderRadius:24, maxWidth:480, width:"100%", maxHeight:"90vh", overflowY:"auto", boxShadow:"0 40px 80px rgba(0,0,0,.3)", border:`1px solid ${c.border}`}}>
+            <div style={{padding:"22px 28px", borderBottom:`1px solid ${c.border}`, display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+              <h2 style={{fontSize:20, fontWeight:700, color: disconnectStep === 3 ? c.text : c.danger, fontFamily:fontMono}}>
+                {disconnectStep === 3 ? "Request Submitted" : "Disconnect Service"}
+              </h2>
+              {disconnectStep !== 2 && <div style={{cursor:"pointer", fontSize:18, color:c.textMuted}} onClick={() => setShowDisconnect(false)}><i className="fas fa-xmark"></i></div>}
+            </div>
+            <div style={{padding:28}}>
+              {disconnectStep === 1 && (
+                <>
+                  <div style={{background:c.warningLt, borderRadius:14, padding:18, marginBottom:20, border:`1px solid ${c.warning}30`}}>
+                    <div style={{fontSize:14, fontWeight:700, color:darkMode?"#fde68a":"#92400e", marginBottom:6}}><i className="fas fa-triangle-exclamation" style={{marginRight:6}}></i> Please Read Carefully</div>
+                    <p style={{fontSize:13, color:darkMode?"#fde68a":"#92400e", lineHeight:1.6}}>Requesting disconnection will submit a service termination request. Our team will process this within 3-5 business days. Any outstanding balance must be settled before disconnection.</p>
+                  </div>
+                  <div style={{marginBottom:14}}>
+                    <label style={{fontSize:12, fontWeight:600, color:c.textMuted, marginBottom:6, display:"block", textTransform:"uppercase", letterSpacing:.3}}>Reason for Disconnection</label>
+                    <select value={disconnectReason} onChange={e => setDisconnectReason(e.target.value)}
+                      style={{width:"100%", padding:"12px 14px", border:`1px solid ${c.border}`, borderRadius:12, fontSize:14, background:c.bgAlt, color:c.text, fontFamily:font, outline:"none"}}>
+                      <option value="">Select a reason...</option>
+                      <option value="relocating">Relocating / Moving out</option>
+                      <option value="switching">Switching to another provider</option>
+                      <option value="cost">Cost / Financial reasons</option>
+                      <option value="service">Unsatisfied with service quality</option>
+                      <option value="temporary">Temporary — plan to reconnect later</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </div>
+                  <div style={{marginBottom:14}}>
+                    <label style={{fontSize:12, fontWeight:600, color:c.textMuted, marginBottom:6, display:"block", textTransform:"uppercase", letterSpacing:.3}}>Type your account number to confirm</label>
+                    <input value={disconnectConfirm} onChange={e => setDisconnectConfirm(e.target.value)} placeholder={currentUser.acct}
+                      style={{width:"100%", padding:"12px 14px", border:`1px solid ${c.border}`, borderRadius:12, fontSize:14, background:c.bgAlt, color:c.text, fontFamily:fontMono, outline:"none"}} />
+                    {disconnectConfirm && disconnectConfirm !== currentUser.acct && (
+                      <div style={{fontSize:11, color:c.danger, marginTop:6}}>Account number does not match</div>
+                    )}
+                  </div>
+                  <Btn danger style={{width:"100%", marginTop:8}} disabled={!disconnectReason || disconnectConfirm !== currentUser.acct}
+                    onClick={() => { setDisconnectStep(2); handleDisconnect(); }}>
+                    <i className="fas fa-triangle-exclamation" style={{marginRight:6}}></i> Submit Disconnection Request
+                  </Btn>
+                  <Btn outline style={{width:"100%", marginTop:8}} onClick={() => setShowDisconnect(false)}>Cancel — Keep My Service</Btn>
+                </>
+              )}
+              {disconnectStep === 2 && (
+                <div style={{textAlign:"center", padding:"40px 20px"}}>
+                  <div style={{width:64, height:64, borderRadius:"50%", border:`4px solid ${c.border}`, borderTopColor:c.danger, animation:"spin 1s linear infinite", display:"inline-block", marginBottom:20}} />
+                  <h3 style={{fontSize:18, fontWeight:700, color:c.text, marginBottom:8}}>Submitting Request...</h3>
+                  <p style={{fontSize:13, color:c.textMuted}}>Please wait while we process your disconnection request.</p>
+                </div>
+              )}
+              {disconnectStep === 3 && (
+                <div style={{textAlign:"center", padding:"20px 0"}}>
+                  <div style={{width:72, height:72, borderRadius:"50%", background:c.warningLt, display:"inline-flex", alignItems:"center", justifyContent:"center", fontSize:36, marginBottom:20}}><i className="fas fa-clipboard-check"></i></div>
+                  <h3 style={{fontSize:18, fontWeight:700, color:c.text, marginBottom:8}}>Disconnection Request Submitted</h3>
+                  <p style={{fontSize:13, color:c.textMuted, marginBottom:8}}>Your request has been received and will be processed within 3-5 business days.</p>
+                  <p style={{fontSize:13, color:c.textMuted, marginBottom:24}}>A confirmation email will be sent to <strong>{currentUser.email}</strong>. Our team may contact you to verify before processing.</p>
+                  <Btn primary onClick={() => setShowDisconnect(false)} style={{width:"100%"}}>Understood</Btn>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========== AI VIRTUAL ASSISTANT ========== */}
+      {loggedIn && aiEnabled && (
+        <div>
+          {/* Floating Button */}
+          <div
+            onClick={() => setShowAiChat(prev => !prev)}
+            style={{
+              position:'fixed', bottom:24, right:24, zIndex:500,
+              width:56, height:56, borderRadius:'50%',
+              background:'linear-gradient(135deg,#6366f1,#8b5cf6)',
+              boxShadow:'0 8px 24px rgba(99,102,241,.45)',
+              display:'flex', alignItems:'center', justifyContent:'center',
+              cursor:'pointer', transition:'transform .2s',
+              border:'2px solid rgba(255,255,255,.15)'
+            }}
+          >
+            <span style={{fontSize:22}}>{showAiChat ? <i className="fas fa-xmark"></i> : <i className="fas fa-comment-dots"></i>}</span>
+          </div>
+
+          {/* Chat Panel */}
+          {showAiChat && (
+            <div style={{
+              position:'fixed', bottom:92, right:24, zIndex:499,
+              width:340, maxHeight:520,
+              background:c.bgCard, borderRadius:20,
+              border:`1px solid ${c.border}`,
+              boxShadow:'0 20px 60px rgba(0,0,0,.3)',
+              display:'flex', flexDirection:'column', overflow:'hidden',
+              animation:'fadeIn .2s'
+            }}>
+              {/* Header */}
+              <div style={{
+                padding:'14px 18px',
+                background:'linear-gradient(135deg,#6366f1,#8b5cf6)',
+                display:'flex', alignItems:'center', gap:10
+              }}>
+                <div style={{
+                  width:36, height:36, borderRadius:'50%',
+                  background:'rgba(255,255,255,.2)',
+                  display:'flex', alignItems:'center', justifyContent:'center',
+                  fontSize:18, flexShrink:0
+                }}><i className="fas fa-robot"></i></div>
+                <div>
+                  <div style={{color:'#fff', fontWeight:700, fontSize:14}}>{aiName}</div>
+                  <div style={{color:'rgba(255,255,255,.75)', fontSize:11}}>Virtual Support Assistant</div>
+                </div>
+                <div style={{marginLeft:'auto', cursor:'pointer', color:'rgba(255,255,255,.7)', fontSize:18, padding:4}}
+                  onClick={() => setShowAiChat(false)}><i className="fas fa-xmark"></i></div>
+              </div>
+
+              {/* Messages */}
+              <div style={{
+                flex:1, overflowY:'auto', padding:'14px 14px 8px',
+                display:'flex', flexDirection:'column', gap:10,
+                maxHeight:330
+              }}>
+                {aiMessages.map((msg, i) => (
+                  <div key={i} style={{
+                    display:'flex',
+                    justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start'
+                  }}>
+                    <div style={{
+                      maxWidth:'82%',
+                      padding:'9px 13px',
+                      borderRadius: msg.role === 'user' ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
+                      background: msg.role === 'user'
+                        ? 'linear-gradient(135deg,#6366f1,#8b5cf6)'
+                        : c.bg,
+                      color: msg.role === 'user' ? '#fff' : c.text,
+                      fontSize:13, lineHeight:1.5,
+                      border: msg.role === 'user' ? 'none' : `1px solid ${c.border}`,
+                      whiteSpace:'pre-wrap', wordBreak:'break-word'
+                    }}>
+                      {msg.content}
+                    </div>
+                  </div>
+                ))}
+                <div ref={aiChatEndRef} />
+                {aiLoading && (
+                  <div style={{display:'flex', justifyContent:'flex-start'}}>
+                    <div style={{
+                      padding:'9px 14px', borderRadius:'16px 16px 16px 4px',
+                      background:c.bg, border:`1px solid ${c.border}`,
+                      color:c.textMuted, fontSize:13
+                    }}>
+                      <span style={{animation:'pulse 1s infinite'}}>● ● ●</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Input */}
+              <div style={{
+                padding:'10px 12px',
+                borderTop:`1px solid ${c.border}`,
+                display:'flex', gap:8, alignItems:'center'
+              }}>
+                <input
+                  value={aiInput}
+                  onChange={e => setAiInput(e.target.value)}
+                  onKeyDown={e => { if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); handleAiSend(); } }}
+                  placeholder={`Ask ${aiName}...`}
+                  style={{
+                    flex:1, padding:'9px 13px',
+                    background:c.bg, border:`1px solid ${c.border}`,
+                    borderRadius:12, color:c.text, fontSize:13,
+                    outline:'none'
+                  }}
+                  disabled={aiLoading}
+                />
+                <div
+                  onClick={handleAiSend}
+                  style={{
+                    width:36, height:36, borderRadius:10, flexShrink:0,
+                    background: aiLoading || !aiInput.trim()
+                      ? c.border
+                      : 'linear-gradient(135deg,#6366f1,#8b5cf6)',
+                    display:'flex', alignItems:'center', justifyContent:'center',
+                    cursor: aiLoading || !aiInput.trim() ? 'default' : 'pointer',
+                    fontSize:16, transition:'background .2s'
+                  }}
+                >
+                  <i className="fas fa-paper-plane" style={{color:"#fff",fontSize:14}}></i>
+                </div>
+              </div>
+              <div style={{textAlign:'center', padding:'6px 0 10px', color:c.textMuted, fontSize:10}}>
+                Powered by {(siteSettings.company_short_name || 'NF')} Virtual Support
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ========== PDF VIEWER MODAL ========== */}
+      {pdfModal && (
+        <div style={{position:"fixed", inset:0, background:"rgba(0,0,0,.7)", backdropFilter:"blur(6px)", zIndex:400, display:"flex", alignItems:"center", justifyContent:"center", padding:16, animation:"fadeIn .2s"}}
+>
+          <div style={{background:c.bgCard, borderRadius:24, maxWidth:900, width:"100%", height:"85vh", display:"flex", flexDirection:"column", boxShadow:"0 40px 80px rgba(0,0,0,.4)", border:`1px solid ${c.border}`, overflow:"hidden"}}>
+            <div style={{padding:"16px 24px", borderBottom:`1px solid ${c.border}`, display:"flex", justifyContent:"space-between", alignItems:"center", flexShrink:0}}>
+              <div style={{display:"flex", alignItems:"center", gap:12}}>
+                <span style={{fontSize:22}}><i className="fas fa-file-lines" style={{color:c.primary}}></i></span>
+                <div>
+                  <h2 style={{fontSize:16, fontWeight:700, color:c.text, fontFamily:fontMono}}>{pdfModal.invoiceNumber}</h2>
+                  <p style={{fontSize:11, color:c.textMuted}}>Invoice Document</p>
+                </div>
+              </div>
+              <div style={{display:"flex", alignItems:"center", gap:10}}>
+                <a href={`${API}/portal/invoices/${pdfModal.invoiceId}/pdf?token=${localStorage.getItem("j2_token")}`} target="_blank" rel="noopener"
+                  style={{padding:"8px 14px", background:`${c.primary}15`, border:`1px solid ${c.primary}30`, borderRadius:8, color:c.primary, fontSize:12, fontWeight:600, textDecoration:"none", display:"inline-flex", alignItems:"center", gap:6, cursor:"pointer"}}>
+                  <i className="fas fa-download" style={{marginRight:6}}></i> Download
+                </a>
+                <div style={{cursor:"pointer", fontSize:18, color:c.textMuted, padding:4}} onClick={() => setPdfModal(null)}><i className="fas fa-xmark"></i></div>
+              </div>
+            </div>
+            <div style={{flex:1, background:"#1e293b"}}>
+              <iframe src={`${API}/portal/invoices/${pdfModal.invoiceId}/pdf?token=${localStorage.getItem("j2_token")}`}
+                style={{width:"100%", height:"100%", border:"none"}} title="Invoice PDF" />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toast notifications */}
+      <div style={{position:"fixed",top:20,right:20,zIndex:99999,display:"flex",flexDirection:"column",gap:10,pointerEvents:"none"}}>
+        {toasts.map(t => (
+          <div key={t.id} style={{
+            pointerEvents:"auto",
+            minWidth:320, maxWidth:420, padding:"14px 20px", borderRadius:14,
+            background: t.type==="success" ? "#059669" : t.type==="warning" ? "#d97706" : "#dc2626",
+            color:"#fff", fontSize:13, fontWeight:600, fontFamily:font,
+            boxShadow:"0 8px 32px rgba(0,0,0,.25)", display:"flex", alignItems:"center", gap:10,
+            animation:"slideInRight .3s ease",
+            cursor:"pointer"
+          }} onClick={() => setToasts(prev => prev.filter(x => x.id !== t.id))}>
+            <span style={{fontSize:18}}>{t.type==="success"?<i className="fas fa-circle-check"></i>:t.type==="warning"?<i className="fas fa-triangle-exclamation"></i>:<i className="fas fa-circle-xmark"></i>}</span>
+            <span style={{flex:1, lineHeight:1.4}}>{t.msg}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+ReactDOM.createRoot(document.getElementById('root')).render(<Portal />);
+</script>
+</body>
+</html>

@@ -1,0 +1,2126 @@
+// ============================================================
+// ⚠  DO NOT RUN `prisma db push` AGAINST PRODUCTION
+// ============================================================
+// Parts of this database are managed with raw SQL and are deliberately NOT modelled
+// here. `db push` makes the database match this file, so it would DROP them:
+//
+//   • RADIUS tables            radcheck, radreply, radusergroup, radgroupreply,
+//                              radacct, radpostauth
+//   • Hotspot / MAC auth       hotspot_mac_devices, hotspot_vouchers,
+//                              subscriber_hotspot
+//   • Billing restriction      subscriber_restrictions,
+//                              subscribers.restriction_exempt
+//   • Message templates        message_templates  (staff-editable overrides for the
+//                              outgoing subscriber email/SMS text)
+//   • Columns on modelled tables that were added by hand, plus the account_number
+//     trigger/sequence and the generated columns on subscribers
+//
+// Use an explicit migration, or raw SQL, for schema changes on production.
+// ============================================================
+
+generator client {
+  provider   = "prisma-client-js"
+  engineType = "binary"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model plans {
+  id                   Int             @id @default(autoincrement())
+  name                 String          @db.VarChar(50)
+  slug                 String?         @unique @db.VarChar(50)
+  speed_mbps           Int
+  speed_label          String          @db.VarChar(20)
+  price                Decimal         @db.Decimal(10, 2)
+  description          String?
+  long_description     String?
+  color_hex            String?         @db.VarChar(7)
+  is_popular           Boolean?        @default(false)
+  is_active            Boolean?        @default(true)
+  sort_order           Int?            @default(0)
+  data_cap_gb          Int?
+  router_type          String?         @db.VarChar(100)
+  has_lock_in          Boolean?        @default(false)
+  lock_in_months       Int?
+  installation_fee     Decimal?        @default(0) @db.Decimal(10, 2)
+  created_at           DateTime?       @default(now()) @db.Timestamptz(6)
+  updated_at           DateTime?       @default(now()) @db.Timestamptz(6)
+  activation_fee       Decimal?        @default(0) @db.Decimal(10, 2)
+  show_fees_on_website Boolean?        @default(false)
+  radius_group         String?         @db.VarChar(100)
+  download_mbps        Int?
+  upload_mbps          Int?
+  burst_download_mbps  Int?
+  burst_upload_mbps    Int?
+  burst_threshold_pct  Int?            @default(80)
+  burst_time_s         Int?            @default(16)
+  plan_type            String?         @default("residential") @db.VarChar(20)
+  billing_type         String?         @default("postpaid") @db.VarChar(20)
+  terms                Json?           @default("[]")
+  is_unlimited         Boolean?        @default(true)
+  rd_offer_id          Int?
+  validity_period      Int?
+  features             plan_features[]
+  notes                plan_notes[]
+  subscribers          subscribers[]
+}
+
+model plan_features {
+  id           Int      @id @default(autoincrement())
+  plan_id      Int
+  feature_text String   @db.VarChar(200)
+  sort_order   Int?     @default(0)
+  is_active    Boolean? @default(true)
+  plan         plans    @relation(fields: [plan_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model installation_packages {
+  id          Int                          @id @default(autoincrement())
+  code        String                       @unique @db.VarChar(10)
+  name        String                       @db.VarChar(100)
+  description String?                      @db.VarChar(255)
+  color_hex   String?                      @default("#3b82f6") @db.VarChar(7)
+  is_active   Boolean?                     @default(true)
+  sort_order  Int?                         @default(0)
+  created_at  DateTime?                    @default(now()) @db.Timestamptz(6)
+  updated_at  DateTime?                    @default(now()) @db.Timestamptz(6)
+  items       installation_package_items[]
+}
+
+model installation_package_items {
+  id         Int                   @id @default(autoincrement())
+  package_id Int
+  item_text  String                @db.VarChar(200)
+  sort_order Int?                  @default(0)
+  is_active  Boolean?              @default(true)
+  package    installation_packages @relation(fields: [package_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([package_id], map: "idx_pkg_items_package")
+}
+
+model referrals {
+  id               Int          @id @default(autoincrement())
+  referrer_id      Int
+  referrer_account String       @db.VarChar(20)
+  referee_id       Int?
+  status           String       @default("pending") @db.VarChar(20)
+  created_at       DateTime     @default(now()) @db.Timestamptz(6)
+  expires_at       DateTime     @default(dbgenerated("(now() + '60 days'::interval)")) @db.Timestamptz(6)
+  converted_at     DateTime?    @db.Timestamptz(6)
+  referee          subscribers? @relation("referee", fields: [referee_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  referrer         subscribers  @relation("referrer", fields: [referrer_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([referrer_id], map: "idx_referrals_referrer")
+  @@index([referee_id], map: "idx_referrals_referee")
+  @@index([status], map: "idx_referrals_status")
+}
+
+model municipalities {
+  id             Int           @id @default(autoincrement())
+  name           String        @db.VarChar(100)
+  province       String        @default("Bataan") @db.VarChar(100)
+  is_serviceable Boolean?      @default(true)
+  postal_code    String?       @db.VarChar(10)
+  barangays      barangays[]
+  subscribers    subscribers[]
+}
+
+model barangays {
+  id              Int            @id @default(autoincrement())
+  municipality_id Int
+  name            String         @db.VarChar(100)
+  is_serviceable  Boolean?       @default(true)
+  latitude        Decimal?       @db.Decimal(10, 7)
+  longitude       Decimal?       @db.Decimal(10, 7)
+  municipality    municipalities @relation(fields: [municipality_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  subscribers     subscribers[]
+}
+
+model subscribers {
+  id                      Int                            @id @default(autoincrement())
+  account_number          String                         @unique @db.VarChar(20)
+  first_name              String?                        @db.VarChar(100)
+  last_name               String?                        @db.VarChar(100)
+  company_name            String?                        @db.VarChar(200)
+  email                   String?                        @unique @db.VarChar(255)
+  phone                   String                         @db.VarChar(20)
+  address                 String                         @db.VarChar(255)
+  barangay_id             Int?
+  municipality_id         Int?
+  plan_id                 Int?
+  status                  String                         @default("inactive") @db.VarChar(20)
+  balance                 Decimal?                       @default(0) @db.Decimal(10, 2)
+  latitude                Decimal?                       @db.Decimal(10, 7)
+  longitude               Decimal?                       @db.Decimal(10, 7)
+  installed_at            DateTime?                      @db.Date
+  next_bill_date          DateTime?                      @db.Date
+  ont_serial              String?                        @db.VarChar(50)
+  router_serial           String?                        @db.VarChar(50)
+  notes                   String?
+  id_type                 String?                        @db.VarChar(50)
+  id_number               String?                        @db.VarChar(50)
+  created_at              DateTime?                      @default(now()) @db.Timestamptz(6)
+  updated_at              DateTime?                      @default(now()) @db.Timestamptz(6)
+  postal_code             String?                        @db.VarChar(10)
+  municipality_name       String?                        @db.VarChar(100)
+  barangay_name           String?                        @db.VarChar(100)
+  installation_package    String?                        @db.VarChar(10)
+  middle_name             String?                        @db.VarChar(50)
+  alternate_contact_name  String?                        @db.VarChar(100)
+  alternate_contact_phone String?                        @db.VarChar(12)
+  alt_contacts            Json?                          @default("[]")
+  proof_of_billing        String?                        @db.VarChar(250)
+  valid_id1               String?                        @db.VarChar(250)
+  valid_id2               String?                        @db.VarChar(250)
+  other_attachment        String?                        @db.VarChar(250)
+  xui_user_id             Int?
+  agent                   String?                        @db.VarChar(250)
+  application_date        DateTime?                      @db.Date
+  date_installed          DateTime?                      @db.Date
+  address_street1         String?                        @db.VarChar(50)
+  address_street2         String?                        @db.VarChar(50)
+  address_city            String?                        @db.VarChar(50)
+  address_state           String?                        @db.VarChar(50)
+  address_postal_code     String?                        @db.VarChar(10)
+  remarks                 String?
+  credit_balance          Decimal?                       @default(0) @db.Decimal(10, 2)
+  mac_address             String?                        @db.VarChar(17)
+  agent_id                Int?
+  is_system               Boolean                        @default(false)
+  call_logs               call_logs[]
+  invoices                invoices[]
+  olt_onu_mappings        olt_onu_mappings[]
+  onu_devices             onu_inventory[]
+  payments                payments[]
+  referrals_received      referrals[]                    @relation("referee")
+  referrals_made          referrals[]                    @relation("referrer")
+  sms_logs                sms_logs[]
+  auth                    subscriber_auth?
+  subscriber_credits      subscriber_credits[]
+  notification_prefs      subscriber_notification_prefs?
+  subscriber_radius       subscriber_radius[]
+  sales_agents            sales_agents?                  @relation(fields: [agent_id], references: [id], onUpdate: NoAction)
+  barangay                barangays?                     @relation(fields: [barangay_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  municipality            municipalities?                @relation(fields: [municipality_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  plan                    plans?                         @relation(fields: [plan_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  surveys                 surveys[]
+  tickets                 tickets[]
+  conversations           conversations[]
+  tr069_devices           tr069_devices[]
+  usage_data              usage_data[]
+  work_orders             work_orders[]
+
+  @@index([account_number], map: "idx_subscribers_account")
+  @@index([barangay_id], map: "idx_subscribers_barangay")
+  @@index([email], map: "idx_subscribers_email")
+  @@index([municipality_id], map: "idx_subscribers_municipality")
+  @@index([last_name, first_name], map: "idx_subscribers_name")
+  @@index([plan_id], map: "idx_subscribers_plan")
+  @@index([status], map: "idx_subscribers_status")
+  @@index([agent_id], map: "idx_subscribers_agent_id")
+}
+
+model subscriber_auth {
+  id               Int         @id @default(autoincrement())
+  subscriber_id    Int         @unique
+  password_hash    String      @db.VarChar(255)
+  is_2fa_enabled   Boolean?    @default(false)
+  two_fa_secret    String?     @db.VarChar(100)
+  session_token    String?     @db.VarChar(255)
+  token_expires_at DateTime?   @db.Timestamptz(6)
+  last_login_at    DateTime?   @db.Timestamptz(6)
+  last_login_ip    String?     @db.VarChar(45)
+  failed_attempts  Int?        @default(0)
+  locked_until     DateTime?   @db.Timestamptz(6)
+  reset_token      String?     @db.VarChar(255)
+  reset_expires_at DateTime?   @db.Timestamptz(6)
+  created_at       DateTime?   @default(now()) @db.Timestamptz(6)
+  subscriber       subscribers @relation(fields: [subscriber_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([session_token], map: "idx_auth_session")
+}
+
+model subscriber_notification_prefs {
+  id            Int         @id @default(autoincrement())
+  subscriber_id Int         @unique
+  email_billing Boolean?    @default(true)
+  sms_payment   Boolean?    @default(true)
+  outage_alerts Boolean?    @default(true)
+  promos        Boolean?    @default(false)
+  updated_at    DateTime?   @default(now()) @db.Timestamptz(6)
+  subscriber    subscribers @relation(fields: [subscriber_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([subscriber_id], map: "idx_notif_prefs_sub_id")
+  @@index([subscriber_id], map: "idx_notif_prefs_subscriber")
+}
+
+model invoices {
+  id                  Int                  @id @default(autoincrement())
+  subscriber_id       Int
+  invoice_number      String               @unique @db.VarChar(30)
+  amount              Decimal              @db.Decimal(10, 2)
+  billing_period      String?              @db.VarChar(30)
+  due_date            DateTime             @db.Date
+  status              String               @default("pending") @db.VarChar(20)
+  overdue_fee         Decimal?             @default(0) @db.Decimal(10, 2)
+  notes               String?
+  generated_at        DateTime?            @default(now()) @db.Timestamptz(6)
+  created_at          DateTime?            @default(now()) @db.Timestamptz(6)
+  xendit_invoice_id   String?              @db.VarChar(255)
+  xendit_external_id  String?              @db.VarChar(255)
+  accounts_receivable accounts_receivable?
+  subscriber          subscribers          @relation(fields: [subscriber_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  payments            payments[]
+  subscriber_credits  subscriber_credits[]
+
+  @@index([due_date], map: "idx_invoices_due")
+  @@index([billing_period], map: "idx_invoices_period")
+  @@index([status], map: "idx_invoices_status")
+  @@index([subscriber_id], map: "idx_invoices_subscriber")
+  @@index([xendit_external_id], map: "idx_invoices_xendit_ext_id")
+  @@index([xendit_invoice_id], map: "idx_invoices_xendit_id")
+}
+
+model payments {
+  id                 Int                  @id @default(autoincrement())
+  invoice_id         Int
+  subscriber_id      Int
+  amount             Decimal              @db.Decimal(10, 2)
+  method             String               @db.VarChar(30)
+  reference_number   String?              @db.VarChar(100)
+  status             String               @default("pending") @db.VarChar(20)
+  gateway_response   Json?
+  paid_at            DateTime?            @db.Timestamptz(6)
+  created_at         DateTime?            @default(now()) @db.Timestamptz(6)
+  or_number          String?              @db.VarChar(50)
+  deposit_items      DepositItem[]
+  invoice            invoices             @relation(fields: [invoice_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  subscriber         subscribers          @relation(fields: [subscriber_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  subscriber_credits subscriber_credits[]
+
+  @@index([invoice_id], map: "idx_payments_invoice")
+  @@index([method], map: "idx_payments_method")
+  @@index([status], map: "idx_payments_status")
+  @@index([subscriber_id], map: "idx_payments_subscriber")
+}
+
+model admin_users {
+  id                                               Int                      @id @default(autoincrement())
+  username                                         String                   @unique @db.VarChar(50)
+  email                                            String                   @unique @db.VarChar(255)
+  password_hash                                    String                   @db.VarChar(255)
+  full_name                                        String                   @db.VarChar(100)
+  role                                             String                   @db.VarChar(30)
+  is_active                                        Boolean?                 @default(true)
+  last_login_at                                    DateTime?                @db.Timestamptz(6)
+  created_at                                       DateTime?                @default(now()) @db.Timestamptz(6)
+  allowed_pages                                    String[]                 @default(["dashboard"])
+  phone                                            String?                  @db.VarChar(20)
+  receive_email_alerts                             Boolean?                 @default(false)
+  receive_sms_alerts                               Boolean?                 @default(false)
+  inventory_transactions                           inventory_transactions[]
+  approved_pos                                     purchase_orders[]        @relation("po_approver")
+  created_pos                                      purchase_orders[]        @relation("po_creator")
+  tickets                                          tickets[]
+  conversations                                    conversations[]
+  work_orders_work_orders_assigned_toToadmin_users work_orders[]            @relation("work_orders_assigned_toToadmin_users")
+  work_orders_work_orders_created_byToadmin_users  work_orders[]            @relation("work_orders_created_byToadmin_users")
+}
+
+model tickets {
+  id            Int              @id @default(autoincrement())
+  subscriber_id Int
+  ticket_number String           @unique @db.VarChar(30)
+  category      String           @db.VarChar(30)
+  priority      String           @db.VarChar(20)
+  status        String           @default("open") @db.VarChar(20)
+  subject       String           @db.VarChar(255)
+  description   String?
+  assigned_to   Int?
+  resolved_at   DateTime?        @db.Timestamptz(6)
+  closed_at     DateTime?        @db.Timestamptz(6)
+  created_at    DateTime?        @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime?        @default(now()) @db.Timestamptz(6)
+  updates       ticket_updates[]
+  admin         admin_users?     @relation(fields: [assigned_to], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  subscriber    subscribers      @relation(fields: [subscriber_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([assigned_to], map: "idx_tickets_assigned")
+  @@index([priority], map: "idx_tickets_priority")
+  @@index([status], map: "idx_tickets_status")
+  @@index([subscriber_id], map: "idx_tickets_subscriber")
+}
+
+model ticket_updates {
+  id          Int       @id @default(autoincrement())
+  ticket_id   Int
+  message     String
+  created_by  String    @db.VarChar(100)
+  is_internal Boolean?  @default(false)
+  created_at  DateTime? @default(now()) @db.Timestamptz(6)
+  ticket      tickets   @relation(fields: [ticket_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([ticket_id], map: "idx_ticket_updates_ticket")
+}
+
+model usage_data {
+  id                 Int         @id @default(autoincrement())
+  subscriber_id      Int
+  usage_date         DateTime    @db.Date
+  download_gb        Decimal?    @default(0) @db.Decimal(8, 2)
+  upload_gb          Decimal?    @default(0) @db.Decimal(8, 2)
+  peak_download_mbps Decimal?    @db.Decimal(8, 2)
+  peak_upload_mbps   Decimal?    @db.Decimal(8, 2)
+  session_count      Int?        @default(0)
+  created_at         DateTime?   @default(now()) @db.Timestamptz(6)
+  subscriber         subscribers @relation(fields: [subscriber_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([subscriber_id, usage_date])
+  @@index([usage_date], map: "idx_usage_date")
+}
+
+model notifications {
+  id          Int       @id @default(autoincrement())
+  type        String    @db.VarChar(20)
+  title       String    @db.VarChar(255)
+  message     String?
+  target_type String?   @db.VarChar(20)
+  target_id   Int?
+  is_read     Boolean?  @default(false)
+  created_at  DateTime? @default(now()) @db.Timestamptz(6)
+
+  @@index([target_type, target_id, is_read], map: "idx_notif_target")
+}
+
+model network_nodes {
+  id          Int       @id @default(autoincrement())
+  type        String    @db.VarChar(20)
+  name        String    @db.VarChar(100)
+  status      String    @default("online") @db.VarChar(20)
+  total_ports Int?
+  used_ports  Int?
+  latitude    Decimal?  @db.Decimal(10, 7)
+  longitude   Decimal?  @db.Decimal(10, 7)
+  address     String?   @db.VarChar(255)
+  notes       String?
+  created_at  DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+model fiber_routes {
+  id            Int       @id @default(autoincrement())
+  name          String    @db.VarChar(100)
+  distance_km   Decimal?  @db.Decimal(8, 2)
+  status        String    @default("active") @db.VarChar(30)
+  fiber_type    String?   @db.VarChar(50)
+  route_geojson Json?
+  notes         String?
+  created_at    DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+model system_settings {
+  id         Int       @id @default(autoincrement())
+  key        String    @unique @db.VarChar(100)
+  value      String
+  category   String?   @db.VarChar(50)
+  updated_at DateTime? @default(now()) @db.Timestamptz(6)
+  label      String?   @db.VarChar(200)
+  updated_by String?   @db.VarChar(100)
+}
+
+model audit_log {
+  id          Int       @id @default(autoincrement())
+  user_type   String    @db.VarChar(20)
+  user_id     BigInt
+  action      String    @db.VarChar(100)
+  entity_type String?   @db.VarChar(50)
+  entity_id   BigInt?
+  details     Json?
+  ip_address  String?   @db.VarChar(45)
+  created_at  DateTime? @default(now()) @db.Timestamptz(6)
+
+  @@index([created_at], map: "idx_audit_created")
+  @@index([user_type, user_id], map: "idx_audit_user")
+}
+
+model plan_notes {
+  id         Int       @id @default(autoincrement())
+  plan_id    Int
+  note       String
+  created_by Int?
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+  plan       plans     @relation(fields: [plan_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([plan_id], map: "idx_plan_notes_plan_id")
+}
+
+model bugs {
+  id             Int               @id @default(autoincrement())
+  bug_id         String            @unique @db.VarChar(20)
+  date_found     DateTime          @default(dbgenerated("CURRENT_DATE")) @db.Date
+  tester         String            @db.VarChar(100)
+  module         String            @db.VarChar(100)
+  severity       String            @default("Medium") @db.VarChar(20)
+  test_account   String?           @db.VarChar(50)
+  steps          String
+  expected       String?
+  actual         String
+  screenshot_url String?
+  console_errors String?
+  server_logs    String?
+  status         String            @default("Open") @db.VarChar(30)
+  notes          String?
+  created_at     DateTime          @default(now()) @db.Timestamptz(6)
+  updated_at     DateTime          @default(now()) @updatedAt @db.Timestamptz(6)
+  screenshots    bug_screenshots[]
+
+  @@index([date_found(sort: Desc)], map: "idx_bugs_date_found")
+  @@index([module], map: "idx_bugs_module")
+  @@index([severity], map: "idx_bugs_severity")
+  @@index([status], map: "idx_bugs_status")
+  @@index([tester], map: "idx_bugs_tester")
+}
+
+model bug_screenshots {
+  id          Int      @id @default(autoincrement())
+  bug_id      String   @db.VarChar(20)
+  filename    String   @db.VarChar(255)
+  filepath    String   @db.VarChar(500)
+  filesize    Int?     @default(0)
+  mimetype    String?  @db.VarChar(100)
+  uploaded_at DateTime @default(now()) @db.Timestamptz(6)
+  bug         bugs     @relation(fields: [bug_id], references: [bug_id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([bug_id], map: "idx_bug_screenshots_bug_id")
+}
+
+model vendors {
+  id                  Int                @id @default(autoincrement())
+  name                String             @unique @db.VarChar(100)
+  contact             String?            @db.VarChar(255)
+  phone               String?            @db.VarChar(50)
+  email               String?            @db.VarChar(255)
+  notes               String?
+  is_active           Boolean?           @default(true)
+  created_at          DateTime?          @default(now()) @db.Timestamptz(6)
+  address             String?
+  city                String?            @db.VarChar(100)
+  terms               String?            @db.VarChar(100)
+  phone2              String?            @db.VarChar(50)
+  phone3              String?            @db.VarChar(50)
+  website             String?            @db.VarChar(255)
+  municipality        String?            @db.VarChar(100)
+  province            String?            @db.VarChar(100)
+  postal_code         String?            @db.VarChar(20)
+  vendor_code         String?            @db.VarChar(20)
+  tin_number          String?            @db.VarChar(20)
+  category            String?            @db.VarChar(50)
+  bank_name           String?            @db.VarChar(100)
+  bank_account_number String?            @db.VarChar(50)
+  updated_at          DateTime?          @default(now()) @db.Timestamp(6)
+  accounts_payable    accounts_payable[]
+  expenses            Expense[]
+  onu_devices         onu_inventory[]
+  products            products[]
+  purchase_orders     purchase_orders[]
+}
+
+model onu_inventory {
+  id               Int                      @id @default(autoincrement())
+  subscriber_id    Int?
+  mac_address      String                   @unique @db.VarChar(17)
+  serial_number    String?                  @db.VarChar(100)
+  model            String                   @db.VarChar(100)
+  vendor_id        Int?
+  status           String                   @default("in_stock") @db.VarChar(20)
+  purchase_date    DateTime?                @db.Date
+  purchase_price   Decimal?                 @db.Decimal(10, 2)
+  warranty_until   DateTime?                @db.Date
+  deployed_at      DateTime?                @db.Timestamptz(6)
+  notes            String?
+  created_at       DateTime?                @default(now()) @db.Timestamptz(6)
+  updated_at       DateTime?                @default(now()) @db.Timestamptz(6)
+  product_id       Int?
+  transactions     inventory_transactions[]
+  olt_onu_mappings olt_onu_mappings[]
+  product          products?                @relation(fields: [product_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  subscriber       subscribers?             @relation(fields: [subscriber_id], references: [id], onUpdate: NoAction)
+  vendor           vendors?                 @relation(fields: [vendor_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([mac_address], map: "idx_onu_mac")
+  @@index([model], map: "idx_onu_model")
+  @@index([product_id], map: "idx_onu_product")
+  @@index([status], map: "idx_onu_status")
+  @@index([subscriber_id], map: "idx_onu_subscriber")
+  @@index([vendor_id], map: "idx_onu_vendor")
+}
+
+model product_categories {
+  id          Int        @id @default(autoincrement())
+  name        String     @unique @db.VarChar(100)
+  description String?
+  sort_order  Int?       @default(0)
+  is_active   Boolean?   @default(true)
+  created_at  DateTime?  @default(now()) @db.Timestamptz(6)
+  products    products[]
+}
+
+model products {
+  id            Int                      @id @default(autoincrement())
+  category_id   Int?
+  vendor_id     Int?
+  name          String                   @db.VarChar(255)
+  sku           String?                  @unique @db.VarChar(50)
+  description   String?
+  unit          String?                  @default("pcs") @db.VarChar(20)
+  unit_price    Decimal?                 @default(0) @db.Decimal(10, 2)
+  is_serialized Boolean?                 @default(false)
+  min_stock     Int?                     @default(0)
+  is_active     Boolean?                 @default(true)
+  created_at    DateTime?                @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime?                @default(now()) @db.Timestamptz(6)
+  stock         inventory_stock[]
+  transactions  inventory_transactions[]
+  onu_devices   onu_inventory[]
+  po_items      po_items[]
+  category      product_categories?      @relation(fields: [category_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  vendor        vendors?                 @relation(fields: [vendor_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([category_id], map: "idx_products_category")
+  @@index([sku], map: "idx_products_sku")
+  @@index([vendor_id], map: "idx_products_vendor")
+}
+
+model inventory_stock {
+  id         Int       @id @default(autoincrement())
+  product_id Int
+  quantity   Int?      @default(0)
+  location   String?   @default("Main Warehouse") @db.VarChar(100)
+  updated_at DateTime? @default(now()) @db.Timestamptz(6)
+  product    products  @relation(fields: [product_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([product_id], map: "idx_inventory_stock_product")
+}
+
+model purchase_orders {
+  id               Int                @id @default(autoincrement())
+  po_number        String             @unique @db.VarChar(30)
+  vendor_id        Int
+  status           String?            @default("draft") @db.VarChar(20)
+  order_date       DateTime?          @db.Date
+  expected_date    DateTime?          @db.Date
+  received_date    DateTime?          @db.Date
+  subtotal         Decimal?           @default(0) @db.Decimal(12, 2)
+  tax_amount       Decimal?           @default(0) @db.Decimal(12, 2)
+  total_amount     Decimal?           @default(0) @db.Decimal(12, 2)
+  notes            String?
+  created_by       Int?
+  approved_by      Int?
+  created_at       DateTime?          @default(now()) @db.Timestamptz(6)
+  updated_at       DateTime?          @default(now()) @db.Timestamptz(6)
+  shipping_fee     Decimal?           @default(0) @db.Decimal(12, 2)
+  handling_fee     Decimal?           @default(0) @db.Decimal(12, 2)
+  discount         Decimal?           @default(0) @db.Decimal(12, 2)
+  accounts_payable accounts_payable[]
+  items            po_items[]
+  approver         admin_users?       @relation("po_approver", fields: [approved_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  creator          admin_users?       @relation("po_creator", fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  vendor           vendors            @relation(fields: [vendor_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([status], map: "idx_po_status")
+  @@index([vendor_id], map: "idx_po_vendor")
+}
+
+model po_items {
+  id               Int             @id @default(autoincrement())
+  po_id            Int
+  product_id       Int
+  quantity         Int             @default(1)
+  unit_price       Decimal         @default(0) @db.Decimal(10, 2)
+  received_qty     Int?            @default(0)
+  notes            String?
+  created_at       DateTime?       @default(now()) @db.Timestamptz(6)
+  received_serials Json?           @default("[]")
+  purchase_order   purchase_orders @relation(fields: [po_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  product          products        @relation(fields: [product_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([po_id], map: "idx_po_items_po")
+  @@index([product_id], map: "idx_po_items_product")
+}
+
+model inventory_transactions {
+  id             Int            @id @default(autoincrement())
+  product_id     Int?
+  onu_id         Int?
+  type           String         @db.VarChar(30)
+  quantity       Int?           @default(1)
+  reference_type String?        @db.VarChar(30)
+  reference_id   Int?
+  notes          String?
+  created_by     Int?
+  created_at     DateTime?      @default(now()) @db.Timestamptz(6)
+  creator        admin_users?   @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  onu            onu_inventory? @relation(fields: [onu_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  product        products?      @relation(fields: [product_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([product_id], map: "idx_inv_txn_product")
+  @@index([type], map: "idx_inv_txn_type")
+}
+
+model closures {
+  id                  Int                   @id @default(autoincrement())
+  name                String                @db.VarChar(255)
+  type                String                @default("inline") @db.VarChar(50)
+  capacity            Int?                  @default(24)
+  used_capacity       Int?                  @default(0)
+  latitude            Decimal               @db.Decimal(10, 7)
+  longitude           Decimal               @db.Decimal(10, 7)
+  municipality        String?               @db.VarChar(100)
+  barangay            String?               @db.VarChar(100)
+  pole_number         String?               @db.VarChar(50)
+  foc_route_id        Int?
+  notes               String?
+  status              String                @default("active") @db.VarChar(30)
+  seal_number         String?               @db.VarChar(50)
+  seal_date           DateTime?             @db.Date
+  seal_state          String?               @db.VarChar(20)
+  is_lcp              Boolean?              @default(false)
+  lcp_total_ports     Int?                  @default(8)
+  lcp_used_ports      Int?                  @default(0)
+  created_by          Int?
+  created_at          DateTime?             @default(now()) @db.Timestamp(6)
+  updated_at          DateTime?             @default(now()) @db.Timestamp(6)
+  closure_connections closure_connections[]
+  closure_seals       closure_seals[]
+  closure_splices     closure_splices[]
+  closure_ports       closure_ports[]
+  foc_routes          foc_routes?           @relation(fields: [foc_route_id], references: [id], onUpdate: NoAction)
+  naps                naps[]
+
+  @@index([foc_route_id], map: "idx_closures_foc_route")
+  @@index([status], map: "idx_closures_status")
+}
+
+model closure_ports {
+  id               Int       @id @default(autoincrement())
+  closure_id       Int
+  port_number      Int
+  status           String?   @default("available") @db.VarChar(20)
+  subscriber_id    Int?
+  subscriber_label String?   @db.VarChar(255)
+  strand_id        Int?
+  notes            String?
+  created_at       DateTime? @default(now()) @db.Timestamptz(6)
+  updated_at       DateTime? @default(now()) @db.Timestamptz(6)
+  closures         closures  @relation(fields: [closure_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([closure_id, port_number])
+  @@index([closure_id], map: "idx_closure_ports_closure")
+}
+
+model closure_seals {
+  id                   Int       @id @default(autoincrement())
+  closure_id           Int
+  seal_number          String?   @db.VarChar(50)
+  seal_date            DateTime? @db.Date
+  seal_state           String    @db.VarChar(20)
+  reason               String?
+  previous_seal_number String?   @db.VarChar(50)
+  created_by           Int?
+  created_at           DateTime? @default(now()) @db.Timestamp(6)
+  closure              closures  @relation(fields: [closure_id], references: [id], onDelete: Cascade)
+
+  @@index([closure_id, created_at(sort: Desc)], map: "idx_closure_seals_closure")
+}
+
+model foc_routes {
+  id               Int                @id @default(autoincrement())
+  name             String             @db.VarChar(255)
+  type             String             @default("aerial") @db.VarChar(50)
+  cable_type       String?            @db.VarChar(100)
+  cable_size       Int?
+  length_meters    Decimal?           @db.Decimal(10, 2)
+  coordinates      Json               @default("[]")
+  color            String?            @db.VarChar(20)
+  municipality     String?            @db.VarChar(100)
+  barangay         String?            @db.VarChar(100)
+  notes            String?
+  status           String             @default("active") @db.VarChar(30)
+  created_by       Int?
+  created_at       DateTime?          @default(now()) @db.Timestamp(6)
+  updated_at       DateTime?          @default(now()) @db.Timestamp(6)
+  closures         closures[]
+  foc_strands      foc_strands[]
+  naps             naps[]
+  network_elements network_elements[]
+
+  @@index([status], map: "idx_foc_routes_status")
+}
+
+model foc_strands {
+  id                                                       Int               @id @default(autoincrement())
+  foc_route_id                                             Int
+  strand_number                                            Int
+  color_code                                               String?           @db.VarChar(30)
+  tube_number                                              Int?              @default(1)
+  tube_color                                               String?           @db.VarChar(30)
+  status                                                   String            @default("available") @db.VarChar(20)
+  destination_type                                         String?           @db.VarChar(20)
+  destination_id                                           Int?
+  destination_label                                        String?           @db.VarChar(255)
+  notes                                                    String?
+  created_at                                               DateTime?         @default(now()) @db.Timestamp(6)
+  updated_at                                               DateTime?         @default(now()) @db.Timestamp(6)
+  closure_splices_closure_splices_a_strand_idTofoc_strands closure_splices[] @relation("closure_splices_a_strand_idTofoc_strands")
+  closure_splices_closure_splices_b_strand_idTofoc_strands closure_splices[] @relation("closure_splices_b_strand_idTofoc_strands")
+  foc_routes                                               foc_routes        @relation(fields: [foc_route_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  nap_ports                                                nap_ports[]
+
+  @@unique([foc_route_id, strand_number])
+  @@index([foc_route_id], map: "idx_foc_strands_route")
+  @@index([status], map: "idx_foc_strands_status")
+}
+
+model nap_ports {
+  id               Int          @id @default(autoincrement())
+  nap_id           Int
+  port_number      Int
+  status           String       @default("available") @db.VarChar(20)
+  subscriber_id    Int?
+  subscriber_label String?      @db.VarChar(255)
+  strand_id        Int?
+  notes            String?
+  created_at       DateTime?    @default(now()) @db.Timestamp(6)
+  updated_at       DateTime?    @default(now()) @db.Timestamp(6)
+  naps             naps         @relation(fields: [nap_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  foc_strands      foc_strands? @relation(fields: [strand_id], references: [id], onUpdate: NoAction)
+
+  @@unique([nap_id, port_number])
+  @@index([nap_id], map: "idx_nap_ports_nap")
+  @@index([status], map: "idx_nap_ports_status")
+}
+
+model naps {
+  id              Int               @id @default(autoincrement())
+  name            String            @db.VarChar(255)
+  type            String            @default("splitter") @db.VarChar(50)
+  total_ports     Int               @default(8)
+  used_ports      Int               @default(0)
+  latitude        Decimal           @db.Decimal(10, 7)
+  longitude       Decimal           @db.Decimal(10, 7)
+  municipality    String?           @db.VarChar(100)
+  barangay        String?           @db.VarChar(100)
+  pole_number     String?           @db.VarChar(50)
+  foc_route_id    Int?
+  closure_id      Int?
+  notes           String?
+  status          String            @default("active") @db.VarChar(30)
+  created_by      Int?
+  created_at      DateTime?         @default(now()) @db.Timestamp(6)
+  updated_at      DateTime?         @default(now()) @db.Timestamp(6)
+  nap_attachments nap_attachments[]
+  nap_ports       nap_ports[]
+  closures        closures?         @relation(fields: [closure_id], references: [id], onUpdate: NoAction)
+  foc_routes      foc_routes?       @relation(fields: [foc_route_id], references: [id], onUpdate: NoAction)
+
+  @@index([closure_id], map: "idx_naps_closure")
+  @@index([foc_route_id], map: "idx_naps_foc_route")
+  @@index([status], map: "idx_naps_status")
+}
+
+model nas {
+  id            Int     @id @default(autoincrement())
+  nasname       String
+  shortname     String
+  type          String  @default("other")
+  ports         Int?
+  secret        String
+  server        String?
+  community     String?
+  description   String?
+  mikrotik_user String? @default("") @db.VarChar(100)
+  mikrotik_pass String? @default("") @db.VarChar(100)
+
+  @@index([nasname], map: "nas_nasname")
+}
+
+model nasreload {
+  nasipaddress String   @id @db.Inet
+  reloadtime   DateTime @db.Timestamptz(6)
+}
+
+model ph_barangays {
+  id            Int    @id @default(autoincrement())
+  code          String @unique @db.VarChar(20)
+  name          String @db.VarChar(150)
+  city_mun_code String @db.VarChar(20)
+
+  @@index([city_mun_code], map: "idx_ph_brgy_citymun")
+  @@index([name], map: "idx_ph_brgy_name")
+}
+
+model ph_cities_municipalities {
+  id            Int      @id @default(autoincrement())
+  code          String   @unique @db.VarChar(20)
+  name          String   @db.VarChar(150)
+  province_code String   @db.VarChar(20)
+  is_city       Boolean? @default(false)
+  zip_code      String?  @db.VarChar(10)
+
+  @@index([name], map: "idx_ph_cm_name")
+  @@index([province_code], map: "idx_ph_cm_province")
+}
+
+model ph_provinces {
+  id          Int    @id @default(autoincrement())
+  code        String @unique @db.VarChar(20)
+  name        String @db.VarChar(150)
+  region_code String @db.VarChar(20)
+
+  @@index([name], map: "idx_ph_prov_name")
+  @@index([region_code], map: "idx_ph_prov_region")
+}
+
+model ph_regions {
+  id           Int     @id @default(autoincrement())
+  code         String  @unique @db.VarChar(20)
+  name         String  @db.VarChar(150)
+  region_name  String? @db.VarChar(150)
+  island_group String? @db.VarChar(20)
+  sort_order   Int?    @default(0)
+}
+
+model radacct {
+  radacctid           BigInt    @id @default(autoincrement())
+  acctsessionid       String
+  acctuniqueid        String    @unique
+  username            String?
+  realm               String?
+  nasipaddress        String    @db.Inet
+  nasportid           String?
+  nasporttype         String?
+  acctstarttime       DateTime? @db.Timestamptz(6)
+  acctupdatetime      DateTime? @db.Timestamptz(6)
+  acctstoptime        DateTime? @db.Timestamptz(6)
+  acctinterval        BigInt?
+  acctsessiontime     BigInt?
+  acctauthentic       String?
+  connectinfo_start   String?
+  connectinfo_stop    String?
+  acctinputoctets     BigInt?
+  acctoutputoctets    BigInt?
+  calledstationid     String?
+  callingstationid    String?
+  acctterminatecause  String?
+  servicetype         String?
+  framedprotocol      String?
+  framedipaddress     String?   @db.Inet
+  framedipv6address   String?   @db.Inet
+  framedipv6prefix    String?   @db.Inet
+  framedinterfaceid   String?
+  delegatedipv6prefix String?   @db.Inet
+  class               String?
+
+  @@index([class], map: "radacct_calss_idx")
+  @@index([acctstarttime, username], map: "radacct_start_user_idx")
+}
+
+model radcheck {
+  id        Int    @id @default(autoincrement())
+  username  String @default("")
+  attribute String @default("")
+  op        String @default("==") @db.VarChar(2)
+  value     String @default("")
+
+  @@index([username, attribute], map: "radcheck_username")
+}
+
+model radgroupcheck {
+  id        Int    @id @default(autoincrement())
+  groupname String @default("")
+  attribute String @default("")
+  op        String @default("==") @db.VarChar(2)
+  value     String @default("")
+
+  @@index([groupname, attribute], map: "radgroupcheck_groupname")
+}
+
+model radgroupreply {
+  id        Int    @id @default(autoincrement())
+  groupname String @default("")
+  attribute String @default("")
+  op        String @default("=") @db.VarChar(2)
+  value     String @default("")
+
+  @@index([groupname, attribute], map: "radgroupreply_groupname")
+}
+
+model radpostauth {
+  id               BigInt   @id @default(autoincrement())
+  username         String
+  pass             String?
+  reply            String?
+  calledstationid  String?
+  callingstationid String?
+  authdate         DateTime @default(now()) @db.Timestamptz(6)
+  class            String?
+
+  @@index([class])
+  @@index([username])
+}
+
+model radreply {
+  id        Int    @id @default(autoincrement())
+  username  String @default("")
+  attribute String @default("")
+  op        String @default("=") @db.VarChar(2)
+  value     String @default("")
+
+  @@index([username, attribute], map: "radreply_username")
+}
+
+model radusergroup {
+  id        Int    @id @default(autoincrement())
+  username  String @default("")
+  groupname String @default("")
+  priority  Int    @default(0)
+
+  @@index([username], map: "radusergroup_username")
+}
+
+model subscriber_radius {
+  id               Int          @id @default(autoincrement())
+  subscriber_id    Int?
+  radius_username  String       @unique @db.VarChar(100)
+  radius_password  String       @db.VarChar(100)
+  radius_group     String?      @db.VarChar(100)
+  enabled          Boolean?     @default(true)
+  suspended_reason String?
+  created_at       DateTime?    @default(now()) @db.Timestamptz(6)
+  updated_at       DateTime?    @default(now()) @db.Timestamptz(6)
+  static_ip        String?      @db.VarChar(45)
+  mac_binding      String?      @db.VarChar(20)
+  subscribers      subscribers? @relation(fields: [subscriber_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([radius_group], map: "idx_subscriber_radius_group")
+  @@index([subscriber_id], map: "idx_subscriber_radius_sub")
+}
+
+model surveys {
+  id            Int         @id @default(autoincrement())
+  subscriber_id Int
+  surveyed_by   String      @db.VarChar(100)
+  latitude      Decimal?    @db.Decimal(10, 7)
+  longitude     Decimal?    @db.Decimal(10, 7)
+  photo_path    String?     @db.VarChar(500)
+  notes         String?
+  result        String      @default("pending") @db.VarChar(20)
+  created_at    DateTime?   @default(now()) @db.Timestamp(6)
+  subscribers   subscribers @relation(fields: [subscriber_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([subscriber_id], map: "idx_surveys_subscriber")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model closure_connections {
+  id                                                             Int               @id @default(autoincrement())
+  closure_id                                                     Int
+  side                                                           String            @db.Char(1)
+  sort_order                                                     Int?              @default(0)
+  connection_type                                                String            @default("foc_route") @db.VarChar(20)
+  ref_id                                                         Int?
+  ref_name                                                       String?           @db.VarChar(255)
+  fiber_count                                                    Int?
+  core_start                                                     Int?
+  core_end                                                       Int?
+  notes                                                          String?
+  created_at                                                     DateTime?         @default(now()) @db.Timestamp(6)
+  updated_at                                                     DateTime?         @default(now()) @db.Timestamp(6)
+  closures                                                       closures          @relation(fields: [closure_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  closure_splices_closure_splices_a_conn_idToclosure_connections closure_splices[] @relation("closure_splices_a_conn_idToclosure_connections")
+  closure_splices_closure_splices_b_conn_idToclosure_connections closure_splices[] @relation("closure_splices_b_conn_idToclosure_connections")
+
+  @@index([closure_id], map: "idx_closure_conn_closure")
+  @@index([closure_id, side], map: "idx_closure_conn_side")
+}
+
+model closure_splices {
+  id                                                                 Int                  @id @default(autoincrement())
+  closure_id                                                         Int
+  a_conn_id                                                          Int?
+  a_strand_id                                                        Int
+  b_conn_id                                                          Int?
+  b_strand_id                                                        Int?
+  notes                                                              String?
+  created_at                                                         DateTime?            @default(now()) @db.Timestamp(6)
+  nap_port_number                                                    Int?
+  closure_connections_closure_splices_a_conn_idToclosure_connections closure_connections? @relation("closure_splices_a_conn_idToclosure_connections", fields: [a_conn_id], references: [id], onUpdate: NoAction)
+  foc_strands_closure_splices_a_strand_idTofoc_strands               foc_strands          @relation("closure_splices_a_strand_idTofoc_strands", fields: [a_strand_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  closure_connections_closure_splices_b_conn_idToclosure_connections closure_connections? @relation("closure_splices_b_conn_idToclosure_connections", fields: [b_conn_id], references: [id], onUpdate: NoAction)
+  foc_strands_closure_splices_b_strand_idTofoc_strands               foc_strands?         @relation("closure_splices_b_strand_idTofoc_strands", fields: [b_strand_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  closures                                                           closures             @relation(fields: [closure_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([closure_id, a_strand_id], map: "uq_splice_a")
+  @@unique([closure_id, b_strand_id], map: "uq_splice_b")
+  @@index([closure_id], map: "idx_closure_splices_closure")
+}
+
+model nap_attachments {
+  id            Int       @id @default(autoincrement())
+  nap_id        Int
+  filename      String    @db.VarChar(255)
+  original_name String    @db.VarChar(255)
+  file_type     String?   @db.VarChar(50)
+  file_size     Int?
+  uploaded_by   Int?
+  created_at    DateTime? @default(now()) @db.Timestamp(6)
+  file_path     String    @default("") @db.VarChar(500)
+  naps          naps      @relation(fields: [nap_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([nap_id], map: "idx_nap_attachments_nap")
+  @@index([nap_id], map: "idx_nap_attachments_nap_id")
+}
+
+model gis_photos {
+  id            Int       @id @default(autoincrement())
+  title         String?   @db.VarChar(255)
+  notes         String?
+  latitude      Decimal   @db.Decimal(10, 7)
+  longitude     Decimal   @db.Decimal(10, 7)
+  filename      String    @db.VarChar(255)
+  original_name String    @db.VarChar(255)
+  file_type     String?   @db.VarChar(50)
+  file_size     Int?
+  uploaded_by   Int?
+  category      String?   @default("general") @db.VarChar(50)
+  created_at    DateTime? @default(now()) @db.Timestamp(6)
+  updated_at    DateTime? @default(now()) @db.Timestamp(6)
+
+  @@index([latitude, longitude], map: "idx_gis_photos_coords")
+  @@index([category], map: "idx_gis_photos_category")
+}
+
+model infrastructure_photos {
+  id            Int       @id @default(autoincrement())
+  entity_type   String    @db.VarChar(50)
+  entity_id     Int
+  filename      String    @db.VarChar(255)
+  original_name String    @db.VarChar(255)
+  file_type     String?   @db.VarChar(50)
+  file_size     Int?
+  caption       String?   @db.VarChar(500)
+  latitude      Decimal?  @db.Decimal(10, 7)
+  longitude     Decimal?  @db.Decimal(10, 7)
+  gps_source    String?   @db.VarChar(20)
+  uploaded_by   Int?
+  created_at    DateTime? @default(now()) @db.Timestamp(6)
+  updated_at    DateTime? @default(now()) @db.Timestamp(6)
+
+  @@index([entity_type, entity_id], map: "idx_infra_photos_entity")
+}
+
+model website_faqs {
+  id         Int       @id @default(autoincrement())
+  question   String
+  answer     String
+  sort_order Int?      @default(0)
+  is_active  Boolean?  @default(true)
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+  updated_at DateTime? @default(now()) @db.Timestamp(6)
+}
+
+model promotions {
+  id          Int       @id @default(autoincrement())
+  title       String    @db.VarChar(200)
+  description String?
+  badge_text  String?   @db.VarChar(50)
+  cta_text    String?   @db.VarChar(100)
+  cta_link    String?   @db.VarChar(500)
+  is_active   Boolean?  @default(true)
+  start_date  DateTime? @db.Date
+  end_date    DateTime? @db.Date
+  sort_order  Int?      @default(0)
+  created_by  String?   @db.VarChar(100)
+  created_at  DateTime? @default(now()) @db.Timestamptz(6)
+  updated_at  DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+model careers {
+  id           Int       @id @default(autoincrement())
+  title        String    @db.VarChar(200)
+  department   String?   @db.VarChar(100)
+  location     String?   @default("Balanga City, Bataan") @db.VarChar(100)
+  type         String?   @default("Full-time") @db.VarChar(50)
+  description  String?
+  requirements String?
+  is_active    Boolean?  @default(true)
+  sort_order   Int?      @default(0)
+  created_by   String?   @db.VarChar(100)
+  created_at   DateTime? @default(now()) @db.Timestamptz(6)
+  updated_at   DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+model AuditLog {
+  id         Int      @id @default(autoincrement())
+  log_source String   @db.VarChar(10)
+  user_id    Int?
+  username   String   @db.VarChar(100)
+  action     String   @db.VarChar(50)
+  details    Json     @default("{}")
+  public_ip  String?  @db.VarChar(45)
+  local_ip   String?  @db.VarChar(45)
+  user_agent String?  @db.VarChar(500)
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([action], map: "idx_audit_action")
+  @@index([details], map: "idx_audit_details_gin", type: Gin)
+  @@index([public_ip], map: "idx_audit_ip")
+  @@index([log_source], map: "idx_audit_source")
+  @@index([username], map: "idx_audit_username")
+  @@map("audit_logs")
+}
+
+model FundAccount {
+  id                                                        Int               @id @default(autoincrement())
+  name                                                      String            @db.VarChar(100)
+  type                                                      String            @db.VarChar(30)
+  bank_name                                                 String?           @db.VarChar(100)
+  account_number                                            String?           @db.VarChar(50)
+  description                                               String?
+  opening_balance                                           Decimal           @default(0) @db.Decimal(12, 2)
+  current_balance                                           Decimal           @default(0) @db.Decimal(12, 2)
+  is_active                                                 Boolean           @default(true)
+  created_by                                                String?           @db.VarChar(50)
+  created_at                                                DateTime?         @default(now()) @db.Timestamptz(6)
+  updated_at                                                DateTime?         @default(now()) @db.Timestamptz(6)
+  deposits                                                  Deposit[]
+  expenses                                                  Expense[]
+  fund_transactions                                         FundTransaction[]
+  fund_transfers_fund_transfers_from_fund_idTofund_accounts FundTransfer[]    @relation("fund_transfers_from_fund_idTofund_accounts")
+  fund_transfers_fund_transfers_to_fund_idTofund_accounts   FundTransfer[]    @relation("fund_transfers_to_fund_idTofund_accounts")
+
+  @@map("fund_accounts")
+}
+
+model ExpenseCategory {
+  id                       Int               @id @default(autoincrement())
+  name                     String            @db.VarChar(100)
+  description              String?
+  parent_id                Int?
+  coa_account_id           Int?
+  is_active                Boolean           @default(true)
+  created_at               DateTime?         @default(now()) @db.Timestamptz(6)
+  expense_categories       ExpenseCategory?  @relation("expense_categoriesToexpense_categories", fields: [parent_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  other_expense_categories ExpenseCategory[] @relation("expense_categoriesToexpense_categories")
+  expenses                 Expense[]
+
+  @@map("expense_categories")
+}
+
+model Expense {
+  id                 Int              @id @default(autoincrement())
+  expense_number     String           @unique @db.VarChar(30)
+  fund_account_id    Int
+  vendor_id          Int?
+  category_id        Int?
+  amount             Decimal          @db.Decimal(12, 2)
+  description        String
+  vendor_name        String?          @db.VarChar(200)
+  vendor_address     String?          @db.VarChar(300)
+  vendor_tin         String?          @db.VarChar(50)
+  journal_entry_id   Int?
+  reference_number   String?          @db.VarChar(100)
+  receipt_date       DateTime?        @db.Date
+  status             String           @default("recorded") @db.VarChar(20)
+  notes              String?
+  approved_by        String?          @db.VarChar(50)
+  approved_at        DateTime?        @db.Timestamptz(6)
+  created_by         String?          @db.VarChar(50)
+  created_at         DateTime?        @default(now()) @db.Timestamptz(6)
+  updated_at         DateTime?        @default(now()) @db.Timestamptz(6)
+  expense_categories ExpenseCategory? @relation(fields: [category_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  fund_accounts      FundAccount      @relation(fields: [fund_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  vendors            vendors?         @relation(fields: [vendor_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([category_id], map: "idx_expenses_category")
+  @@index([fund_account_id], map: "idx_expenses_fund")
+  @@index([vendor_id], map: "idx_expenses_vendor")
+  @@map("expenses")
+}
+
+model Deposit {
+  id              Int           @id @default(autoincrement())
+  deposit_number  String        @unique @db.VarChar(30)
+  fund_account_id Int
+  deposit_date    DateTime      @db.Date
+  total_amount    Decimal       @default(0) @db.Decimal(12, 2)
+  slip_number     String?       @db.VarChar(50)
+  status          String        @default("pending") @db.VarChar(20)
+  notes           String?
+  confirmed_by    String?       @db.VarChar(50)
+  confirmed_at    DateTime?     @db.Timestamptz(6)
+  created_by      String?       @db.VarChar(50)
+  created_at      DateTime?     @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime?     @default(now()) @db.Timestamptz(6)
+  deposit_items   DepositItem[]
+  fund_accounts   FundAccount   @relation(fields: [fund_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([fund_account_id], map: "idx_deposits_fund")
+  @@map("deposits")
+}
+
+model DepositItem {
+  id          Int       @id @default(autoincrement())
+  deposit_id  Int
+  payment_id  Int?
+  description String?   @db.VarChar(255)
+  amount      Decimal   @db.Decimal(12, 2)
+  created_at  DateTime? @default(now()) @db.Timestamptz(6)
+  deposits    Deposit   @relation(fields: [deposit_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  payments    payments? @relation(fields: [payment_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([deposit_id], map: "idx_deposit_items_deposit")
+  @@map("deposit_items")
+}
+
+model FundTransfer {
+  id                                                       Int         @id @default(autoincrement())
+  transfer_number                                          String      @unique @db.VarChar(30)
+  from_fund_id                                             Int
+  to_fund_id                                               Int
+  amount                                                   Decimal     @db.Decimal(12, 2)
+  description                                              String?
+  reference_number                                         String?     @db.VarChar(100)
+  status                                                   String      @default("completed") @db.VarChar(20)
+  created_by                                               String?     @db.VarChar(50)
+  created_at                                               DateTime?   @default(now()) @db.Timestamptz(6)
+  fund_accounts_fund_transfers_from_fund_idTofund_accounts FundAccount @relation("fund_transfers_from_fund_idTofund_accounts", fields: [from_fund_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  fund_accounts_fund_transfers_to_fund_idTofund_accounts   FundAccount @relation("fund_transfers_to_fund_idTofund_accounts", fields: [to_fund_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([from_fund_id], map: "idx_fund_transfers_from")
+  @@index([to_fund_id], map: "idx_fund_transfers_to")
+  @@map("fund_transfers")
+}
+
+model FundTransaction {
+  id              Int         @id @default(autoincrement())
+  fund_account_id Int
+  type            String      @db.VarChar(30)
+  amount          Decimal     @db.Decimal(12, 2)
+  running_balance Decimal     @db.Decimal(12, 2)
+  reference_type  String?     @db.VarChar(30)
+  reference_id    Int?
+  description     String?
+  created_by      String?     @db.VarChar(50)
+  created_at      DateTime?   @default(now()) @db.Timestamptz(6)
+  fund_accounts   FundAccount @relation(fields: [fund_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([fund_account_id], map: "idx_fund_transactions_fund")
+  @@index([type], map: "idx_fund_transactions_type")
+  @@map("fund_transactions")
+}
+
+model call_logs {
+  id              Int          @id @default(autoincrement())
+  call_id         String?      @db.VarChar(100)
+  direction       String       @db.VarChar(10)
+  caller_number   String       @db.VarChar(30)
+  callee_number   String       @db.VarChar(30)
+  subscriber_id   Int?
+  subscriber_name String?      @db.VarChar(200)
+  extension       String?      @db.VarChar(20)
+  admin_user_id   Int?
+  status          String       @db.VarChar(20)
+  started_at      DateTime?    @db.Timestamptz(6)
+  answered_at     DateTime?    @db.Timestamptz(6)
+  ended_at        DateTime?    @db.Timestamptz(6)
+  duration_sec    Int?         @default(0)
+  recording_url   String?
+  notes           String?
+  raw_event       Json?
+  created_at      DateTime?    @default(now()) @db.Timestamptz(6)
+  subscriber      subscribers? @relation(fields: [subscriber_id], references: [id], onUpdate: NoAction)
+
+  @@index([subscriber_id], map: "idx_call_logs_subscriber")
+  @@index([caller_number], map: "idx_call_logs_caller")
+  @@index([callee_number], map: "idx_call_logs_callee")
+  @@index([created_at], map: "idx_call_logs_date")
+}
+
+model sms_logs {
+  id              Int          @id @default(autoincrement())
+  direction       String       @db.VarChar(10)
+  phone_number    String       @db.VarChar(30)
+  subscriber_id   Int?
+  subscriber_name String?      @db.VarChar(200)
+  message         String
+  status          String       @db.VarChar(20)
+  admin_user_id   Int?
+  sent_via        String?      @db.VarChar(20)
+  error_message   String?
+  raw_response    Json?
+  created_at      DateTime?    @default(now()) @db.Timestamptz(6)
+  subscriber      subscribers? @relation(fields: [subscriber_id], references: [id], onUpdate: NoAction)
+
+  @@index([subscriber_id], map: "idx_sms_logs_subscriber")
+  @@index([phone_number], map: "idx_sms_logs_phone")
+  @@index([created_at], map: "idx_sms_logs_date")
+}
+
+model mikrotik_devices {
+  id            Int       @id @default(autoincrement())
+  label         String    @db.VarChar(100)
+  host          String    @db.VarChar(255)
+  port          Int       @default(8728)
+  username      String    @db.VarChar(100)
+  password      String    @db.VarChar(255)
+  use_tls       Boolean   @default(false)
+  is_active     Boolean   @default(true)
+  notes         String?
+  last_seen     DateTime? @db.Timestamptz(6)
+  last_identity String?   @db.VarChar(255)
+  last_version  String?   @db.VarChar(50)
+  created_at    DateTime? @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime? @default(now()) @db.Timestamptz(6)
+
+  @@index([host], map: "idx_mikrotik_host")
+  @@index([is_active], map: "idx_mikrotik_active")
+}
+
+model olt_devices {
+  id             Int                @id @default(autoincrement())
+  label          String             @db.VarChar(100)
+  host           String             @db.VarChar(255)
+  olt_model      String?            @db.VarChar(50)
+  snmp_community String             @default("public") @db.VarChar(100)
+  snmp_version   String             @default("2c") @db.VarChar(5)
+  snmp_port      Int                @default(161)
+  ssh_username   String?            @db.VarChar(100)
+  ssh_password   String?            @db.VarChar(255)
+  // Privileged-mode credential, separate from ssh_password. See the column comment.
+  enable_password String?           @db.VarChar(255)
+  ssh_port       Int                @default(22)
+  telnet_port    Int                @default(23)
+  use_ssh        Boolean            @default(true)
+  is_active      Boolean            @default(true)
+  pon_port_count Int                @default(8)
+  notes          String?
+  last_seen      DateTime?          @db.Timestamptz(6)
+  last_uptime    String?            @db.VarChar(255)
+  created_at     DateTime?          @default(now()) @db.Timestamptz(6)
+  updated_at     DateTime?          @default(now()) @db.Timestamptz(6)
+  onu_mappings   olt_onu_mappings[]
+
+  @@index([host], map: "idx_olt_host")
+  @@index([is_active], map: "idx_olt_active")
+}
+
+model olt_onu_mappings {
+  id               Int            @id @default(autoincrement())
+  olt_device_id    Int
+  pon_port         Int
+  onu_id           Int
+  serial_number    String?        @db.VarChar(50)
+  mac_address      String?        @db.VarChar(17)
+  subscriber_id    Int?
+  onu_inventory_id Int?
+  line_profile     String?        @db.VarChar(100)
+  srv_profile      String?        @db.VarChar(100)
+  description      String?        @db.VarChar(255)
+  status           String?        @default("unknown") @db.VarChar(20)
+  last_rx_power    Decimal?       @db.Decimal(6, 2)
+  last_tx_power    Decimal?       @db.Decimal(6, 2)
+  last_distance    Int?
+  registered_at    DateTime?      @db.Timestamptz(6)
+  last_seen        DateTime?      @db.Timestamptz(6)
+  created_at       DateTime?      @default(now()) @db.Timestamptz(6)
+  updated_at       DateTime?      @default(now()) @db.Timestamptz(6)
+  olt_device       olt_devices    @relation(fields: [olt_device_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  onu_inventory    onu_inventory? @relation(fields: [onu_inventory_id], references: [id], onUpdate: NoAction)
+  subscriber       subscribers?   @relation(fields: [subscriber_id], references: [id], onUpdate: NoAction)
+
+  @@unique([olt_device_id, pon_port, onu_id], map: "uq_olt_pon_onu")
+  @@index([subscriber_id], map: "idx_onu_map_subscriber")
+  @@index([serial_number], map: "idx_onu_map_serial")
+  @@index([mac_address], map: "idx_onu_map_mac")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model accounting_audit_log {
+  id           Int       @id @default(autoincrement())
+  table_name   String    @db.VarChar(50)
+  record_id    Int
+  action       String    @db.VarChar(20)
+  old_values   Json?
+  new_values   Json?
+  performed_by String?   @db.VarChar(50)
+  performed_at DateTime? @default(now()) @db.Timestamp(6)
+  ip_address   String?   @db.VarChar(45)
+
+  @@index([table_name, record_id], map: "idx_audit_table")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model accounting_periods {
+  id          Int       @id @default(autoincrement())
+  period_name String    @db.VarChar(50)
+  start_date  DateTime  @db.Date
+  end_date    DateTime  @db.Date
+  status      String?   @default("open") @db.VarChar(20)
+  closed_by   String?   @db.VarChar(50)
+  closed_at   DateTime? @db.Timestamp(6)
+  created_at  DateTime? @default(now()) @db.Timestamp(6)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model accounts_payable {
+  id                Int                @id @default(autoincrement())
+  bill_number       String             @unique @db.VarChar(30)
+  vendor_id         Int?
+  vendor_name       String             @db.VarChar(150)
+  bill_date         DateTime           @default(dbgenerated("CURRENT_DATE")) @db.Date
+  due_date          DateTime           @db.Date
+  subtotal          Decimal?           @default(0) @db.Decimal(12, 2)
+  tax_amount        Decimal?           @default(0) @db.Decimal(12, 2)
+  total_amount      Decimal            @default(0) @db.Decimal(12, 2)
+  amount_paid       Decimal?           @default(0) @db.Decimal(12, 2)
+  balance           Decimal?           @default(dbgenerated("(total_amount - amount_paid)")) @db.Decimal(12, 2)
+  status            String?            @default("pending") @db.VarChar(20)
+  category          String?            @db.VarChar(50)
+  description       String?
+  notes             String?
+  account_id        Int?
+  approved_by       String?            @db.VarChar(50)
+  created_by        String?            @db.VarChar(50)
+  created_at        DateTime?          @default(now()) @db.Timestamp(6)
+  updated_at        DateTime?          @default(now()) @db.Timestamp(6)
+  po_id             Int?
+  chart_of_accounts chart_of_accounts? @relation(fields: [account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  purchase_orders   purchase_orders?   @relation(fields: [po_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  vendors           vendors?           @relation(fields: [vendor_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  ap_payments       ap_payments[]
+
+  @@index([due_date], map: "idx_ap_due_date")
+  @@index([po_id], map: "idx_ap_po_id")
+  @@index([status], map: "idx_ap_status")
+  @@index([vendor_id], map: "idx_ap_vendor")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model accounts_receivable {
+  id                 Int                @id @default(autoincrement())
+  invoice_number     String             @unique @db.VarChar(30)
+  subscriber_id      Int?
+  customer_name      String             @db.VarChar(150)
+  customer_address   String?
+  invoice_date       DateTime           @default(dbgenerated("CURRENT_DATE")) @db.Date
+  due_date           DateTime           @db.Date
+  subtotal           Decimal?           @default(0) @db.Decimal(12, 2)
+  tax_amount         Decimal?           @default(0) @db.Decimal(12, 2)
+  total_amount       Decimal            @default(0) @db.Decimal(12, 2)
+  amount_paid        Decimal?           @default(0) @db.Decimal(12, 2)
+  balance            Decimal?           @default(dbgenerated("(total_amount - amount_paid)")) @db.Decimal(12, 2)
+  status             String?            @default("pending") @db.VarChar(20)
+  category           String?            @default("subscription") @db.VarChar(50)
+  description        String?
+  notes              String?
+  account_id         Int?
+  created_by         String?            @db.VarChar(50)
+  created_at         DateTime?          @default(now()) @db.Timestamp(6)
+  updated_at         DateTime?          @default(now()) @db.Timestamp(6)
+  billing_invoice_id Int?               @unique
+  chart_of_accounts  chart_of_accounts? @relation(fields: [account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  invoices           invoices?          @relation(fields: [billing_invoice_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  ar_payments        ar_payments[]
+
+  @@index([billing_invoice_id], map: "idx_ar_billing_invoice")
+  @@index([customer_name], map: "idx_ar_customer")
+  @@index([due_date], map: "idx_ar_due_date")
+  @@index([status], map: "idx_ar_status")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model ap_payments {
+  id               Int              @id @default(autoincrement())
+  payment_number   String           @unique @db.VarChar(30)
+  ap_id            Int
+  payment_date     DateTime         @default(dbgenerated("CURRENT_DATE")) @db.Date
+  amount           Decimal          @db.Decimal(12, 2)
+  payment_method   String?          @default("bank_transfer") @db.VarChar(30)
+  reference_number String?          @db.VarChar(50)
+  check_number     String?          @db.VarChar(30)
+  notes            String?
+  paid_by          String?          @db.VarChar(50)
+  created_at       DateTime?        @default(now()) @db.Timestamp(6)
+  accounts_payable accounts_payable @relation(fields: [ap_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model ar_payments {
+  id                  Int                 @id @default(autoincrement())
+  payment_number      String              @unique @db.VarChar(30)
+  ar_id               Int
+  payment_date        DateTime            @default(dbgenerated("CURRENT_DATE")) @db.Date
+  amount              Decimal             @db.Decimal(12, 2)
+  payment_method      String?             @default("cash") @db.VarChar(30)
+  reference_number    String?             @db.VarChar(50)
+  notes               String?
+  received_by         String?             @db.VarChar(50)
+  created_at          DateTime?           @default(now()) @db.Timestamp(6)
+  accounts_receivable accounts_receivable @relation(fields: [ar_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model chart_of_accounts {
+  id                      Int                   @id @default(autoincrement())
+  account_code            String                @unique @db.VarChar(20)
+  account_name            String                @db.VarChar(100)
+  account_type            String                @db.VarChar(20)
+  parent_id               Int?
+  description             String?
+  is_active               Boolean?              @default(true)
+  created_at              DateTime?             @default(now()) @db.Timestamp(6)
+  updated_at              DateTime?             @default(now()) @db.Timestamp(6)
+  accounts_payable        accounts_payable[]
+  accounts_receivable     accounts_receivable[]
+  chart_of_accounts       chart_of_accounts?    @relation("chart_of_accountsTochart_of_accounts", fields: [parent_id], references: [id], onUpdate: NoAction)
+  other_chart_of_accounts chart_of_accounts[]   @relation("chart_of_accountsTochart_of_accounts")
+  journal_entry_lines     journal_entry_lines[]
+}
+
+model departments {
+  id          Int         @id @default(autoincrement())
+  name        String      @unique @db.VarChar(100)
+  description String?
+  is_active   Boolean?    @default(true)
+  created_at  DateTime?   @default(now()) @db.Timestamp(6)
+  employees   employees[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model employee_loans {
+  id                Int       @id @default(autoincrement())
+  employee_id       Int
+  loan_type         String    @db.VarChar(30)
+  principal_amount  Decimal   @db.Decimal(12, 2)
+  monthly_deduction Decimal   @db.Decimal(10, 2)
+  total_paid        Decimal?  @default(0) @db.Decimal(12, 2)
+  balance           Decimal?  @default(dbgenerated("(principal_amount - total_paid)")) @db.Decimal(12, 2)
+  start_date        DateTime  @db.Date
+  status            String?   @default("active") @db.VarChar(20)
+  notes             String?
+  created_at        DateTime? @default(now()) @db.Timestamp(6)
+  employees         employees @relation(fields: [employee_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model employees {
+  id                         Int               @id @default(autoincrement())
+  employee_id                String            @unique @db.VarChar(20)
+  first_name                 String            @db.VarChar(50)
+  last_name                  String            @db.VarChar(50)
+  middle_name                String?           @db.VarChar(50)
+  email                      String?           @db.VarChar(100)
+  phone                      String?           @db.VarChar(20)
+  address                    String?
+  date_of_birth              DateTime?         @db.Date
+  gender                     String?           @db.VarChar(10)
+  civil_status               String?           @db.VarChar(20)
+  department_id              Int?
+  position                   String?           @db.VarChar(100)
+  hire_date                  DateTime          @db.Date
+  employment_type            String?           @default("regular") @db.VarChar(20)
+  salary_type                String            @db.VarChar(10)
+  salary_rate                Decimal           @default(0) @db.Decimal(12, 2)
+  daily_rate                 Decimal?          @default(dbgenerated("\nCASE\n    WHEN ((salary_type)::text = 'monthly'::text) THEN round((salary_rate / (22)::numeric), 2)\n    WHEN ((salary_type)::text = 'daily'::text) THEN salary_rate\n    WHEN ((salary_type)::text = 'hourly'::text) THEN (salary_rate * (8)::numeric)\n    ELSE (0)::numeric\nEND")) @db.Decimal(10, 2)
+  sss_number                 String?           @db.VarChar(20)
+  philhealth_number          String?           @db.VarChar(20)
+  pagibig_number             String?           @db.VarChar(20)
+  tin_number                 String?           @db.VarChar(20)
+  bank_name                  String?           @db.VarChar(100)
+  bank_account_number        String?           @db.VarChar(50)
+  emergency_contact_name     String?           @db.VarChar(100)
+  emergency_contact_phone    String?           @db.VarChar(20)
+  emergency_contact_relation String?           @db.VarChar(50)
+  status                     String?           @default("active") @db.VarChar(20)
+  termination_date           DateTime?         @db.Date
+  notes                      String?
+  created_at                 DateTime?         @default(now()) @db.Timestamp(6)
+  updated_at                 DateTime?         @default(now()) @db.Timestamp(6)
+  employee_loans             employee_loans[]
+  departments                departments?      @relation(fields: [department_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  leave_balances             leave_balances[]
+  payroll_items              payroll_items[]
+  time_attendance            time_attendance[]
+
+  @@index([department_id], map: "idx_employees_department")
+  @@index([status], map: "idx_employees_status")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model journal_entries {
+  id                  Int                   @id @default(autoincrement())
+  entry_number        String                @unique @db.VarChar(30)
+  entry_date          DateTime              @default(dbgenerated("CURRENT_DATE")) @db.Date
+  description         String
+  reference           String?               @db.VarChar(100)
+  source              String?               @default("manual") @db.VarChar(30)
+  source_id           Int?
+  total_debit         Decimal?              @default(0) @db.Decimal(14, 2)
+  total_credit        Decimal?              @default(0) @db.Decimal(14, 2)
+  status              String?               @default("draft") @db.VarChar(20)
+  created_by          String?               @db.VarChar(50)
+  prepared_by         String?               @db.VarChar(100)
+  reviewed_by         String?               @db.VarChar(100)
+  approved_by         String?               @db.VarChar(100)
+  posted_by           String?               @db.VarChar(50)
+  posted_at           DateTime?             @db.Timestamp(6)
+  created_at          DateTime?             @default(now()) @db.Timestamp(6)
+  journal_entry_lines journal_entry_lines[]
+
+  @@index([entry_date], map: "idx_journal_date")
+  @@index([status], map: "idx_journal_status")
+}
+
+model journal_entry_lines {
+  id                Int               @id @default(autoincrement())
+  journal_entry_id  Int
+  account_id        Int
+  debit             Decimal?          @default(0) @db.Decimal(14, 2)
+  credit            Decimal?          @default(0) @db.Decimal(14, 2)
+  description       String?
+  ref_no            String?           @db.VarChar(100)
+  vendor            String?           @db.VarChar(200)
+  address           String?           @db.VarChar(300)
+  tin               String?           @db.VarChar(50)
+  category          String?           @db.VarChar(100)
+  created_at        DateTime?         @default(now()) @db.Timestamp(6)
+  chart_of_accounts chart_of_accounts @relation(fields: [account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  journal_entries   journal_entries   @relation(fields: [journal_entry_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([account_id], map: "idx_journal_lines_account")
+  @@index([journal_entry_id], map: "idx_journal_lines_entry")
+}
+
+model leave_balances {
+  id             Int       @id @default(autoincrement())
+  employee_id    Int
+  year           Int
+  vacation_leave Decimal?  @default(5) @db.Decimal(5, 2)
+  sick_leave     Decimal?  @default(5) @db.Decimal(5, 2)
+  vacation_used  Decimal?  @default(0) @db.Decimal(5, 2)
+  sick_used      Decimal?  @default(0) @db.Decimal(5, 2)
+  created_at     DateTime? @default(now()) @db.Timestamp(6)
+  employees      employees @relation(fields: [employee_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([employee_id, year])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model network_elements {
+  id                                                            Int             @id @default(autoincrement())
+  name                                                          String          @db.VarChar(100)
+  type                                                          String          @db.VarChar(30)
+  brand                                                         String?         @db.VarChar(100)
+  model                                                         String?         @db.VarChar(100)
+  ip_address                                                    String?         @db.VarChar(50)
+  port_count                                                    Int?
+  pole_number                                                   String?         @db.VarChar(50)
+  lat                                                           Decimal?        @db.Decimal(10, 7)
+  lng                                                           Decimal?        @db.Decimal(10, 7)
+  municipality                                                  Int?
+  barangay                                                      Int?
+  foc_route_id                                                  Int?
+  upstream_provider                                             String?         @db.VarChar(150)
+  notes                                                         String?
+  status                                                        String?         @default("active") @db.VarChar(20)
+  created_at                                                    DateTime?       @default(now()) @db.Timestamptz(6)
+  updated_at                                                    DateTime?       @default(now()) @db.Timestamptz(6)
+  foc_routes                                                    foc_routes?     @relation(fields: [foc_route_id], references: [id], onUpdate: NoAction)
+  network_links_network_links_from_element_idTonetwork_elements network_links[] @relation("network_links_from_element_idTonetwork_elements")
+  network_links_network_links_to_element_idTonetwork_elements   network_links[] @relation("network_links_to_element_idTonetwork_elements")
+
+  @@index([type], map: "idx_network_elements_type")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model network_links {
+  id                                                               Int               @id @default(autoincrement())
+  from_element_id                                                  Int?
+  to_element_id                                                    Int?
+  link_type                                                        String?           @default("fiber") @db.VarChar(20)
+  capacity                                                         String?           @db.VarChar(50)
+  notes                                                            String?
+  created_at                                                       DateTime?         @default(now()) @db.Timestamptz(6)
+  network_elements_network_links_from_element_idTonetwork_elements network_elements? @relation("network_links_from_element_idTonetwork_elements", fields: [from_element_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  network_elements_network_links_to_element_idTonetwork_elements   network_elements? @relation("network_links_to_element_idTonetwork_elements", fields: [to_element_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([from_element_id], map: "idx_network_links_from")
+  @@index([to_element_id], map: "idx_network_links_to")
+}
+
+model payment_methods {
+  id          Int       @id @default(autoincrement())
+  code        String    @unique @db.VarChar(30)
+  name        String    @db.VarChar(50)
+  description String?
+  is_active   Boolean?  @default(true)
+  sort_order  Int?      @default(0)
+  created_at  DateTime? @default(now()) @db.Timestamp(6)
+  updated_at  DateTime? @default(now()) @db.Timestamp(6)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model payroll_items {
+  id                Int             @id @default(autoincrement())
+  payroll_period_id Int
+  employee_id       Int
+  days_worked       Decimal?        @default(0) @db.Decimal(5, 2)
+  hours_worked      Decimal?        @default(0) @db.Decimal(6, 2)
+  overtime_hours    Decimal?        @default(0) @db.Decimal(5, 2)
+  basic_pay         Decimal?        @default(0) @db.Decimal(12, 2)
+  overtime_pay      Decimal?        @default(0) @db.Decimal(12, 2)
+  holiday_pay       Decimal?        @default(0) @db.Decimal(12, 2)
+  night_diff        Decimal?        @default(0) @db.Decimal(12, 2)
+  allowances        Decimal?        @default(0) @db.Decimal(12, 2)
+  bonus             Decimal?        @default(0) @db.Decimal(12, 2)
+  other_earnings    Decimal?        @default(0) @db.Decimal(12, 2)
+  gross_pay         Decimal?        @default(0) @db.Decimal(12, 2)
+  sss_ee            Decimal?        @default(0) @db.Decimal(10, 2)
+  sss_er            Decimal?        @default(0) @db.Decimal(10, 2)
+  philhealth_ee     Decimal?        @default(0) @db.Decimal(10, 2)
+  philhealth_er     Decimal?        @default(0) @db.Decimal(10, 2)
+  pagibig_ee        Decimal?        @default(0) @db.Decimal(10, 2)
+  pagibig_er        Decimal?        @default(0) @db.Decimal(10, 2)
+  withholding_tax   Decimal?        @default(0) @db.Decimal(10, 2)
+  sss_loan          Decimal?        @default(0) @db.Decimal(10, 2)
+  pagibig_loan      Decimal?        @default(0) @db.Decimal(10, 2)
+  cash_advance      Decimal?        @default(0) @db.Decimal(10, 2)
+  other_deductions  Decimal?        @default(0) @db.Decimal(10, 2)
+  total_deductions  Decimal?        @default(0) @db.Decimal(12, 2)
+  net_pay           Decimal?        @default(0) @db.Decimal(12, 2)
+  status            String?         @default("draft") @db.VarChar(20)
+  created_at        DateTime?       @default(now()) @db.Timestamp(6)
+  employees         employees       @relation(fields: [employee_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  payroll_periods   payroll_periods @relation(fields: [payroll_period_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([payroll_period_id, employee_id])
+  @@index([employee_id], map: "idx_payroll_items_employee")
+  @@index([payroll_period_id], map: "idx_payroll_items_period")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model payroll_periods {
+  id               Int             @id @default(autoincrement())
+  period_start     DateTime        @db.Date
+  period_end       DateTime        @db.Date
+  pay_date         DateTime?       @db.Date
+  period_type      String?         @default("semi_monthly") @db.VarChar(20)
+  status           String?         @default("draft") @db.VarChar(20)
+  total_gross      Decimal?        @default(0) @db.Decimal(14, 2)
+  total_deductions Decimal?        @default(0) @db.Decimal(14, 2)
+  total_net        Decimal?        @default(0) @db.Decimal(14, 2)
+  notes            String?
+  created_by       String?         @db.VarChar(50)
+  approved_by      String?         @db.VarChar(50)
+  created_at       DateTime?       @default(now()) @db.Timestamp(6)
+  updated_at       DateTime?       @default(now()) @db.Timestamp(6)
+  payroll_items    payroll_items[]
+}
+
+model radius_firewall_rules {
+  id         Int       @id @default(autoincrement())
+  source     String    @unique(map: "idx_radius_fw_source") @db.VarChar(100)
+  label      String?   @default("") @db.VarChar(200)
+  enabled    Boolean?  @default(true)
+  created_at DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model subscriber_credits {
+  id                 Int         @id @default(autoincrement())
+  subscriber_id      Int
+  type               String      @db.VarChar(20)
+  amount             Decimal     @db.Decimal(10, 2)
+  running_balance    Decimal     @default(0) @db.Decimal(10, 2)
+  source_payment_id  Int?
+  applied_invoice_id Int?
+  notes              String?
+  created_by         String?     @db.VarChar(50)
+  created_at         DateTime?   @default(now()) @db.Timestamptz(6)
+  invoices           invoices?   @relation(fields: [applied_invoice_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  payments           payments?   @relation(fields: [source_payment_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  subscribers        subscribers @relation(fields: [subscriber_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([created_at], map: "idx_credits_created")
+  @@index([subscriber_id], map: "idx_credits_subscriber")
+  @@index([type], map: "idx_credits_type")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model time_attendance {
+  id                Int       @id @default(autoincrement())
+  employee_id       Int
+  attendance_date   DateTime  @db.Date
+  time_in           DateTime? @db.Time(6)
+  time_out          DateTime? @db.Time(6)
+  break_minutes     Int?      @default(60)
+  hours_worked      Decimal?  @default(0) @db.Decimal(5, 2)
+  overtime_hours    Decimal?  @default(0) @db.Decimal(5, 2)
+  late_minutes      Int?      @default(0)
+  undertime_minutes Int?      @default(0)
+  status            String?   @default("present") @db.VarChar(20)
+  leave_type        String?   @db.VarChar(20)
+  notes             String?
+  created_at        DateTime? @default(now()) @db.Timestamp(6)
+  employees         employees @relation(fields: [employee_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([employee_id, attendance_date])
+  @@index([attendance_date], map: "idx_attendance_date")
+  @@index([employee_id, attendance_date], map: "idx_attendance_employee_date")
+}
+
+model work_order_logs {
+  id            Int         @id @default(autoincrement())
+  work_order_id Int
+  action        String      @db.VarChar(50)
+  details       String?
+  performed_by  String?     @db.VarChar(100)
+  created_at    DateTime?   @default(now()) @db.Timestamptz(6)
+  work_orders   work_orders @relation(fields: [work_order_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([work_order_id], map: "idx_wol_wo")
+}
+
+model work_order_materials {
+  id            Int         @id @default(autoincrement())
+  work_order_id Int
+  item_name     String      @db.VarChar(200)
+  quantity      Int?        @default(1)
+  unit          String?     @default("pcs") @db.VarChar(20)
+  notes         String?
+  created_at    DateTime?   @default(now()) @db.Timestamptz(6)
+  work_orders   work_orders @relation(fields: [work_order_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([work_order_id], map: "idx_wom_wo")
+}
+
+model work_order_photos {
+  id            Int         @id @default(autoincrement())
+  work_order_id Int
+  photo_type    String      @default("site") @db.VarChar(30)
+  photo_path    String      @db.VarChar(500)
+  caption       String?     @db.VarChar(200)
+  uploaded_by   String?     @db.VarChar(100)
+  created_at    DateTime?   @default(now()) @db.Timestamptz(6)
+  work_orders   work_orders @relation(fields: [work_order_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([work_order_id], map: "idx_wop_wo")
+}
+
+model work_order_signatures {
+  id             Int         @id @default(autoincrement())
+  work_order_id  Int         @unique
+  signature_data String
+  signed_by      String?     @db.VarChar(100)
+  signed_at      DateTime?   @default(now()) @db.Timestamptz(6)
+  work_orders    work_orders @relation(fields: [work_order_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model work_order_tasks {
+  id            Int         @id @default(autoincrement())
+  work_order_id Int
+  task_name     String      @db.VarChar(200)
+  task_group    String?     @default("general") @db.VarChar(50)
+  sort_order    Int?        @default(0)
+  is_completed  Boolean?    @default(false)
+  completed_by  String?     @db.VarChar(100)
+  completed_at  DateTime?   @db.Timestamptz(6)
+  notes         String?
+  photo_path    String?     @db.VarChar(500)
+  created_at    DateTime?   @default(now()) @db.Timestamptz(6)
+  work_orders   work_orders @relation(fields: [work_order_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([work_order_id], map: "idx_wot_wo")
+}
+
+model work_orders {
+  id                                               Int                    @id @default(autoincrement())
+  order_number                                     String                 @unique @db.VarChar(20)
+  subscriber_id                                    Int
+  type                                             String                 @default("installation") @db.VarChar(30)
+  status                                           String                 @default("pending") @db.VarChar(20)
+  priority                                         String                 @default("normal") @db.VarChar(10)
+  assigned_to                                      Int?
+  assigned_team                                    String?                @db.VarChar(100)
+  scheduled_date                                   DateTime?              @db.Date
+  scheduled_time                                   String?                @db.VarChar(20)
+  started_at                                       DateTime?              @db.Timestamptz(6)
+  completed_at                                     DateTime?              @db.Timestamptz(6)
+  notes                                            String?
+  created_by                                       Int?
+  created_at                                       DateTime?              @default(now()) @db.Timestamptz(6)
+  updated_at                                       DateTime?              @default(now()) @db.Timestamptz(6)
+  work_order_logs                                  work_order_logs[]
+  work_order_materials                             work_order_materials[]
+  work_order_photos                                work_order_photos[]
+  work_order_signatures                            work_order_signatures?
+  work_order_tasks                                 work_order_tasks[]
+  admin_users_work_orders_assigned_toToadmin_users admin_users?           @relation("work_orders_assigned_toToadmin_users", fields: [assigned_to], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  admin_users_work_orders_created_byToadmin_users  admin_users?           @relation("work_orders_created_byToadmin_users", fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  subscribers                                      subscribers            @relation(fields: [subscriber_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([assigned_to], map: "idx_wo_assigned")
+  @@index([scheduled_date], map: "idx_wo_scheduled")
+  @@index([status], map: "idx_wo_status")
+  @@index([subscriber_id], map: "idx_wo_subscriber")
+  @@index([type], map: "idx_wo_type")
+}
+
+model sales_agents {
+  id              Int           @id @default(autoincrement())
+  agent_code      String        @unique @db.VarChar(20)
+  first_name      String        @db.VarChar(100)
+  last_name       String        @db.VarChar(100)
+  phone           String        @db.VarChar(20)
+  email           String?       @db.VarChar(255)
+  password_hash   String        @db.VarChar(255)
+  status          String        @default("active") @db.VarChar(20)
+  commission_rate Decimal?      @default(0.00) @db.Decimal(5, 2)
+  area_assigned   String?       @db.VarChar(255)
+  notes           String?
+  total_signups   Int?          @default(0)
+  last_login      DateTime?     @db.Timestamptz(6)
+  created_at      DateTime?     @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime?     @default(now()) @db.Timestamptz(6)
+  subscribers     subscribers[]
+
+  @@index([agent_code], map: "idx_sales_agents_code")
+  @@index([status], map: "idx_sales_agents_status")
+}
+
+model tr069_devices {
+  id                    Int          @id @default(autoincrement())
+  device_id             String       @unique @db.VarChar(255)
+  serial_number         String?      @db.VarChar(100)
+  oui                   String?      @db.VarChar(20)
+  product_class         String?      @db.VarChar(100)
+  manufacturer          String?      @db.VarChar(100)
+  software_version      String?      @db.VarChar(100)
+  hardware_version      String?      @db.VarChar(100)
+  ip_address            String?      @db.VarChar(45)
+  mac_address           String?      @db.VarChar(20)
+  subscriber_id         Int?
+  last_inform           DateTime?    @db.Timestamptz(6)
+  last_wifi_change      DateTime?    @db.Timestamptz(6)
+  wifi_ssid             String?      @db.VarChar(100)
+  notes                 String?
+  created_at            DateTime?    @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime?    @default(now()) @db.Timestamptz(6)
+  subscriber            subscribers? @relation(fields: [subscriber_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@index([subscriber_id], map: "idx_tr069_devices_subscriber")
+  @@index([serial_number], map: "idx_tr069_devices_serial")
+  @@index([last_inform], map: "idx_tr069_devices_last_inform")
+}
+
+model tr069_metrics {
+  id            BigInt    @id @default(autoincrement())
+  device_id     String    @db.VarChar(255)
+  collected_at  DateTime  @default(now()) @db.Timestamptz(6)
+  rx_power      Decimal?  @db.Decimal(8, 3)
+  tx_power      Decimal?  @db.Decimal(8, 3)
+  voltage       Decimal?  @db.Decimal(8, 3)
+  temperature   Decimal?  @db.Decimal(6, 2)
+  cpu_usage     Decimal?  @db.Decimal(5, 2)
+  mem_usage     Decimal?  @db.Decimal(5, 2)
+  online        Boolean?
+  uptime_sec    Int?
+
+  @@index([device_id, collected_at(sort: Desc)], map: "idx_tr069_metrics_device_time")
+  @@index([collected_at], map: "idx_tr069_metrics_time")
+}
+
+model tr069_alert_history {
+  id           BigInt    @id @default(autoincrement())
+  alert_type   String    @db.VarChar(80)
+  fired_at     DateTime  @default(now()) @db.Timestamptz(6)
+  severity     String    @db.VarChar(20)
+  summary      String
+  detail       String?
+  sent_sms_to  String?
+  sent_email_to String?
+  resolved_at  DateTime? @db.Timestamptz(6)
+
+  @@index([alert_type, fired_at(sort: Desc)], map: "idx_tr069_alert_history_type_time")
+  @@index([fired_at], map: "idx_tr069_alert_history_time")
+}
+
+// ============================================================
+// Omnichannel Unified Inbox (Facebook Messenger · Viber · Gmail)
+// ============================================================
+
+model message_channels {
+  id             Int             @id @default(autoincrement())
+  type           String          @db.VarChar(20) // 'facebook' | 'viber' | 'gmail'
+  name           String          @db.VarChar(100)
+  external_id    String?         @db.VarChar(255) // fb page id / viber bot uri / gmail address
+  enabled        Boolean         @default(false)
+  status         String          @default("disconnected") @db.VarChar(20) // connected|disconnected|error
+  status_detail  String?
+  config         Json?           @default("{}")
+  last_polled_at DateTime?       @db.Timestamptz(6)
+  created_at     DateTime?       @default(now()) @db.Timestamptz(6)
+  updated_at     DateTime?       @default(now()) @db.Timestamptz(6)
+  conversations  conversations[]
+
+  @@index([type], map: "idx_message_channels_type")
+}
+
+model conversations {
+  id               Int              @id @default(autoincrement())
+  channel_id       Int
+  external_user_id String           @db.VarChar(255)
+  external_name    String?          @db.VarChar(200)
+  external_avatar  String?
+  subject          String?          @db.VarChar(500)
+  subscriber_id    Int?
+  status           String           @default("open") @db.VarChar(20) // open|pending|closed
+  assigned_to      Int?
+  last_message_at  DateTime?        @db.Timestamptz(6)
+  last_preview     String?          @db.VarChar(280)
+  last_direction   String?          @db.VarChar(3) // 'in' | 'out'
+  unread_count     Int              @default(0)
+  thread_ref       String?          @db.VarChar(998)
+  created_at       DateTime?        @default(now()) @db.Timestamptz(6)
+  updated_at       DateTime?        @default(now()) @db.Timestamptz(6)
+  channel          message_channels @relation(fields: [channel_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  subscriber       subscribers?     @relation(fields: [subscriber_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  admin            admin_users?     @relation(fields: [assigned_to], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  messages         messages[]
+
+  @@unique([channel_id, external_user_id], map: "uq_conversation_channel_user")
+  @@index([status], map: "idx_conversations_status")
+  @@index([assigned_to], map: "idx_conversations_assigned")
+  @@index([subscriber_id], map: "idx_conversations_subscriber")
+  @@index([last_message_at], map: "idx_conversations_last_msg")
+}
+
+model messages {
+  id                  Int           @id @default(autoincrement())
+  conversation_id     Int
+  direction           String        @db.VarChar(3) // 'in' | 'out'
+  body                String?
+  attachments         Json?         @default("[]")
+  external_message_id String?       @db.VarChar(998)
+  status              String        @default("received") @db.VarChar(20) // received|sent|delivered|failed
+  error_detail        String?
+  created_by          String?       @db.VarChar(100)
+  created_at          DateTime?     @default(now()) @db.Timestamptz(6)
+  conversation        conversations @relation(fields: [conversation_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([conversation_id], map: "idx_messages_conversation")
+  @@index([external_message_id], map: "idx_messages_external")
+}

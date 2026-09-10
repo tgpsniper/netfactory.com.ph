@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<title>Service Notice — Netfactory</title>
+<!--
+  Walled-garden notice for a restricted subscriber.
+
+  DELIBERATELY DEPENDENCY-FREE. Not a style preference — a customer who reaches this
+  page has been firewalled down to our own hosts, so every CDN is unreachable: no
+  React, no Babel, no Tailwind, no Font Awesome, no Google Fonts. Anything pulled from
+  outside would hang until it timed out and leave a blank page in front of the person
+  we are asking to pay. System font stack, inline SVG, one same-origin logo.
+
+  Everything below is driven by GET /api/restricted/status, which identifies the caller
+  by source address. The page has no login and holds no token.
+-->
+<style>
+  *,*::before,*::after{box-sizing:border-box}
+  :root{
+    --bg:#0f172a; --card:#ffffff; --ink:#0f172a; --ink2:#475569; --ink3:#94a3b8;
+    --line:#e2e8f0; --brand:#2563eb; --brandDk:#1d4ed8;
+    --warn:#b45309; --warnBg:#fffbeb; --warnLine:#fde68a;
+    --ok:#047857; --okBg:#ecfdf5; --okLine:#a7f3d0;
+    --danger:#b91c1c;
+  }
+  html,body{margin:0;padding:0}
+  body{
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+    color:var(--ink);
+    background:var(--bg);
+    background-image:radial-gradient(1200px 600px at 50% -10%,#1e293b 0%,#0f172a 60%);
+    min-height:100vh;
+    padding:24px 16px calc(24px + env(safe-area-inset-bottom));
+    display:flex;align-items:flex-start;justify-content:center;
+    -webkit-text-size-adjust:100%;
+  }
+  .wrap{width:100%;max-width:520px}
+  .brand{display:flex;align-items:center;gap:10px;justify-content:center;margin-bottom:18px}
+  .brand img{height:34px;width:auto;display:block}
+  .brand span{color:#e2e8f0;font-weight:700;letter-spacing:.3px;font-size:15px}
+  .card{background:var(--card);border-radius:16px;padding:26px 22px;box-shadow:0 18px 40px rgba(0,0,0,.35)}
+  .icon{width:56px;height:56px;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 16px}
+  .icon.warn{background:var(--warnBg);border:1px solid var(--warnLine)}
+  .icon.ok{background:var(--okBg);border:1px solid var(--okLine)}
+  h1{font-size:20px;line-height:1.3;margin:0 0 8px;text-align:center;font-weight:700}
+  .lede{color:var(--ink2);text-align:center;margin:0 0 20px;font-size:14px}
+  .note{background:var(--warnBg);border:1px solid var(--warnLine);color:var(--warn);
+        border-radius:10px;padding:12px 14px;font-size:13px;margin:0 0 18px}
+  .note.ok{background:var(--okBg);border-color:var(--okLine);color:var(--ok)}
+  .note.bad{background:#fef2f2;border-color:#fecaca;color:var(--danger)}
+  .rows{border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-bottom:18px}
+  .row{display:flex;justify-content:space-between;gap:12px;padding:11px 14px;font-size:13px;border-bottom:1px solid var(--line)}
+  .row:last-child{border-bottom:none}
+  .row .k{color:var(--ink3);flex-shrink:0}
+  .row .v{font-weight:600;text-align:right;word-break:break-word}
+  .total{display:flex;justify-content:space-between;align-items:baseline;
+         padding:16px;border:1px solid var(--line);border-radius:12px;background:#f8fafc;margin-bottom:18px}
+  .total .k{font-size:12px;color:var(--ink3);text-transform:uppercase;letter-spacing:.6px;font-weight:700}
+  .total .v{font-size:26px;font-weight:800;letter-spacing:-.5px}
+  .inv{font-size:12px;color:var(--ink2);margin:-8px 0 18px;padding:0 2px}
+  .inv div{display:flex;justify-content:space-between;padding:4px 0}
+  .od{color:var(--danger);font-weight:600}
+  button.pay{
+    width:100%;padding:15px;border:0;border-radius:12px;cursor:pointer;
+    background:var(--brand);color:#fff;font-size:16px;font-weight:700;font-family:inherit;
+    display:flex;align-items:center;justify-content:center;gap:9px;
+  }
+  button.pay:hover:not(:disabled){background:var(--brandDk)}
+  button.pay:disabled{opacity:.6;cursor:default}
+  .methods{text-align:center;font-size:11.5px;color:var(--ink3);margin-top:10px;line-height:1.6}
+  .after{margin-top:20px;padding-top:18px;border-top:1px solid var(--line);font-size:12.5px;color:var(--ink2)}
+  .after b{color:var(--ink)}
+  .after a{color:var(--brand);text-decoration:none;font-weight:600}
+  .foot{text-align:center;color:#64748b;font-size:12px;margin-top:18px;line-height:1.7}
+  .foot a{color:#94a3b8;text-decoration:none}
+  .spin{width:16px;height:16px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;
+        border-radius:50%;animation:sp .7s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .loading{text-align:center;color:var(--ink3);padding:30px 0;font-size:14px}
+  @media (max-width:380px){.card{padding:22px 16px}.total .v{font-size:22px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand">
+    <img src="/uploads/logo/company-logo.png" alt="" onerror="this.style.display='none'">
+    <span id="brandName">NETFACTORY</span>
+  </div>
+  <div class="card" id="card">
+    <div class="loading">Checking your connection…</div>
+  </div>
+  <div class="foot" id="foot"></div>
+</div>
+
+<script>
+(function () {
+  var API = '/api/restricted';
+  var card = document.getElementById('card');
+  var foot = document.getElementById('foot');
+  var state = null;
+
+  var qs = new URLSearchParams(location.search);
+  var justPaid = qs.get('payment') === 'success';
+  var payFailed = qs.get('payment') === 'failed';
+
+  function peso(n) {
+    return '₱' + Number(n || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function shortDate(d) {
+    if (!d) return '—';
+    var x = new Date(d);
+    if (isNaN(x)) return '—';
+    return x.toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' });
+  }
+
+  var ICON_WARN = '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#b45309" stroke-width="2" stroke-linecap="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>';
+  var ICON_OK = '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#047857" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+  var ICON_LOCK = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
+
+  function renderFoot(co) {
+    co = co || {};
+    var bits = [];
+    if (co.phone) bits.push('Call <b style="color:#cbd5e1">' + esc(co.phone) + '</b>');
+    if (co.email) bits.push('<a href="mailto:' + esc(co.email) + '">' + esc(co.email) + '</a>');
+    foot.innerHTML = bits.length ? 'Need help? ' + bits.join(' &nbsp;·&nbsp; ') : '';
+    if (co.name) document.getElementById('brandName').textContent = co.name;
+  }
+
+  // ── the three faces of this page ──────────────────────────
+  function render() {
+    var s = state;
+    renderFoot(s.company);
+
+    // Paid, and the restriction is gone: say so plainly and get out of the way.
+    if (s.identified && s.restricted === false) {
+      card.innerHTML =
+        '<div class="icon ok">' + ICON_OK + '</div>' +
+        '<h1>You’re back online</h1>' +
+        '<p class="lede">Your connection has been restored. You can close this page and carry on browsing.</p>' +
+        (s.account ? '<div class="rows"><div class="row"><span class="k">Account</span><span class="v">' + esc(s.account) + '</span></div></div>' : '') +
+        '<div class="after">If a page still will not load, switch your WiFi off and on, or restart the device.</div>';
+      return;
+    }
+
+    // We could not tell who is calling. Say nothing about any account.
+    if (!s.identified) {
+      card.innerHTML =
+        '<div class="icon warn">' + ICON_WARN + '</div>' +
+        '<h1>Service temporarily limited</h1>' +
+        '<p class="lede">Your internet service has been limited because of an unsettled balance.</p>' +
+        '<div class="note">We could not identify this connection automatically. Please sign in to the customer portal to view your balance and pay.</div>' +
+        '<a class="pay" href="/portal/" style="text-decoration:none">Go to the customer portal</a>' +
+        '<div class="after">Already paid? It can take a few minutes to reflect. If your service does not come back, contact us with your account number.</div>';
+      return;
+    }
+
+    // Identified and restricted — the real page.
+    var invRows = (s.invoices || []).map(function (i) {
+      return '<div><span>' + esc(i.period || i.number) +
+             (i.daysOverdue > 0 ? ' <span class="od">· ' + i.daysOverdue + 'd overdue</span>' : '') +
+             '</span><span>' + peso(i.amount) + '</span></div>';
+    }).join('');
+
+    card.innerHTML =
+      '<div class="icon warn">' + ICON_WARN + '</div>' +
+      '<h1>Your internet service is on hold</h1>' +
+      '<p class="lede">Hi ' + esc(s.firstName || 'there') + ' — we limited your connection because your account has an unsettled balance.</p>' +
+      (payFailed ? '<div class="note bad">That payment did not go through. Nothing was charged — you can try again below.</div>' : '') +
+      (justPaid ? '<div class="note ok">Payment received. We are confirming it now — this page will update on its own within a minute or two.</div>' : '') +
+      (s.reason ? '<div class="note">' + esc(s.reason) + '</div>' : '') +
+      '<div class="rows">' +
+        '<div class="row"><span class="k">Account</span><span class="v">' + esc(s.account) + '</span></div>' +
+        (s.plan ? '<div class="row"><span class="k">Plan</span><span class="v">' + esc(s.plan) + '</span></div>' : '') +
+        '<div class="row"><span class="k">On hold since</span><span class="v">' + shortDate(s.restrictedAt) + '</span></div>' +
+        '<div class="row"><span class="k">Unpaid invoices</span><span class="v">' + (s.invoices || []).length + '</span></div>' +
+      '</div>' +
+      (invRows ? '<div class="inv">' + invRows + '</div>' : '') +
+      '<div class="total"><span class="k">Total due</span><span class="v">' + peso(s.totalDue) + '</span></div>' +
+      (s.canPayOnline
+        ? '<button class="pay" id="payBtn">' + ICON_LOCK + ' Pay ' + peso(s.totalDue) + ' now</button>' +
+          '<div class="methods">GCash · Maya · GrabPay · ShopeePay · QR Ph · Cards · Online banking<br>7-Eleven · Cebuana · M Lhuillier · Palawan · LBC</div>'
+        : '<div class="note">Online payment is unavailable right now. Please settle at our office or through your usual payment centre.</div>') +
+      '<div class="after"><b>Your service resumes automatically</b> once payment is confirmed — usually within a few minutes. You do not need to call us.</div>';
+
+    var btn = document.getElementById('payBtn');
+    if (btn) btn.addEventListener('click', pay);
+  }
+
+  function pay() {
+    var btn = document.getElementById('payBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spin"></span> Opening secure checkout…';
+    fetch(API + '/pay', { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (res) {
+        if (res.ok && res.d.checkoutUrl) { location.href = res.d.checkoutUrl; return; }
+        btn.disabled = false;
+        btn.innerHTML = ICON_LOCK + ' Try again';
+        var n = document.createElement('div');
+        n.className = 'note bad';
+        n.style.marginTop = '14px';
+        n.textContent = res.d.error || 'Could not start the payment. Please try again.';
+        btn.parentNode.insertBefore(n, btn.nextSibling);
+      })
+      .catch(function () {
+        btn.disabled = false;
+        btn.innerHTML = ICON_LOCK + ' Try again';
+      });
+  }
+
+  function load(quiet) {
+    return fetch(API + '/status', { headers: { 'Accept': 'application/json' } })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d && d.error) throw new Error(d.error);
+        state = d;
+        render();
+      })
+      .catch(function () {
+        if (quiet) return;
+        card.innerHTML =
+          '<div class="icon warn">' + ICON_WARN + '</div>' +
+          '<h1>Service temporarily limited</h1>' +
+          '<p class="lede">Your internet service has been limited because of an unsettled balance. Please settle your account to restore service.</p>' +
+          '<div class="note">We could not load your account details just now. Please try again in a moment.</div>';
+      });
+  }
+
+  load();
+
+  // After a payment the webhook lifts the restriction on its own; poll so the customer
+  // sees it happen instead of wondering whether to call. Stops as soon as the hold is
+  // gone, and gives up after five minutes rather than polling this page forever.
+  if (justPaid) {
+    var tries = 0;
+    var timer = setInterval(function () {
+      if (++tries > 30 || (state && state.restricted === false)) { clearInterval(timer); return; }
+      load(true);
+    }, 10000);
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+<script>
+// ── Secure Fetch Interceptor ─────────────────────────────
+(function(){
+  const _fetch = window.fetch;
+  window.fetch = function(url, opts) {
+    opts = opts || {};
+    const urlStr = typeof url === 'string' ? url : (url.url || '');
+    if (urlStr.startsWith('/api') || urlStr.includes('/api/')) {
+      opts.credentials = 'include';
+      const method = (opts.method || 'GET').toUpperCase();
+      if (['POST','PUT','DELETE','PATCH'].includes(method)) {
+        opts.headers = opts.headers || {};
+        if (!opts.headers['X-CSRF-Token'] && !opts.headers['x-csrf-token']) {
+          const m = document.cookie.match(/j2_csrf=([^;]+)/);
+          if (m) opts.headers['X-CSRF-Token'] = m[1];
+        }
+      }
+    }
+    return _fetch.call(this, url, opts);
+  };
+})();
+</script>
+<meta charset="UTF-8"><title>Payment Complete</title></head>
+<body>
+<script>
+  const inv = new URLSearchParams(window.location.search).get('invoice') || '';
+  if (window.opener && !window.opener.closed) {
+    window.opener.postMessage({ type: 'XENDIT_PAYMENT_SUCCESS', invoice: inv }, '*');
+  }
+  window.close();
+</script>
+</body>
+</html>

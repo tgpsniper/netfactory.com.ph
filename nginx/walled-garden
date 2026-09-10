@@ -1,0 +1,22 @@
+# Captive-portal landing for restricted subscribers.
+#
+# The router dst-nats a restricted customer's plain-HTTP traffic here (port 8081), which
+# is what phones and laptops probe to detect a captive portal — catching that probe is
+# what makes "Sign in to network" appear instead of a wall of timeouts.
+#
+# 8081 rather than 80 on purpose: port 80 on this host is 00-catchall, which answers
+# scanners with 444. Pointing captive probes at it would mean either breaking the
+# redirect or changing how this server answers the open internet. Separate listener,
+# separate concern.
+#
+# 302 not 301: a permanent redirect would be cached by the browser and would keep firing
+# after the customer has paid and been restored.
+server {
+    listen 8081;
+    listen [::]:8081;
+    server_name _;
+
+    access_log /var/log/nginx/walled-garden-access.log;
+
+    return 302 https://netfactory.com.ph/restricted/;
+}

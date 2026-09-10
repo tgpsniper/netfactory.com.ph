@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+// ── Secure Fetch Interceptor ─────────────────────────────
+(function(){
+  const _fetch = window.fetch;
+  window.fetch = function(url, opts) {
+    opts = opts || {};
+    const urlStr = typeof url === 'string' ? url : (url.url || '');
+    if (urlStr.startsWith('/api') || urlStr.includes('/api/')) {
+      opts.credentials = 'include';
+      const method = (opts.method || 'GET').toUpperCase();
+      if (['POST','PUT','DELETE','PATCH'].includes(method)) {
+        opts.headers = opts.headers || {};
+        if (!opts.headers['X-CSRF-Token'] && !opts.headers['x-csrf-token']) {
+          const m = document.cookie.match(/j2_csrf=([^;]+)/);
+          if (m) opts.headers['X-CSRF-Token'] = m[1];
+        }
+      }
+    }
+    return _fetch.call(this, url, opts);
+  };
+})();
+</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dev Tools — Netfactory</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,700;1,400&family=Syne:wght@700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<style>
+:root {
+  --bg:     #0b0b0b;
+  --bg2:    #111;
+  --bg3:    #181818;
+  --bg4:    #1e1e1e;
+  --border: #222;
+  --border2:#2e2e2e;
+  --green:  #00e676;
+  --green2: #00c853;
+  --blue:   #40c4ff;
+  --yellow: #ffd740;
+  --red:    #ff5252;
+  --purple: #b388ff;
+  --cyan:   #18ffff;
+  --orange: #ff9100;
+  --pink:   #ff4081;
+  --text:   #e0e0e0;
+  --text2:  #888;
+  --text3:  #444;
+  --mono:   'JetBrains Mono', 'Courier New', monospace;
+  --sans:   'Syne', sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden}
+body{background:var(--bg);color:var(--text);font-family:var(--mono);display:flex;flex-direction:column}
+
+/* TOPBAR */
+.topbar{height:48px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 20px;flex-shrink:0}
+.tb-left{display:flex;align-items:center;gap:12px}
+.tb-logo{width:28px;height:28px;border-radius:7px;background:linear-gradient(135deg,var(--green),var(--green2));display:flex;align-items:center;justify-content:center;font-family:var(--sans);font-size:10px;font-weight:900;color:#000}
+.tb-title{font-family:var(--sans);font-size:14px;font-weight:800;color:var(--text)}
+.tb-badge{font-size:10px;color:var(--text3);border:1px solid var(--border2);padding:2px 8px;border-radius:4px;letter-spacing:.5px}
+.tb-right{display:flex;align-items:center;gap:12px}
+.conn-dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:pulse 2s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.conn-dot.err{background:var(--red);box-shadow:0 0 8px var(--red)}
+.tb-user{font-size:11px;color:var(--text2)}
+.tb-btn{padding:4px 12px;border-radius:5px;border:1px solid var(--border2);background:transparent;color:var(--text2);font-family:var(--mono);font-size:10px;cursor:pointer;letter-spacing:.5px;transition:all .15s;text-decoration:none;display:inline-block}
+.tb-btn:hover{border-color:var(--text2);color:var(--text)}
+
+/* LAYOUT */
+.layout{display:flex;flex:1;overflow:hidden}
+
+/* SIDEBAR */
+.sidebar{width:270px;flex-shrink:0;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
+.sb-head{padding:12px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.sb-label{font-size:9px;font-weight:700;color:var(--text3);letter-spacing:2px;text-transform:uppercase}
+.btn-new{padding:4px 12px;border-radius:5px;border:1px solid var(--green);background:transparent;color:var(--green);font-family:var(--mono);font-size:10px;font-weight:700;cursor:pointer;transition:all .15s;letter-spacing:.5px}
+.btn-new:hover{background:var(--green);color:#000}
+.sb-body{flex:1;overflow-y:auto;padding:8px}
+.sb-body::-webkit-scrollbar{width:3px}
+.sb-body::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
+
+.grp-hdr{font-size:9px;font-weight:700;color:var(--text3);letter-spacing:1.5px;text-transform:uppercase;padding:10px 8px 5px;display:flex;align-items:center;gap:6px}
+.grp-hdr::after{content:'';flex:1;height:1px;background:var(--border)}
+
+.cmd-item{width:100%;padding:9px 10px;border-radius:7px;border:1px solid transparent;background:transparent;color:var(--text);font-family:var(--mono);font-size:11px;cursor:pointer;text-align:left;display:flex;align-items:center;gap:9px;margin-bottom:2px;transition:all .12s;position:relative;flex-wrap:nowrap}
+.cmd-item:hover{background:var(--bg3);border-color:var(--border2)}
+.cmd-item.busy{background:rgba(255,215,64,.06);border-color:rgba(255,215,64,.25);pointer-events:none}
+.ci-icon{font-size:15px;flex-shrink:0;line-height:1}
+.ci-body{flex:1;min-width:0}
+.ci-name{font-weight:700;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ci-sub{font-size:9px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+.ci-actions{display:flex;gap:3px;flex-shrink:0;align-items:center;opacity:0;transition:opacity .12s}
+.cmd-item:hover .ci-actions{opacity:1}
+.ci-act{width:20px;height:20px;border-radius:4px;border:1px solid var(--border2);background:var(--bg);color:var(--text2);font-size:9px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .12s}
+.ci-act:hover{border-color:var(--red);color:var(--red)}
+.ci-act.e:hover{border-color:var(--blue);color:var(--blue)}
+.ci-spin{width:8px;height:8px;border-radius:50%;border:1.5px solid var(--yellow);border-top-color:transparent;animation:spin .6s linear infinite;flex-shrink:0}
+@keyframes spin{to{transform:rotate(360deg)}}
+.sb-empty{padding:30px 16px;text-align:center;color:var(--text3);font-size:11px;line-height:1.8}
+.sb-empty .ei{font-size:28px;margin-bottom:8px}
+
+/* MAIN */
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+.term-chrome{padding:10px 18px;border-bottom:1px solid var(--border);background:var(--bg2);display:flex;align-items:center;gap:10px;flex-shrink:0}
+.mac-dots{display:flex;gap:5px}
+.mac-dot{width:11px;height:11px;border-radius:50%}
+.mac-dot.r{background:#ff5f57}.mac-dot.y{background:#febc2e}.mac-dot.g{background:#28c840}
+.term-path{flex:1;font-size:11px;color:var(--text2)}
+.term-btns{display:flex;gap:6px}
+.btn-sm{padding:3px 10px;border-radius:4px;border:1px solid var(--border2);background:transparent;color:var(--text3);font-family:var(--mono);font-size:10px;cursor:pointer;transition:all .12s}
+.btn-sm:hover{border-color:var(--text2);color:var(--text)}
+
+.terminal{flex:1;overflow-y:auto;padding:14px 20px;background:var(--bg);font-size:12px;line-height:1.75}
+.terminal::-webkit-scrollbar{width:5px}
+.terminal::-webkit-scrollbar-thumb{background:var(--bg3);border-radius:3px}
+.t-banner{color:var(--text3);margin-bottom:10px}
+.t-banner .big{color:var(--green);font-weight:700;font-size:13px;letter-spacing:.5px}
+.t-div{color:var(--text3);margin-bottom:14px}
+
+.t-cmdrow{display:flex;align-items:flex-start;margin-bottom:1px}
+.t-prompt{color:var(--text3);white-space:nowrap;user-select:none;flex-shrink:0}
+.t-prompt .pu{color:var(--green);font-weight:700}
+.t-prompt .ph{color:var(--blue)}
+.t-cmd{color:var(--text);word-break:break-all}
+
+.t-out{white-space:pre-wrap;word-break:break-all;font-size:11.5px;padding:2px 0 10px;color:#aaa}
+.t-out.err{color:var(--red)}
+.t-out.info{color:var(--text3);font-style:italic}
+.t-badge{display:inline-flex;align-items:center;gap:6px;font-size:10px;font-weight:700;padding:2px 9px;border-radius:4px;margin:3px 0 12px;letter-spacing:.3px}
+.t-badge.ok{background:rgba(0,230,118,.1);color:var(--green);border:1px solid rgba(0,230,118,.2)}
+.t-badge.fail{background:rgba(255,82,82,.1);color:var(--red);border:1px solid rgba(255,82,82,.2)}
+.t-dur{font-size:9px;color:var(--text3);font-weight:400;margin-left:4px}
+
+/* INPUT BAR */
+.input-bar{border-top:1px solid var(--border);padding:10px 18px;background:var(--bg2);display:flex;align-items:center;gap:8px;flex-shrink:0}
+.prompt-sym{font-size:12px;color:var(--green);font-weight:700;white-space:nowrap;user-select:none}
+.cmd-input{flex:1;background:transparent;border:none;outline:none;color:var(--text);font-family:var(--mono);font-size:12px;caret-color:var(--green)}
+.cmd-input::placeholder{color:var(--text3)}
+.btn-exec{padding:7px 18px;border-radius:6px;border:1px solid var(--green);background:transparent;color:var(--green);font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;transition:all .15s;white-space:nowrap}
+.btn-exec:hover{background:var(--green);color:#000}
+.btn-exec:disabled{opacity:.3;cursor:not-allowed}
+
+/* MODAL */
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.85);backdrop-filter:blur(8px);z-index:500;display:flex;align-items:center;justify-content:center;padding:20px}
+.modal{background:var(--bg2);border:1px solid var(--border2);border-radius:14px;padding:26px;width:100%;max-width:620px;box-shadow:0 30px 100px rgba(0,0,0,.7)}
+.modal-title{font-family:var(--sans);font-size:17px;font-weight:800;color:var(--text);margin-bottom:20px}
+.frow{display:grid;gap:13px}
+.fgrp{display:flex;flex-direction:column;gap:5px}
+.fgrp.two{display:grid;grid-template-columns:64px 1fr;gap:10px;align-items:end}
+.flbl{font-size:9px;font-weight:700;color:var(--text3);letter-spacing:1.5px;text-transform:uppercase}
+.finput{width:100%;padding:8px 11px;border-radius:6px;border:1px solid var(--border2);background:var(--bg3);color:var(--text);font-family:var(--mono);font-size:11.5px;outline:none;transition:border-color .15s}
+.finput:focus{border-color:var(--green)}
+.finput.ic{font-size:18px;text-align:center;padding:7px 4px}
+.finput.mc{font-family:var(--mono)}
+.clrs{display:flex;gap:7px;flex-wrap:wrap;margin-top:2px}
+.clr{width:24px;height:24px;border-radius:5px;cursor:pointer;border:2px solid transparent;transition:all .12s}
+.clr.on{border-color:#fff;box-shadow:0 0 0 2px var(--cc)}
+.mfoot{display:flex;gap:8px;justify-content:flex-end;margin-top:22px}
+.btn-cancel{padding:8px 18px;border-radius:6px;border:1px solid var(--border2);background:transparent;color:var(--text2);font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;transition:all .15s}
+.btn-cancel:hover{border-color:var(--text2);color:var(--text)}
+.btn-save{padding:8px 22px;border-radius:6px;border:none;background:var(--green);color:#000;font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;transition:all .15s}
+.btn-save:hover{background:var(--green2)}
+.btn-save:disabled{opacity:.35;cursor:not-allowed}
+
+/* AUTH */
+.auth{position:fixed;inset:0;background:var(--bg);z-index:999;display:flex;align-items:center;justify-content:center}
+.auth-box{background:var(--bg2);border:1px solid var(--border2);border-radius:16px;padding:36px;width:360px;box-shadow:0 40px 120px rgba(0,0,0,.6)}
+.auth-logo{width:46px;height:46px;border-radius:11px;margin:0 auto 18px;background:linear-gradient(135deg,var(--green),var(--green2));display:flex;align-items:center;justify-content:center;font-family:var(--sans);font-size:14px;font-weight:900;color:#000}
+.auth-title{font-family:var(--sans);font-size:19px;font-weight:800;color:var(--text);text-align:center;margin-bottom:4px}
+.auth-sub{font-size:10px;color:var(--text3);text-align:center;margin-bottom:26px;letter-spacing:.5px}
+.auth-err{background:rgba(255,82,82,.1);border:1px solid rgba(255,82,82,.3);color:var(--red);font-size:10px;padding:7px 12px;border-radius:5px;margin-bottom:14px;text-align:center}
+.auth-frow{display:grid;gap:12px}
+</style>
+</head>
+<body>
+
+<!-- AUTH SCREEN -->
+<div class="auth" id="authWrap">
+  <div class="auth-box">
+    <div class="auth-logo">NF</div>
+    <div class="auth-title">Dev Tools</div>
+    <div class="auth-sub">NETFACTORY · ADMIN ACCESS ONLY</div>
+    <div class="auth-err" id="authErr" style="display:none"></div>
+    <div class="auth-frow">
+      <div class="fgrp"><label class="flbl">Username</label><input class="finput" id="aUser" placeholder="admin" autocomplete="username"></div>
+      <div class="fgrp"><label class="flbl">Password</label><input class="finput" id="aPass" type="password" placeholder="••••••••" autocomplete="current-password"></div>
+      <button class="btn-save" style="width:100%;padding:11px;font-size:12px" id="aBtn" onclick="doLogin()">Sign In →</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOPBAR -->
+<div class="topbar">
+  <div class="tb-left">
+    <div class="tb-logo">NF</div>
+    <span class="tb-title">Dev Tools</span>
+    <span class="tb-badge">maintenance terminal</span>
+  </div>
+  <div class="tb-right">
+    <div class="conn-dot" id="connDot"></div>
+    <span class="tb-user" id="tbUser">–</span>
+    <a class="tb-btn" href="/crm/">← CRM</a>
+    <button class="tb-btn" onclick="doLogout()">Logout</button>
+  </div>
+</div>
+
+<!-- LAYOUT -->
+<div class="layout">
+
+  <!-- SIDEBAR: command buttons -->
+  <div class="sidebar">
+    <div class="sb-head">
+      <span class="sb-label">Commands</span>
+      <button class="btn-new" onclick="openAdd()">+ New</button>
+    </div>
+    <div class="sb-body" id="sbBody">
+      <div class="sb-empty"><div class="ei"><i class="fas fa-bolt"></i></div>No commands yet.<br>Click <b style="color:var(--text2)">+ New</b> to add one.</div>
+    </div>
+  </div>
+
+  <!-- TERMINAL -->
+  <div class="main">
+    <div class="term-chrome">
+      <div class="mac-dots">
+        <div class="mac-dot r"></div><div class="mac-dot y"></div><div class="mac-dot g"></div>
+      </div>
+      <span class="term-path" id="termPath">root@netfactory: ~</span>
+      <div class="term-btns">
+        <button class="btn-sm" onclick="clearTerm()">clear</button>
+        <button class="btn-sm" onclick="scrollBot()">↓ end</button>
+      </div>
+    </div>
+
+    <div class="terminal" id="term">
+      <div class="t-banner">
+        <div class="big">Netfactory Dev Tools v2.0</div>
+        <div>Connected · ubuntu · Ubuntu 24.04 LTS</div>
+      </div>
+      <div class="t-div">──────────────────────────────────────────────────────</div>
+    </div>
+
+    <div class="input-bar">
+      <span class="prompt-sym" id="promptSym">root@netfactory:~#</span>
+      <input class="cmd-input" id="cmdInput" placeholder="type a command and press Enter…" autocomplete="off" spellcheck="false">
+      <button class="btn-exec" id="execBtn" onclick="runRaw()">Run ▶</button>
+    </div>
+  </div>
+</div>
+
+<!-- ADD / EDIT MODAL -->
+<div class="overlay" id="modal" style="display:none" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-title" id="modalTitle">+ New Command</div>
+    <div class="frow">
+      <div class="fgrp two">
+        <div class="fgrp"><label class="flbl">Icon (FA class)</label><input class="finput ic" id="fIcon" value="fas fa-bolt" maxlength="30" style="font-size:11px"></div>
+        <div class="fgrp"><label class="flbl">Label *</label><input class="finput" id="fLabel" placeholder="Restart API"></div>
+      </div>
+      <div class="fgrp">
+        <label class="flbl">Command *</label>
+        <textarea class="finput mc" id="fCmd" placeholder="sudo pm2 restart j2-api&#10;&#10;# Multi-line supported:&#10;sudo -u postgres psql -d j2network << 'EOF'&#10;SELECT * FROM subscribers;&#10;EOF" rows="6" style="resize:vertical;line-height:1.6;font-size:11px"></textarea>
+      </div>
+      <div class="fgrp"><label class="flbl">Description / Expected Result</label><textarea class="finput" id="fDesc" placeholder="What does this do? What output is expected?" rows="3" style="resize:vertical;line-height:1.6;font-size:11px"></textarea></div>
+      <div class="fgrp">
+        <label class="flbl">Group</label>
+        <input class="finput" id="fGroup" list="grpList" placeholder="API / Database / System…">
+        <datalist id="grpList"></datalist>
+      </div>
+      <div class="fgrp"><label class="flbl">Color</label><div class="clrs" id="clrRow"></div></div>
+    </div>
+    <div class="mfoot">
+      <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+      <button class="btn-save" id="btnSave" onclick="saveCmd()">Save Command</button>
+    </div>
+  </div>
+</div>
+
+<!-- CONFIRM EXECUTE MODAL -->
+<div class="overlay" id="confirmModal" style="display:none">
+  <div class="modal" style="max-width:520px">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px">
+      <span style="font-size:28px"><i class="fas fa-triangle-exclamation" style="color:var(--yellow)"></i></span>
+      <div>
+        <div class="modal-title" style="margin-bottom:2px">Execute Command?</div>
+        <div style="font-size:11px;color:var(--text3)">This will run on the server immediately.</div>
+      </div>
+    </div>
+    <div style="margin-bottom:14px">
+      <div style="font-size:9px;font-weight:700;color:var(--text3);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:6px">Command</div>
+      <pre id="confirmCmd" style="background:var(--bg);border:1px solid var(--border2);border-radius:7px;padding:10px 12px;font-size:11px;color:var(--text);white-space:pre-wrap;word-break:break-all;max-height:160px;overflow-y:auto;font-family:var(--mono);line-height:1.6"></pre>
+    </div>
+    <div id="confirmDescWrap" style="margin-bottom:6px">
+      <div style="font-size:9px;font-weight:700;color:var(--text3);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:6px">Expected Result</div>
+      <pre id="confirmDesc" style="background:var(--bg);border:1px solid var(--border2);border-radius:7px;padding:10px 12px;font-size:11px;color:var(--text2);white-space:pre-wrap;word-break:break-all;max-height:100px;overflow-y:auto;font-family:var(--mono);line-height:1.6"></pre>
+    </div>
+    <div class="mfoot">
+      <button class="btn-cancel" onclick="closeConfirm()">Cancel</button>
+      <button class="btn-save" id="confirmExecBtn" style="background:var(--yellow);color:#000" onclick="confirmExec()"><i class="fas fa-bolt"></i> Execute</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API     = '/api/devtools';
+const PALETTE = ['#00e676','#40c4ff','#ffd740','#ff5252','#b388ff','#ff9100','#18ffff','#ff4081','#69ff47'];
+
+let token  = localStorage.getItem('crm_token');
+let cmds   = [];
+let editId = null;
+let selClr = PALETTE[0];
+let busy   = false;
+let hist   = [];
+let histI  = -1;
+
+// ── AUTH ──────────────────────────────────────────────────────────────────────
+async function doLogin() {
+  const u = $('aUser').value.trim(), p = $('aPass').value.trim();
+  if (!u || !p) return;
+  $('aBtn').textContent = 'Signing in…'; $('aBtn').disabled = true;
+  try {
+    const r = await fetch('/api/admin/login', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ username:u, password:p })
+    });
+    const d = await r.json();
+    if (d.token) {
+      token = d.token; localStorage.setItem('crm_token', token);
+      $('authWrap').style.display = 'none'; boot();
+    } else authErr(d.error || 'Invalid credentials');
+  } catch(e) { authErr('Connection failed'); }
+  $('aBtn').textContent = 'Sign In →'; $('aBtn').disabled = false;
+}
+$('aPass').addEventListener('keydown', e => { if(e.key==='Enter') doLogin(); });
+function authErr(m) { $('authErr').textContent=m; $('authErr').style.display='block'; }
+function doLogout() { localStorage.removeItem('crm_token'); location.reload(); }
+
+// ── BOOT ──────────────────────────────────────────────────────────────────────
+async function boot() {
+  $('authWrap').style.display = 'none';
+  try {
+    const pl = JSON.parse(atob(token.split('.')[1]));
+    const uname = pl.username || pl.fullName || 'root';
+    $('tbUser').textContent = uname;
+    $('termPath').textContent = `${uname}@netfactory: ~`;
+    $('promptSym').textContent = `${uname}@netfactory:~#`;
+  } catch(e){}
+  await loadCmds();
+  $('cmdInput').focus();
+}
+
+// ── API HELPERS ───────────────────────────────────────────────────────────────
+function ah() { return { 'Content-Type':'application/json', Authorization:`Bearer ${token}` }; }
+
+async function loadCmds() {
+  try {
+    const r = await fetch(`${API}/buttons`, { headers: ah() });
+    if (r.status===401) { doLogout(); return; }
+    if (r.status===403) { termOut('Access denied. Contact superadmin to enable Dev Tools access.','err'); return; }
+    const d = await r.json();
+    cmds = d.buttons || []; renderSidebar(); setConn(true);
+  } catch(e) { setConn(false); termOut('Failed to connect to API.','err'); }
+}
+
+async function persist() {
+  await fetch(`${API}/buttons`, { method:'POST', headers: ah(), body: JSON.stringify({ buttons:cmds }) });
+}
+
+// ── SIDEBAR ───────────────────────────────────────────────────────────────────
+function renderSidebar() {
+  const sb = $('sbBody');
+  if (!cmds.length) {
+    sb.innerHTML = `<div class="sb-empty"><div class="ei"><i class="fas fa-bolt"></i></div>No commands yet.<br>Click <b style="color:var(--text2)">+ New</b> to add one.</div>`;
+    return;
+  }
+  const groups = [...new Set(cmds.map(c => c.group||'General'))];
+  $('grpList').innerHTML = groups.map(g=>`<option value="${esc(g)}">`).join('');
+  sb.innerHTML = groups.map(g => `
+    <div class="grp-hdr">${esc(g)}</div>
+    ${cmds.filter(c=>(c.group||'General')===g).map(c=>`
+      <button class="cmd-item" id="ci-${c.id}" onclick="runCmd('${c.id}')" title="Command:\n${esc(c.command)}${c.description ? '\n\nExpected Result:\n' + esc(c.description) : ''}">
+        <span class="ci-icon">${c.icon&&c.icon.startsWith('fas ')?'<i class="'+c.icon+'"></i>':(c.icon||'<i class="fas fa-bolt"></i>')}</span>
+        <span class="ci-body">
+          <div class="ci-name" style="color:${c.color||'var(--text)'}">${esc(c.label)}</div>
+          ${c.description?`<div class="ci-sub">${esc(c.description)}</div>`:''}
+        </span>
+        <span class="ci-actions" onclick="event.stopPropagation()">
+          <span class="ci-act e" onclick="openEdit('${c.id}')"><i class="fas fa-pen" style="font-size:10px"></i></span>
+          <span class="ci-act" onclick="delCmd('${c.id}')">✕</span>
+        </span>
+      </button>
+    `).join('')}
+  `).join('');
+}
+
+// ── EXECUTE ───────────────────────────────────────────────────────────────────
+let pendingExec = null;
+
+function runCmd(cid) {
+  if (busy) return;
+  const cmd = cmds.find(c=>c.id===cid); if(!cmd) return;
+  // Show confirm modal
+  pendingExec = { command: cmd.command, cid: cmd.id };
+  $('confirmCmd').textContent = cmd.command;
+  if (cmd.description) {
+    $('confirmDesc').textContent = cmd.description;
+    $('confirmDescWrap').style.display = 'block';
+  } else {
+    $('confirmDescWrap').style.display = 'none';
+  }
+  $('confirmModal').style.display = 'flex';
+}
+
+function closeConfirm() {
+  $('confirmModal').style.display = 'none';
+  pendingExec = null;
+}
+
+async function confirmExec() {
+  if (!pendingExec) return;
+  const { command, cid } = pendingExec;
+  closeConfirm();
+  await exec(command, cid);
+}
+
+async function runRaw() {
+  const inp = $('cmdInput'), raw = inp.value.trim();
+  if (!raw || busy) return;
+  hist.unshift(raw); histI = -1; inp.value = '';
+  await exec(raw, null);
+}
+
+async function exec(command, cid) {
+  busy = true; $('execBtn').disabled = true;
+  const btn = cid ? $(`ci-${cid}`) : null;
+  if (btn) { btn.classList.add('busy'); btn.insertAdjacentHTML('beforeend','<span class="ci-spin"></span>'); }
+
+  const cleanup = () => {
+    if (btn) { btn.classList.remove('busy'); const sp=btn.querySelector('.ci-spin'); if(sp)sp.remove(); }
+    busy=false; $('execBtn').disabled=false; $('cmdInput').focus();
+  };
+
+  // print prompt + command
+  const row = document.createElement('div');
+  row.className = 't-cmdrow';
+  row.innerHTML = `<span class="t-prompt"><span class="pu">root</span>@<span class="ph">j2network</span>:~# </span><span class="t-cmd">${esc(command)}</span>`;
+  $('term').appendChild(row);
+  scrollBot();
+
+  const t0 = Date.now();
+  try {
+    const res = await fetch(`${API}/run`, { method:'POST', headers:ah(), body:JSON.stringify({command}) });
+    const ms  = Date.now()-t0;
+    const text = await res.text();
+    let d;
+    try {
+      d = JSON.parse(text);
+    } catch(je) {
+      termOut('Connection reset — server likely restarted successfully.', 'info');
+      termBadge(true, ms);
+      cleanup(); return;
+    }
+    if (d.stdout && d.stdout.trim()) termOut(d.stdout.trim(), d.detached ? 'info' : 'out');
+    if (d.stderr && d.stderr.trim()) termOut(d.stderr.trim(),'err');
+    termBadge(d.success!==false, ms);
+  } catch(e) {
+    termOut('Connection reset — server likely restarted successfully.', 'info');
+    termBadge(true, Date.now()-t0);
+  } finally {
+    cleanup();
+  }
+}
+
+// ── TERMINAL HELPERS ──────────────────────────────────────────────────────────
+function termOut(txt, cls) {
+  const p=document.createElement('pre');
+  p.className=`t-out${cls==='err'?' err':cls==='info'?' info':''}`;
+  p.textContent=txt; $('term').appendChild(p); scrollBot();
+}
+function termBadge(ok,ms) {
+  const d=document.createElement('div');
+  d.className=`t-badge ${ok?'ok':'fail'}`;
+  d.innerHTML=`${ok?'✓ exit 0':'✗ exit 1'}<span class="t-dur">${ms}ms</span>`;
+  $('term').appendChild(d); scrollBot();
+}
+function clearTerm() { $('term').innerHTML=`<div style="color:var(--text3);margin-bottom:8px;font-size:11px">── cleared ──</div>`; }
+function scrollBot() { const t=$('term'); t.scrollTop=t.scrollHeight; }
+
+// keyboard history
+$('cmdInput').addEventListener('keydown', e => {
+  if (e.key==='Enter') { runRaw(); return; }
+  if (e.key==='ArrowUp')   { e.preventDefault(); if(histI<hist.length-1){histI++;$('cmdInput').value=hist[histI]||'';} }
+  if (e.key==='ArrowDown') { e.preventDefault(); if(histI>0){histI--;$('cmdInput').value=hist[histI]||'';}else{histI=-1;$('cmdInput').value='';} }
+});
+
+// ── MODAL ─────────────────────────────────────────────────────────────────────
+function buildClrs(sel) {
+  $('clrRow').innerHTML = PALETTE.map(c=>
+    `<div class="clr${c===sel?' on':''}" style="background:${c};--cc:${c}" onclick="pickClr('${c}',this)"></div>`
+  ).join('');
+}
+function pickClr(c,el){ selClr=c; document.querySelectorAll('.clr').forEach(d=>d.classList.remove('on')); el.classList.add('on'); }
+
+function openAdd() {
+  editId=null; selClr=PALETTE[0];
+  $('modalTitle').textContent='+ New Command';
+  $('fIcon').value='fas fa-bolt'; $('fLabel').value=''; $('fCmd').value=''; $('fDesc').value=''; $('fGroup').value='';
+  buildClrs(selClr); $('modal').style.display='flex';
+  setTimeout(()=>$('fLabel').focus(),80);
+}
+function openEdit(cid) {
+  const cmd=cmds.find(c=>c.id===cid); if(!cmd) return;
+  editId=cid; selClr=cmd.color||PALETTE[0];
+  $('modalTitle').textContent='Edit Command';
+  $('fIcon').value=cmd.icon||'fas fa-bolt'; $('fLabel').value=cmd.label; $('fCmd').value=cmd.command;
+  $('fDesc').value=cmd.description||''; $('fGroup').value=cmd.group||'';
+  buildClrs(selClr); $('modal').style.display='flex';
+}
+function closeModal() { $('modal').style.display='none'; }
+
+async function saveCmd() {
+  const label=($('fLabel').value||'').trim(), command=($('fCmd').value||'').trim();
+  if (!label||!command) return;
+  const entry={ label, command, color:selClr, icon:$('fIcon').value||'fas fa-bolt', description:$('fDesc').value.trim(), group:$('fGroup').value.trim()||'General' };
+  if (editId) cmds=cmds.map(c=>c.id===editId?{...c,...entry}:c);
+  else cmds.push({...entry, id:Date.now().toString()});
+  await persist(); renderSidebar(); closeModal();
+}
+async function delCmd(cid) {
+  if (!confirm('Delete this command?')) return;
+  cmds=cmds.filter(c=>c.id!==cid); await persist(); renderSidebar();
+}
+
+// ── UTILS ─────────────────────────────────────────────────────────────────────
+function $(x){ return document.getElementById(x); }
+function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function setConn(ok){ $('connDot').className='conn-dot'+(ok?'':' err'); }
+
+// Allow Tab key inside command textarea for indentation
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { closeModal(); closeConfirm(); return; }
+  if (e.key === 'Tab' && document.activeElement.id === 'fCmd') {
+    e.preventDefault();
+    const ta = document.activeElement;
+    const s = ta.selectionStart, en = ta.selectionEnd;
+    ta.value = ta.value.substring(0, s) + '  ' + ta.value.substring(en);
+    ta.selectionStart = ta.selectionEnd = s + 2;
+  }
+});
+
+// ── START ─────────────────────────────────────────────────────────────────────
+// Accept token passed via URL param ?t= (from CRM sidebar link)
+(function() {
+  const params = new URLSearchParams(window.location.search);
+  const urlToken = params.get('t');
+  if (urlToken) {
+    token = urlToken;
+    localStorage.setItem('crm_token', token);
+    // Clean up URL without reload
+    window.history.replaceState({}, '', window.location.pathname);
+  }
+})();
+token ? boot() : ($('authWrap').style.display='flex');
+</script>
+</body>
+</html>

@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+(function(){
+  const _fetch = window.fetch;
+  window.fetch = function(url, opts) {
+    opts = opts || {};
+    const urlStr = typeof url === 'string' ? url : (url.url || '');
+    if (urlStr.startsWith('/api') || urlStr.includes('/api/')) {
+      opts.credentials = 'include';
+      const method = (opts.method || 'GET').toUpperCase();
+      if (['POST','PUT','DELETE','PATCH'].includes(method)) {
+        opts.headers = opts.headers || {};
+        if (!opts.headers['X-CSRF-Token'] && !opts.headers['x-csrf-token']) {
+          const m = document.cookie.match(/j2_csrf=([^;]+)/);
+          if (m) opts.headers['X-CSRF-Token'] = m[1];
+        }
+      }
+    }
+    return _fetch.call(this, url, opts);
+  };
+})();
+</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Netfactory — UAT Tools</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0c0e13; --surface: #13161d; --surface-2: #1a1e27; --border: #252a35;
+    --text: #e2e5eb; --text-dim: #7a8299; --text-muted: #4a5268;
+    --danger: #ef4444; --warning: #f59e0b; --accent: #3b82f6; --success: #22c55e;
+    --mono: 'JetBrains Mono', monospace; --sans: 'DM Sans', -apple-system, sans-serif;
+  }
+  body { font-family: var(--sans); background: var(--bg); color: var(--text); min-height: 100vh; padding: 32px; }
+  .container { max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 22px; font-weight: 800; margin-bottom: 4px; }
+  .subtitle { color: var(--text-dim); font-size: 13px; margin-bottom: 24px; }
+  .warning-banner { background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.25); border-radius: 12px; padding: 14px 18px; margin-bottom: 24px; display: flex; align-items: center; gap: 10px; font-size: 13px; color: #ef4444; font-weight: 600; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 24px; margin-bottom: 16px; }
+  .card-title { font-size: 15px; font-weight: 700; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; }
+  .card-desc { font-size: 12px; color: var(--text-dim); margin-bottom: 16px; }
+  .stats-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; margin-bottom: 16px; }
+  .stat-item { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+  .stat-label { font-size: 9px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .stat-value { font-size: 18px; font-weight: 800; font-family: var(--mono); margin-top: 2px; }
+  .stat-total { font-size: 12px; color: var(--text-dim); font-weight: 600; margin-bottom: 12px; }
+  .btn { padding: 10px 20px; font-size: 13px; font-weight: 700; border: none; border-radius: 8px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; font-family: var(--sans); transition: opacity 0.2s; }
+  .btn:hover { opacity: 0.85; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-danger { background: #ef4444; color: #fff; }
+  .btn-warning { background: #f59e0b; color: #fff; }
+  .btn-orange { background: #f97316; color: #fff; }
+  .btn-muted { background: var(--surface-2); color: var(--text-dim); border: 1px solid var(--border); }
+  .back-link { color: var(--text-dim); text-decoration: none; font-size: 13px; display: inline-flex; align-items: center; gap: 6px; margin-bottom: 20px; }
+  .back-link:hover { color: var(--text); }
+
+  /* Confirm modal */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.65); backdrop-filter: blur(6px); z-index: 500; display: flex; align-items: center; justify-content: center; padding: 16px; }
+  .modal-box { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 28px; max-width: 440px; width: 100%; box-shadow: 0 40px 80px rgba(0,0,0,.4); }
+  .modal-box h3 { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+  .modal-box p { font-size: 13px; color: var(--text-dim); margin-bottom: 16px; line-height: 1.5; }
+  .modal-box input { width: 100%; padding: 10px 14px; font-size: 14px; font-family: var(--mono); background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 16px; letter-spacing: 2px; text-align: center; }
+  .modal-box input:focus { outline: none; border-color: #ef4444; }
+  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+  .toast { position: fixed; top: 24px; right: 24px; z-index: 600; padding: 14px 20px; border-radius: 10px; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; animation: slideIn 0.3s ease; }
+  .toast-success { background: rgba(34,197,94,0.15); color: #22c55e; border: 1px solid rgba(34,197,94,0.3); }
+  .toast-error { background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.3); }
+  @keyframes slideIn { from { transform: translateX(40px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+  .preserved-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .preserved-tag { font-size: 10px; padding: 3px 8px; border-radius: 5px; background: rgba(34,197,94,0.1); color: #22c55e; border: 1px solid rgba(34,197,94,0.2); font-weight: 600; }
+  .loading { text-align: center; padding: 20px; color: var(--text-dim); font-size: 13px; }
+</style>
+</head>
+<body>
+
+<div class="container" id="app"></div>
+
+<script>
+(function() {
+  var token = null;
+  try { var c = document.cookie.match(/j2_token=([^;]+)/); if (c) token = c[1]; } catch(e){}
+  if (!token) { try { token = localStorage.getItem('j2_admin_token'); } catch(e){} }
+
+  function apiFetch(path, opts) {
+    opts = opts || {};
+    opts.headers = opts.headers || {};
+    opts.headers['Content-Type'] = 'application/json';
+    if (token) opts.headers['Authorization'] = 'Bearer ' + token;
+    return fetch('/api/admin/uat' + path, opts).then(function(r) {
+      return r.json().then(function(d) { if (!r.ok) throw new Error(d.error || 'Request failed'); return d; });
+    });
+  }
+
+  var app = document.getElementById('app');
+  var stats = null;
+  var loading = true;
+  var modal = null; // { title, desc, color, action }
+  var confirmInput = '';
+  var processing = false;
+  var toast = null;
+
+  function showToast(msg, type) {
+    toast = { msg: msg, type: type };
+    render();
+    setTimeout(function() { toast = null; render(); }, 4000);
+  }
+
+  function loadStats() {
+    loading = true; render();
+    apiFetch('/stats').then(function(d) { stats = d; loading = false; render(); }).catch(function(e) { loading = false; render(); showToast(e.message, 'error'); });
+  }
+
+  function openModal(title, desc, color, action) {
+    modal = { title: title, desc: desc, color: color, action: action };
+    confirmInput = '';
+    render();
+    setTimeout(function() { var inp = document.getElementById('confirmInput'); if (inp) inp.focus(); }, 100);
+  }
+
+  function closeModal() { modal = null; confirmInput = ''; render(); }
+
+  function doAction() {
+    if (confirmInput !== 'CONFIRM') return;
+    processing = true; render();
+    apiFetch('/' + modal.action, { method: 'DELETE', body: JSON.stringify({ confirmation: 'CONFIRM' }) })
+      .then(function(d) { processing = false; closeModal(); showToast(d.message || 'Done!', 'success'); loadStats(); })
+      .catch(function(e) { processing = false; render(); showToast(e.message, 'error'); });
+  }
+
+  function render() {
+    var h = '';
+
+    // Toast
+    if (toast) {
+      h += '<div class="toast toast-' + toast.type + '"><i class="fas ' + (toast.type === 'success' ? 'fa-circle-check' : 'fa-circle-xmark') + '"></i> ' + toast.msg + '</div>';
+    }
+
+    // Modal
+    if (modal) {
+      h += '<div class="modal-overlay" onclick="if(event.target===this)window._closeModal()">';
+      h += '<div class="modal-box">';
+      h += '<h3 style="color:' + modal.color + '"><i class="fas fa-triangle-exclamation" style="margin-right:6px"></i> ' + modal.title + '</h3>';
+      h += '<p>' + modal.desc + '</p>';
+      h += '<p style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:6px">Type <span style="color:#ef4444;font-family:var(--mono);letter-spacing:1px">CONFIRM</span> to proceed:</p>';
+      h += '<input id="confirmInput" value="' + confirmInput + '" placeholder="CONFIRM" oninput="window._setConfirm(this.value)" onkeydown="if(event.key===\'Enter\')window._doAction()" autocomplete="off" spellcheck="false">';
+      h += '<div class="modal-actions">';
+      h += '<button class="btn btn-muted" onclick="window._closeModal()">Cancel</button>';
+      h += '<button id="confirmBtn" class="btn btn-danger" onclick="window._doAction()" ' + (confirmInput !== 'CONFIRM' || processing ? 'disabled' : '') + '><i class="fas fa-trash"></i> ' + (processing ? 'Processing...' : 'Confirm') + '</button>';
+      h += '</div></div></div>';
+    }
+
+    // Header
+    h += '<a class="back-link" href="/crm/"><i class="fas fa-arrow-left"></i> Back to CRM</a>';
+    h += '<h1><i class="fas fa-flask-vial" style="color:#f97316;margin-right:8px"></i> UAT Tools</h1>';
+    h += '<div class="subtitle">Data management tools for testing, rebranding, and clean slate operations.</div>';
+    h += '<div class="warning-banner"><i class="fas fa-triangle-exclamation"></i> These actions are irreversible. Ensure you have a database backup before proceeding.</div>';
+
+    if (loading) {
+      h += '<div class="loading"><i class="fas fa-spinner fa-spin"></i> Loading data stats...</div>';
+      app.innerHTML = h; return;
+    }
+
+    if (!stats) {
+      h += '<div class="card"><div style="color:var(--danger);font-size:13px"><i class="fas fa-circle-xmark"></i> Failed to load stats. Check API connection.</div></div>';
+      app.innerHTML = h; return;
+    }
+
+    // === Card 1: UAT Mode ===
+    h += '<div class="card">';
+    h += '<div class="card-title" style="color:#ef4444"><i class="fas fa-flask"></i> UAT Mode — Clear All Customer Data</div>';
+    h += '<div class="card-desc">Removes all subscribers, invoices, payments, tickets, RADIUS auth records, accounting transactions, and audit logs. Resets ID sequences.</div>';
+    h += '<div class="stat-total"><i class="fas fa-database"></i> ' + Number(stats.customerTotal).toLocaleString() + ' total records across ' + Object.keys(stats.customer).length + ' tables</div>';
+    h += '<div class="stats-grid">';
+    var custKeys = Object.keys(stats.customer);
+    for (var i = 0; i < custKeys.length; i++) {
+      var k = custKeys[i], v = stats.customer[k];
+      if (v > 0) h += '<div class="stat-item"><div class="stat-label">' + k.replace(/_/g, ' ') + '</div><div class="stat-value" style="color:#ef4444">' + Number(v).toLocaleString() + '</div></div>';
+    }
+    h += '</div>';
+    h += '<div style="margin-bottom:12px"><div style="font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-bottom:6px"><i class="fas fa-shield-check" style="color:#22c55e;margin-right:4px"></i> Preserved</div>';
+    h += '<div class="preserved-list">';
+    var preserved = ['Web Inquiry Account (00000000)','Plans','RADIUS Groups','Web Inquiries','ONU Inventory','Staff Accounts','System Settings','Payment Methods','NAS Devices','Firewall Rules','GIS Data','Vendors','Products','HR/Payroll','Fund Accounts','Website FAQ'];
+    for (var i = 0; i < preserved.length; i++) h += '<span class="preserved-tag">' + preserved[i] + '</span>';
+    h += '</div></div>';
+    h += '<button class="btn btn-danger" onclick="window._openModal(\'Clear All Customer Data\',\'This will permanently delete ALL subscriber records (except Web Inquiry account 00000000), invoices, payments, tickets, RADIUS auth entries, accounting transactions, and audit logs. The web inquiry account and its linked tickets are preserved.\',\'#ef4444\',\'customer-data\')"><i class="fas fa-trash"></i> Clear Customer Data</button>';
+    h += '</div>';
+
+    // === Card 2: Clear GIS ===
+    h += '<div class="card">';
+    h += '<div class="card-title" style="color:#f97316"><i class="fas fa-map"></i> Clear GIS / Network Infrastructure</div>';
+    h += '<div class="card-desc">Removes all FOC routes, fiber strands, closures, splices, NAPs, ports, and network nodes. Geographic reference data (municipalities, barangays) is preserved.</div>';
+    h += '<div class="stat-total"><i class="fas fa-database"></i> ' + Number(stats.gisTotal).toLocaleString() + ' total records across ' + Object.keys(stats.gis).length + ' tables</div>';
+    h += '<div class="stats-grid">';
+    var gisKeys = Object.keys(stats.gis);
+    for (var i = 0; i < gisKeys.length; i++) {
+      var k = gisKeys[i], v = stats.gis[k];
+      h += '<div class="stat-item"><div class="stat-label">' + k.replace(/_/g, ' ') + '</div><div class="stat-value" style="color:' + (v > 0 ? '#f97316' : 'var(--text-muted)') + '">' + Number(v).toLocaleString() + '</div></div>';
+    }
+    h += '</div>';
+    h += '<button class="btn btn-orange" onclick="window._openModal(\'Clear GIS Data\',\'This will permanently delete ALL fiber routes, strands, closures, splices, NAPs, ports, and network nodes. Municipality and barangay reference data will be preserved.\',\'#f97316\',\'gis-data\')"><i class="fas fa-trash"></i> Clear GIS Data</button>';
+    h += '</div>';
+
+    // === Card 3: Clear Plans ===
+    h += '<div class="card">';
+    h += '<div class="card-title" style="color:#f59e0b"><i class="fas fa-tags"></i> Clear All Plans</div>';
+    h += '<div class="card-desc">Removes all billing plans, plan features, plan notes, and RADIUS group reply/check mappings. You will need to recreate plans after this.</div>';
+    h += '<div class="stat-total"><i class="fas fa-database"></i> ' + Number(stats.plansTotal).toLocaleString() + ' total records across ' + Object.keys(stats.plans).length + ' tables</div>';
+    h += '<div class="stats-grid">';
+    var planKeys = Object.keys(stats.plans);
+    for (var i = 0; i < planKeys.length; i++) {
+      var k = planKeys[i], v = stats.plans[k];
+      h += '<div class="stat-item"><div class="stat-label">' + k.replace(/_/g, ' ') + '</div><div class="stat-value" style="color:' + (v > 0 ? '#f59e0b' : 'var(--text-muted)') + '">' + Number(v).toLocaleString() + '</div></div>';
+    }
+    h += '</div>';
+    h += '<button class="btn btn-warning" onclick="window._openModal(\'Clear All Plans\',\'This will permanently delete ALL billing plans, features, notes, and RADIUS group mappings. Existing subscribers referencing these plans will lose their plan association.\',\'#f59e0b\',\'plans\')"><i class="fas fa-trash"></i> Clear All Plans</button>';
+    h += '</div>';
+
+    // === Card 4: System Cleanup ===
+    h += '<div class="card" style="border-color:rgba(34,197,94,0.25)">';
+    h += '<div class="card-title" style="color:#22c55e"><i class="fas fa-broom"></i> System Cleanup</div>';
+    h += '<div class="card-desc">Removes old backup archives, .bak files, loose working copies, old helper scripts, SQL dumps in web root, and other unused files. Does NOT touch production code or data.</div>';
+    h += '<div style="margin-bottom:12px"><div style="font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-bottom:6px"><i class="fas fa-list-check" style="color:#22c55e;margin-right:4px"></i> What gets cleaned</div>';
+    h += '<div class="preserved-list">';
+    var cleanItems = ['API .bak files','Web root .bak files','SQL dumps in web root','Old backup archives','Loose working copies','Old helper scripts (0226/, 0228/)','Prisma backup schemas','.claude in web root','Old backup script (.old)','Web root backup dirs'];
+    for (var i = 0; i < cleanItems.length; i++) h += '<span class="preserved-tag" style="background:rgba(59,130,246,0.1);color:#3b82f6;border-color:rgba(59,130,246,0.2)">' + cleanItems[i] + '</span>';
+    h += '</div></div>';
+    h += '<div id="cleanupResult" style="display:none;margin-bottom:12px;padding:12px;border-radius:8px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.2);font-size:12px;color:#22c55e;font-family:var(--mono);white-space:pre-wrap;max-height:200px;overflow-y:auto"></div>';
+    h += '<button class="btn" style="background:#22c55e;color:#fff" onclick="window._runCleanup(this)" id="cleanupBtn"><i class="fas fa-broom"></i> Run Cleanup</button>';
+    h += '</div>';
+
+    // Refresh button
+    h += '<div style="text-align:center;margin-top:8px"><button class="btn btn-muted" onclick="window._loadStats()"><i class="fas fa-arrows-rotate"></i> Refresh Stats</button></div>';
+
+    app.innerHTML = h;
+  }
+
+  // Global handlers
+  window._openModal = openModal;
+  window._closeModal = closeModal;
+  window._doAction = doAction;
+  window._setConfirm = function(v) {
+    confirmInput = v;
+    var btn = document.getElementById('confirmBtn');
+    if (btn) btn.disabled = (v !== 'CONFIRM' || processing);
+  };
+  window._loadStats = loadStats;
+
+  window._runCleanup = function(btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Running cleanup...';
+    var resultDiv = document.getElementById('cleanupResult');
+
+    fetch('/api/admin/uat/cleanup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }
+    })
+    .then(function(r) { return r.json().then(function(d) { if (!r.ok) throw new Error(d.error || 'Cleanup failed'); return d; }); })
+    .then(function(d) {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fas fa-broom"></i> Run Cleanup';
+      showToast(d.message, 'success');
+      if (resultDiv) {
+        resultDiv.style.display = 'block';
+        resultDiv.textContent = d.output || 'Cleanup complete';
+      }
+    })
+    .catch(function(e) {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fas fa-broom"></i> Run Cleanup';
+      showToast(e.message, 'error');
+    });
+  };
+
+  loadStats();
+})();
+</script>
+</body>
+</html>

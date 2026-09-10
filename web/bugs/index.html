@@ -1,0 +1,829 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+// ── Secure Fetch Interceptor ─────────────────────────────
+(function(){
+  const _fetch = window.fetch;
+  window.fetch = function(url, opts) {
+    opts = opts || {};
+    const urlStr = typeof url === 'string' ? url : (url.url || '');
+    if (urlStr.startsWith('/api') || urlStr.includes('/api/')) {
+      opts.credentials = 'include';
+      const method = (opts.method || 'GET').toUpperCase();
+      if (['POST','PUT','DELETE','PATCH'].includes(method)) {
+        opts.headers = opts.headers || {};
+        if (!opts.headers['X-CSRF-Token'] && !opts.headers['x-csrf-token']) {
+          const m = document.cookie.match(/j2_csrf=([^;]+)/);
+          if (m) opts.headers['X-CSRF-Token'] = m[1];
+        }
+      }
+    }
+    return _fetch.call(this, url, opts);
+  };
+})();
+</script>
+
+<script>if(!localStorage.getItem("j2_admin_token")){window.location.href="/crm/?redirect=bugs";}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Netfactory — Bug Tracker</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<style>
+  *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+  :root {
+    --bg:#0B1121; --card:#111827; --card2:#0f172a; --border:#1e293b; --accent:#3b82f6; --accent-dk:#1d4ed8;
+    --text:#f1f5f9; --text-sec:#94a3b8; --text-muted:#64748b; --input-bg:#0f172a; --input-border:#1e293b;
+    --success:#16a34a; --danger:#dc2626; --warning:#ca8a04; --mono:'JetBrains Mono',monospace; --sans:'DM Sans',-apple-system,sans-serif;
+  }
+  body { font-family:var(--sans); background:var(--bg); color:var(--text); min-height:100vh; }
+  ::-webkit-scrollbar { width:6px; height:6px; }
+  ::-webkit-scrollbar-track { background:transparent; }
+  ::-webkit-scrollbar-thumb { background:var(--border); border-radius:3px; }
+  @keyframes fadeIn { from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)} }
+  @keyframes pulse { 0%,100%{opacity:1}50%{opacity:.6} }
+  @keyframes spin { to{transform:rotate(360deg)} }
+
+  .header { background:var(--card); border-bottom:1px solid var(--border); padding:14px 24px; position:sticky; top:0; z-index:50; }
+  .header-inner { max-width:1400px; margin:0 auto; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; }
+  .header-left { display:flex; align-items:center; gap:12px; }
+  .logo { width:36px; height:36px; border-radius:10px; background:linear-gradient(135deg,var(--accent),var(--accent-dk)); display:flex; align-items:center; justify-content:center; color:#fff; font-weight:800; font-size:13px; font-family:var(--mono); }
+  .header-title { font-weight:800; font-size:16px; letter-spacing:-.3px; }
+  .header-sub { font-size:10px; color:var(--text-muted); letter-spacing:1px; text-transform:uppercase; }
+  .header-stats { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .header-stats span { font-size:12px; }
+  .crit-badge { padding:4px 12px; border-radius:8px; background:rgba(220,38,38,.1); color:#dc2626; font-size:11px; font-weight:700; animation:pulse 2s infinite; }
+
+  .btn { padding:10px 18px; border-radius:8px; border:1px solid var(--border); background:var(--card); color:var(--text); font-size:13px; font-weight:600; cursor:pointer; font-family:var(--sans); display:inline-flex; align-items:center; gap:6px; transition:all .15s; }
+  .btn:hover { border-color:var(--text-muted); }
+  .btn-sm { padding:6px 12px; font-size:11px; }
+  .btn-primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .btn-primary:hover { background:var(--accent-dk); }
+  .btn-danger { background:var(--danger); border-color:var(--danger); color:#fff; }
+  .btn-ghost { background:none; border:none; color:var(--text-sec); }
+  .btn-active { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .btn:disabled { opacity:.5; cursor:not-allowed; }
+  .icon-btn { background:none; border:none; cursor:pointer; font-size:14px; padding:4px; color:var(--text-sec); transition:color .15s; }
+  .icon-btn:hover { color:var(--accent); }
+  .icon-btn .fa-trash-can { color:var(--danger); opacity:.7; }
+  .icon-btn .fa-trash-can:hover { opacity:1; }
+  .icon-btn .fa-pen { color:var(--accent); opacity:.7; }
+  .icon-btn .fa-pen:hover { opacity:1; }
+
+  .card { background:var(--card); border-radius:12px; border:1px solid var(--border); }
+  .pill { display:inline-flex; align-items:center; gap:4px; padding:3px 10px; border-radius:20px; font-size:11px; font-weight:600; }
+  .pill-sm { padding:2px 8px; font-size:10px; }
+  .pill-dot { width:6px; height:6px; border-radius:50%; display:inline-block; }
+
+  input, select, textarea { width:100%; padding:10px 14px; background:var(--input-bg); border:1px solid var(--input-border); border-radius:8px; color:var(--text); font-size:13px; font-family:var(--sans); outline:none; resize:vertical; }
+  input:focus, select:focus, textarea:focus { border-color:var(--accent); box-shadow:0 0 0 2px rgba(59,130,246,.2); }
+  select { cursor:pointer; }
+  label { font-size:12px; font-weight:600; color:var(--text-sec); margin-bottom:6px; display:block; }
+  .required { color:#ef4444; }
+  .field { margin-bottom:16px; }
+
+  table { width:100%; border-collapse:collapse; }
+  th { padding:10px 12px; text-align:left; font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:.5px; border-bottom:2px solid var(--border); cursor:pointer; user-select:none; white-space:nowrap; background:var(--input-bg); }
+  td { padding:12px; font-size:12px; color:var(--text-sec); border-bottom:1px solid var(--border); }
+  tr.clickable { cursor:pointer; transition:background .15s; }
+  tr.clickable:hover { background:rgba(59,130,246,.04); }
+
+  .toast { position:fixed; top:20px; right:20px; z-index:999; padding:12px 20px; border-radius:10px; color:#fff; font-size:13px; font-weight:600; animation:fadeIn .2s; box-shadow:0 8px 30px rgba(0,0,0,.4); }
+  .toast-success { background:#16a34a; }
+  .toast-error { background:#dc2626; }
+
+  .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.7); backdrop-filter:blur(4px); z-index:900; display:flex; align-items:center; justify-content:center; padding:16px; }
+  .modal { background:var(--card); border-radius:16px; border:1px solid var(--border); padding:28px; max-width:400px; width:100%; text-align:center; }
+
+  .main { max-width:1400px; margin:0 auto; padding:24px; }
+  .action-bar { display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; flex-wrap:wrap; gap:12px; }
+  .filter-bar { display:flex; gap:12px; flex-wrap:wrap; align-items:center; padding:16px; margin-bottom:16px; }
+  .filter-bar input, .filter-bar select { width:auto; flex:none; }
+
+  .grid-2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:0 20px; }
+  .grid-3 { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:0 20px; }
+  .grid-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:24px; }
+  .grid-charts { display:grid; grid-template-columns:repeat(auto-fit,minmax(400px,1fr)); gap:16px; }
+
+  .stat-card { padding:18px; text-align:center; }
+  .stat-icon { font-size:24px; margin-bottom:6px; }
+  .stat-val { font-size:28px; font-weight:800; font-family:var(--mono); }
+  .stat-label { font-size:11px; color:var(--text-muted); font-weight:600; margin-top:4px; }
+
+  .detail-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; flex-wrap:wrap; gap:12px; }
+  .detail-back { background:none; border:none; color:var(--text-sec); cursor:pointer; font-size:20px; padding:4px; }
+  .detail-id { font-size:20px; font-weight:800; font-family:var(--mono); }
+  .detail-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:16px; margin-bottom:20px; }
+  .detail-row { display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--border); }
+  .detail-row-label { font-size:12px; color:var(--text-muted); font-weight:600; }
+  .detail-row-value { font-size:13px; }
+  .detail-block { padding:20px; margin-bottom:12px; }
+  .detail-block h3 { font-size:12px; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:1px; margin-bottom:10px; }
+  .detail-block pre { font-size:13px; white-space:pre-wrap; word-break:break-word; line-height:1.7; }
+  .detail-block pre.mono { font-family:var(--mono); background:var(--input-bg); padding:12px; border-radius:8px; font-size:12px; }
+  .status-btn { padding:8px 14px; border-radius:8px; border:1px solid var(--border); background:var(--input-bg); color:var(--text-sec); font-size:12px; font-weight:600; cursor:pointer; font-family:var(--sans); }
+
+  .empty { padding:60px 20px; text-align:center; }
+  .empty-icon { font-size:48px; margin-bottom:16px; color:var(--text-muted); }
+  .empty h3 { font-size:18px; font-weight:700; margin-bottom:8px; }
+  .empty p { font-size:13px; color:var(--text-muted); margin-bottom:20px; }
+
+  .error-banner { background:rgba(220,38,38,.08); border:1px solid rgba(220,38,38,.25); border-radius:12px; padding:14px 20px; margin-bottom:16px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; }
+  .error-banner span { font-size:13px; color:#fca5a5; }
+  .bar-track { height:6px; border-radius:3px; background:rgba(59,130,246,.08); }
+  .bar-fill { height:100%; border-radius:3px; transition:width .5s; }
+  .spinner { width:32px; height:32px; border:3px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin 1s linear infinite; margin:0 auto 16px; }
+
+  /* ── Upload zone ── */
+  .upload-zone { border:2px dashed var(--border); border-radius:12px; padding:24px; text-align:center; cursor:pointer; transition:all .2s; position:relative; }
+  .upload-zone:hover, .upload-zone.dragover { border-color:var(--accent); background:rgba(59,130,246,.04); }
+  .upload-zone input[type=file] { position:absolute; inset:0; opacity:0; cursor:pointer; }
+  .upload-zone-icon { font-size:32px; margin-bottom:8px; color:var(--accent); }
+  .upload-zone-text { font-size:13px; color:var(--text-sec); }
+  .upload-zone-hint { font-size:11px; color:var(--text-muted); margin-top:4px; }
+
+  /* ── Thumbnail grid ── */
+  .thumb-grid { display:flex; flex-wrap:wrap; gap:10px; margin-top:12px; }
+  .thumb-item { position:relative; width:100px; height:100px; border-radius:10px; overflow:hidden; border:1px solid var(--border); background:var(--card2); cursor:pointer; }
+  .thumb-item img { width:100%; height:100%; object-fit:cover; }
+  .thumb-item video { width:100%; height:100%; object-fit:cover; }
+  .thumb-item .thumb-overlay { position:absolute; inset:0; background:rgba(0,0,0,.5); opacity:0; transition:opacity .15s; display:flex; align-items:center; justify-content:center; gap:8px; }
+  .thumb-item:hover .thumb-overlay { opacity:1; }
+  .thumb-item .thumb-del { background:rgba(220,38,38,.85); color:#fff; border:none; border-radius:6px; padding:4px 8px; font-size:11px; font-weight:600; cursor:pointer; }
+  .thumb-item .thumb-view { background:rgba(255,255,255,.2); color:#fff; border:none; border-radius:6px; padding:4px 8px; font-size:11px; font-weight:600; cursor:pointer; }
+  .thumb-file-icon { width:100%; height:100%; display:flex; align-items:center; justify-content:center; font-size:28px; background:var(--card2); }
+  .thumb-name { position:absolute; bottom:0; left:0; right:0; padding:3px 6px; background:rgba(0,0,0,.7); font-size:9px; color:#ccc; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .thumb-uploading { position:absolute; inset:0; background:rgba(0,0,0,.6); display:flex; align-items:center; justify-content:center; }
+  .thumb-uploading .spinner { width:24px; height:24px; margin:0; border-width:2px; }
+
+  /* ── Detail screenshots ── */
+  .ss-grid { display:flex; flex-wrap:wrap; gap:12px; }
+  .ss-item { position:relative; width:140px; border-radius:10px; overflow:hidden; border:1px solid var(--border); cursor:pointer; }
+  .ss-item img { width:100%; height:100px; object-fit:cover; display:block; }
+  .ss-item video { width:100%; height:100px; object-fit:cover; display:block; }
+  .ss-item .ss-info { padding:6px 8px; background:var(--card); }
+  .ss-item .ss-name { font-size:10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--text-sec); }
+  .ss-item .ss-size { font-size:10px; color:var(--text-muted); }
+  .ss-item .ss-del { position:absolute; top:4px; right:4px; background:rgba(220,38,38,.85); border:none; border-radius:50%; width:22px; height:22px; display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:12px; color:#fff; opacity:0; transition:opacity .15s; }
+  .ss-item:hover .ss-del { opacity:1; }
+
+  /* ── Lightbox ── */
+  .lightbox { position:fixed; inset:0; background:rgba(0,0,0,.92); z-index:950; display:flex; align-items:center; justify-content:center; cursor:pointer; }
+  .lightbox img, .lightbox video { max-width:90vw; max-height:90vh; border-radius:8px; cursor:default; }
+  .lightbox-close { position:absolute; top:16px; right:20px; background:none; border:none; color:#fff; font-size:28px; cursor:pointer; }
+  .lightbox-nav { position:absolute; top:50%; transform:translateY(-50%); background:rgba(255,255,255,.1); border:none; color:#fff; font-size:24px; padding:12px 16px; cursor:pointer; border-radius:8px; }
+  .lightbox-prev { left:16px; }
+  .lightbox-next { right:16px; }
+  .lightbox-counter { position:absolute; bottom:20px; left:50%; transform:translateX(-50%); color:#fff; font-size:13px; background:rgba(0,0,0,.5); padding:6px 16px; border-radius:20px; }
+
+  @media(max-width:768px) {
+    .main { padding:16px; }
+    .filter-bar input { width:100%; }
+    .grid-charts { grid-template-columns:1fr; }
+    .detail-grid { grid-template-columns:1fr; }
+    .thumb-item { width:80px; height:80px; }
+  }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+
+<div id="toast" class="toast hidden"></div>
+
+<!-- Delete Modal -->
+<div id="deleteModal" class="modal-overlay hidden" onclick="if(event.target===this)closeDeleteModal()">
+  <div class="modal">
+    <div style="font-size:36px;margin-bottom:12px"><i class="fas fa-trash-can" style="color:var(--danger)"></i></div>
+    <h3 style="font-size:16px;font-weight:700;margin-bottom:8px">Delete <span id="deleteId"></span>?</h3>
+    <p style="font-size:13px;color:var(--text-sec);margin-bottom:20px">This will permanently remove it and all screenshots from the database.</p>
+    <div style="display:flex;gap:10px;justify-content:center">
+      <button class="btn" onclick="closeDeleteModal()">Cancel</button>
+      <button class="btn btn-danger" onclick="confirmDelete()">Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- Lightbox -->
+<div id="lightbox" class="lightbox hidden" onclick="if(event.target===this)closeLightbox()">
+  <button class="lightbox-close" onclick="closeLightbox()">✕</button>
+  <button class="lightbox-nav lightbox-prev" onclick="event.stopPropagation();navLightbox(-1)">‹</button>
+  <div id="lightboxContent"></div>
+  <button class="lightbox-nav lightbox-next" onclick="event.stopPropagation();navLightbox(1)">›</button>
+  <div class="lightbox-counter" id="lightboxCounter"></div>
+</div>
+
+<!-- Header -->
+<header class="header">
+  <div class="header-inner">
+    <div class="header-left">
+      <div class="logo">NF</div>
+      <div><div class="header-title">Bug Tracker</div><div class="header-sub">Netfactory QA — PostgreSQL</div></div>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px;">
+      <div class="header-stats" id="headerStats"></div>
+      <a href="/crm/" style="display:flex;align-items:center;gap:6px;color:var(--text-sec);text-decoration:none;font-size:13px;font-weight:600;padding:6px 14px;border-radius:8px;border:1px solid var(--border);transition:all .2s;white-space:nowrap;" onmouseover="this.style.color='var(--accent)';this.style.borderColor='var(--accent)'" onmouseout="this.style.color='var(--text-sec)';this.style.borderColor='var(--border)'"><i class="fas fa-arrow-left"></i> Back to CRM</a>
+    </div>
+  </div>
+</header>
+
+<!-- Main -->
+<div class="main">
+  <div id="errorBanner" class="error-banner hidden"><span id="errorMsg"></span><button class="btn btn-sm" onclick="retryLoad()">Retry</button></div>
+
+  <div class="action-bar">
+    <div style="display:flex;gap:6px">
+      <button class="btn btn-active" id="tabList" onclick="showView('list')"><i class="fas fa-list"></i> Bug List</button>
+      <button class="btn" id="tabForm" onclick="showView('form')"><i class="fas fa-plus"></i> Report Bug</button>
+      <button class="btn" id="tabStats" onclick="showView('stats')"><i class="fas fa-chart-bar"></i> Summary</button>
+    </div>
+    <button class="btn btn-sm" onclick="exportCSV()"><i class="fas fa-download"></i> Export CSV</button>
+  </div>
+
+  <!-- LIST -->
+  <div id="viewList">
+    <div class="card filter-bar">
+      <input id="searchInput" style="width:220px" placeholder="Search bugs..." oninput="debounceLoad()">
+      <select id="filterSev" style="width:140px" onchange="loadBugs()"><option value="All">All Severity</option><option>Critical</option><option>High</option><option>Medium</option><option>Low</option></select>
+      <select id="filterStat" style="width:140px" onchange="loadBugs()"><option value="All">All Status</option><option>Open</option><option>In Progress</option><option>Fixed</option><option>Verified</option><option>Closed</option><option>Won't Fix</option></select>
+      <select id="filterMod" style="width:160px" onchange="loadBugs()"><option value="All">All Modules</option></select>
+      <button class="btn btn-sm btn-ghost hidden" id="clearFilters" onclick="clearAllFilters()"><i class="fas fa-times"></i> Clear</button>
+      <span style="font-size:12px;color:var(--text-muted);margin-left:auto" id="bugCount"></span>
+    </div>
+    <div id="bugTable"></div>
+  </div>
+
+  <!-- DETAIL -->
+  <div id="viewDetail" class="hidden"></div>
+
+  <!-- FORM -->
+  <div id="viewForm" class="hidden">
+    <div class="card" style="padding:28px;animation:fadeIn .3s">
+      <h2 id="formTitle" style="font-size:18px;font-weight:800;margin-bottom:4px">Report New Bug</h2>
+      <p id="formSubtitle" style="font-size:13px;color:var(--text-muted);margin-bottom:24px">Fields marked * are required. Bug ID is auto-generated.</p>
+      <div class="grid-2">
+        <div class="field"><label>Tester Name</label><div id="fTester" style="padding:10px 14px;background:var(--bg-alt);border:1px solid var(--border);border-radius:8px;font-size:14px;color:var(--text);font-weight:600;min-height:40px"></div></div>
+        <div class="field"><label>Date Found</label><div id="fDate" style="padding:10px 14px;background:var(--bg-alt);border:1px solid var(--border);border-radius:8px;font-size:14px;color:var(--text);font-weight:600;min-height:40px"></div></div>
+      </div>
+      <div class="grid-3">
+        <div class="field"><label>Module <span class="required">*</span></label><select id="fModule"><option value="">— Select module —</option></select></div>
+        <div class="field"><label>Severity <span class="required">*</span></label><select id="fSeverity"><option>Critical</option><option>High</option><option selected>Medium</option><option>Low</option></select></div>
+        <div class="field"><label>Test Account Used</label><input id="fAccount" placeholder="e.g., 2602000001"></div>
+      </div>
+      <div class="field"><label>Steps to Reproduce <span class="required">*</span></label><textarea id="fSteps" rows="4" placeholder="1. Navigate to...&#10;2. Click on...&#10;3. Enter..."></textarea></div>
+      <div class="grid-2">
+        <div class="field"><label>Expected Result</label><textarea id="fExpected" rows="3" placeholder="What should have happened"></textarea></div>
+        <div class="field"><label>Actual Result <span class="required">*</span></label><textarea id="fActual" rows="3" placeholder="What actually happened"></textarea></div>
+      </div>
+
+      <!-- Screenshot Upload -->
+      <div class="field">
+        <label>Screenshots / Attachments</label>
+        <div class="upload-zone" id="uploadZone">
+          <input type="file" id="fileInput" multiple onchange="handleFileSelect(this.files)">
+          <div class="upload-zone-icon"><i class="fas fa-paperclip"></i></div>
+          <div class="upload-zone-text">Drop files here or click to browse</div>
+          <div class="upload-zone-hint">Drop files, click to browse, or <strong>Ctrl+V</strong> to paste from clipboard</div>
+        </div>
+        <div class="thumb-grid" id="pendingThumbs"></div>
+      </div>
+
+      <div class="field"><label>Screenshot / Video URL (legacy)</label><input id="fScreenshot" placeholder="https://..."></div>
+      <div class="field"><label>Browser Console Errors (F12 → Console)</label><textarea id="fConsole" rows="3" style="font-family:var(--mono);font-size:12px" placeholder="Paste any red error messages from browser console"></textarea></div>
+      <div class="field"><label>PM2 Server Logs</label><textarea id="fLogs" rows="3" style="font-family:var(--mono);font-size:12px" placeholder="pm2 logs j2-api --lines 20 → paste relevant lines"></textarea></div>
+      <div class="field hidden" id="fStatusWrap"><label>Status</label><select id="fStatus"><option>Open</option><option>In Progress</option><option>Fixed</option><option>Verified</option><option>Closed</option><option>Won't Fix</option></select></div>
+      <div class="field"><label>Additional Notes</label><textarea id="fNotes" rows="2" placeholder="Any additional context"></textarea></div>
+      <div style="display:flex;gap:10px;margin-top:8px">
+        <button class="btn btn-primary" id="formSubmitBtn" onclick="submitForm()"><i class="fas fa-bug"></i> Submit Bug Report</button>
+        <button class="btn" onclick="showView('list')">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- STATS -->
+  <div id="viewStats" class="hidden"></div>
+</div>
+
+<script>
+const API = '/api/bugs';
+const AUTH = 'Basic ' + btoa('admin:changeme123');
+const MODULES = [
+  "Website: Homepage",
+  "Website: Plans & Pricing",
+  "Website: Coverage Map",
+  "Website: Contact Form",
+  "Website: Apply Now Form",
+  "Website: About Section",
+  "Website: Footer & Links",
+  "Website: Responsive/Mobile",
+  "User Portal: Login & Auth",
+  "User Portal: Dashboard",
+  "User Portal: Invoices & Billing",
+  "User Portal: Pay Online (Xendit)",
+  "User Portal: GCash / Maya Direct",
+  "User Portal: Bank Transfer",
+  "User Portal: Over-the-Counter",
+  "User Portal: My Plan",
+  "User Portal: Data Usage",
+  "User Portal: Support Tickets",
+  "User Portal: Account Settings",
+  "User Portal: Change Password",
+  "User Portal: Notifications",
+  "User Portal: Responsive/Mobile",
+  "CRM Portal: Login & Auth",
+  "CRM Portal: Dashboard",
+  "CRM Portal: Subscribers",
+  "CRM Portal: Tickets",
+  "CRM Portal: Invoices & Billing",
+  "CRM Portal: Invoice PDF",
+  "CRM Portal: Plans & Features",
+  "CRM Portal: ONU / Inventory",
+  "CRM Portal: GIS Map",
+  "CRM Portal: RADIUS / Network",
+  "CRM Portal: Staff Management",
+  "CRM Portal: Settings",
+  "CRM Portal: Reports",
+  "CRM Portal: Notifications",
+  "CRM Portal: Responsive/Mobile",
+  "API/Backend: Authentication",
+  "API/Backend: Payments",
+  "API/Backend: Email (Mailgun)",
+  "API/Backend: SMS (Semaphore)",
+  "API/Backend: Xendit Integration",
+  "API/Backend: RADIUS",
+  "Database",
+  "Other"
+];
+const SEVERITIES = ["Critical","High","Medium","Low"];
+const STATUSES = ["Open","In Progress","Fixed","Verified","Closed","Won't Fix"];
+const SEV_COLORS = {Critical:"#dc2626",High:"#ea580c",Medium:"#ca8a04",Low:"#16a34a"};
+const STAT_COLORS = {Open:"#dc2626","In Progress":"#2563eb",Fixed:"#7c3aed",Verified:"#16a34a",Closed:"#64748b","Won't Fix":"#78716c"};
+
+let bugs=[], stats={total:0,open:0,inProgress:0,fixed:0,verified:0,critical:0,bySeverity:{},byStatus:{},byModule:{}};
+let sortBy='created_at', sortDir='desc', editId=null, deleteTarget=null, debounceTimer=null;
+let pendingFiles=[];  // files waiting to upload after bug creation
+let lightboxItems=[], lightboxIdx=0;
+
+// Init
+document.addEventListener('DOMContentLoaded', () => {
+  const modSel = document.getElementById('filterMod');
+  const fMod = document.getElementById('fModule');
+  MODULES.forEach(m => { modSel.innerHTML += `<option value="${m}">${m}</option>`; fMod.innerHTML += `<option value="${m}">${m}</option>`; });
+  // Auto-fill tester name from JWT token
+  try {
+    const token = localStorage.getItem('j2_admin_token');
+    if (token) {
+      const payload = JSON.parse(atob(token.split('.')[1]));
+      const name = payload.fullName || payload.full_name || payload.username || payload.name || 'Unknown';
+      document.getElementById('fTester').textContent = name;
+      document.getElementById('fTester').dataset.value = name;
+    }
+  } catch(e) { document.getElementById('fTester').textContent = 'Unknown'; }
+
+  // Auto-fill date/time MM/DD/YYYY HH:MM:SS
+  const now = new Date();
+  const pad = n => String(n).padStart(2,'0');
+  const dtStr = `${pad(now.getMonth()+1)}/${pad(now.getDate())}/${now.getFullYear()} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  document.getElementById('fDate').textContent = dtStr;
+  document.getElementById('fDate').dataset.value = dtStr;
+
+  // Drag & drop
+  const zone = document.getElementById('uploadZone');
+  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+  zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('dragover'); handleFileSelect(e.dataTransfer.files); });
+
+  // Paste from clipboard (Ctrl+V anywhere on page)
+  document.addEventListener('paste', e => {
+    const items = e.clipboardData && e.clipboardData.items;
+    if (!items) return;
+    const files = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.kind === 'file') {
+        const f = item.getAsFile();
+        if (f) {
+          // Give pasted images a proper filename with timestamp
+          const ext = f.type ? f.type.split('/')[1].replace('jpeg','jpg') : 'png';
+          const ts = new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
+          const named = new File([f], `paste-${ts}.${ext}`, { type: f.type });
+          files.push(named);
+        }
+      }
+    }
+    if (files.length) {
+      handleFileSelect(files);
+      // Flash the upload zone to confirm paste received
+      zone.classList.add('dragover');
+      setTimeout(() => zone.classList.remove('dragover'), 600);
+      showToast(`${files.length} file(s) pasted from clipboard`, 'success');
+    }
+  });
+
+  loadBugs(); loadStats();
+});
+
+// API
+async function apiFetch(path, opts={}) {
+  const res = await fetch(API+path, { ...opts, headers:{'Content-Type':'application/json',Authorization:AUTH,...opts.headers} });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error||'API error');
+  return data;
+}
+
+async function apiUpload(bugId, files) {
+  const fd = new FormData();
+  files.forEach(f => fd.append('files', f));
+  const res = await fetch(`${API}/${bugId}/screenshots`, { method:'POST', headers:{Authorization:AUTH}, body:fd });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error||'Upload failed');
+  return data;
+}
+
+// Load
+async function loadBugs() {
+  try {
+    hideError();
+    const p = new URLSearchParams({sortBy,sortDir,limit:'200'});
+    const sev=document.getElementById('filterSev').value, stat=document.getElementById('filterStat').value, mod=document.getElementById('filterMod').value, search=document.getElementById('searchInput').value;
+    if(sev!=='All') p.set('severity',sev);
+    if(stat!=='All') p.set('status',stat);
+    if(mod!=='All') p.set('module',mod);
+    if(search) p.set('search',search);
+    document.getElementById('clearFilters').classList.toggle('hidden', sev==='All'&&stat==='All'&&mod==='All'&&!search);
+    const data = await apiFetch('?'+p);
+    bugs = data.bugs||[];
+    renderTable();
+  } catch(err) { showError(err.message); }
+}
+async function loadStats() { try { stats = await apiFetch('/stats'); renderHeaderStats(); } catch(e){} }
+function debounceLoad() { clearTimeout(debounceTimer); debounceTimer=setTimeout(loadBugs,300); }
+function retryLoad() { hideError(); loadBugs(); loadStats(); }
+function clearAllFilters() { ['filterSev','filterStat','filterMod'].forEach(id=>document.getElementById(id).value='All'); document.getElementById('searchInput').value=''; loadBugs(); }
+
+// Header stats
+function renderHeaderStats() {
+  document.getElementById('headerStats').innerHTML = `
+    ${stats.critical>0?`<span class="crit-badge"><i class="fas fa-circle" style="color:#dc2626;font-size:10px"></i> ${stats.critical} Critical</span>`:''}
+    <span style="color:var(--text-muted)">${stats.total} total</span>
+    <span style="color:#dc2626">${stats.open} open</span>
+    <span style="color:var(--accent)">${stats.inProgress} in progress</span>
+    <span style="color:#16a34a">${stats.verified} verified</span>
+    <button class="btn btn-sm btn-ghost" onclick="loadBugs();loadStats()" style="font-size:14px;padding:4px"><i class="fas fa-sync-alt"></i></button>`;
+}
+
+function pill(color,label,small) { return `<span class="pill${small?' pill-sm':''}" style="background:${color}18;color:${color};border:1px solid ${color}30"><span class="pill-dot" style="background:${color}"></span>${label}</span>`; }
+function fmtSize(b) { return b<1024?b+'B':b<1048576?(b/1024).toFixed(1)+'KB':(b/1048576).toFixed(1)+'MB'; }
+function isImage(m) { return m&&m.startsWith('image/'); }
+function isVideo(m) { return m&&m.startsWith('video/'); }
+
+// Table
+function renderTable() {
+  const el=document.getElementById('bugTable');
+  document.getElementById('bugCount').textContent=bugs.length+' bugs';
+  if(!bugs.length) {
+    const filt = document.getElementById('filterSev').value!=='All'||document.getElementById('filterStat').value!=='All'||document.getElementById('filterMod').value!=='All'||document.getElementById('searchInput').value;
+    el.innerHTML = filt ? '<div class="card" style="padding:40px;text-align:center"><p style="font-size:14px;color:var(--text-muted)">No bugs match your filters.</p></div>' :
+      `<div class="card empty"><div class="empty-icon"><i class="fas fa-bug"></i></div><h3>No Bugs Reported Yet</h3><p>Click "Report Bug" to file the first bug report.</p><button class="btn btn-primary" onclick="showView('form')"><i class="fas fa-plus"></i> Report Bug</button></div>`;
+    return;
+  }
+  const si = c => sortBy===c?(sortDir==='asc'?' ▲':' ▼'):'';
+  let h=`<div class="card" style="overflow:hidden"><div style="overflow-x:auto"><table style="min-width:900px"><thead><tr>
+    <th style="width:110px" onclick="toggleSort('bug_id')">Bug ID${si('bug_id')}</th>
+    <th style="width:100px" onclick="toggleSort('date_found')">Date${si('date_found')}</th>
+    <th style="width:100px" onclick="toggleSort('tester')">Tester${si('tester')}</th>
+    <th style="width:130px" onclick="toggleSort('module')">Module${si('module')}</th>
+    <th style="width:90px" onclick="toggleSort('severity')">Severity${si('severity')}</th>
+    <th>Summary</th>
+    <th style="width:50px;cursor:default"><i class="fas fa-paperclip"></i></th>
+    <th style="width:110px" onclick="toggleSort('status')">Status${si('status')}</th>
+    <th style="width:80px;cursor:default">Actions</th>
+  </tr></thead><tbody>`;
+  bugs.forEach(b => {
+    const summary = (b.actual||(b.steps?b.steps.split('\n')[0]:'')||'—').substring(0,80);
+    const ssCount = (b.screenshots||[]).length;
+    h += `<tr class="clickable" onclick="showDetail('${b.id}')">
+      <td style="font-family:var(--mono);font-weight:600;color:var(--accent)">${b.id}</td>
+      <td>${b.dateFound}</td><td style="color:var(--text);font-weight:500">${esc(b.tester)}</td><td>${esc(b.module)}</td>
+      <td>${pill(SEV_COLORS[b.severity],b.severity,true)}</td>
+      <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(summary)}</td>
+      <td style="text-align:center">${ssCount>0?`<span style="font-size:11px;color:var(--text-sec)"><i class="fas fa-paperclip"></i> ${ssCount}</span>`:''}</td>
+      <td>${pill(STAT_COLORS[b.status],b.status,true)}</td>
+      <td onclick="event.stopPropagation()"><button class="icon-btn" onclick="startEdit('${b.id}')" title="Edit"><i class="fas fa-pen"></i></button><button class="icon-btn" onclick="openDeleteModal('${b.id}')" title="Delete"><i class="fas fa-trash-can"></i></button></td>
+    </tr>`;
+  });
+  h+='</tbody></table></div></div>';
+  el.innerHTML=h;
+}
+
+// Detail
+function showDetail(bugId) {
+  const b = bugs.find(x=>x.id===bugId);
+  if(!b) return;
+  document.getElementById('viewList').classList.add('hidden');
+  document.getElementById('viewDetail').classList.remove('hidden');
+
+  const statusBtns = STATUSES.map(s => {
+    const active = b.status===s;
+    return `<button class="status-btn" style="${active?`background:${STAT_COLORS[s]}20;border-color:${STAT_COLORS[s]};color:${STAT_COLORS[s]}`:''}" onclick="quickStatus('${b.id}','${s}')">${s}</button>`;
+  }).join('');
+
+  const blocks = [
+    ['Steps to Reproduce',b.steps,false,false],['Expected Result',b.expected,false,false],['Actual Result',b.actual,false,false],
+    ['Screenshot / Video URL',b.screenshotUrl,true,false],['Browser Console Errors',b.consoleErrors,false,true],['PM2 Server Logs',b.serverLogs,false,true],['Additional Notes',b.notes,false,false],
+  ].filter(([,v])=>v).map(([label,val,isLink,isMono]) => {
+    const c = isLink&&val.startsWith('http') ? `<a href="${esc(val)}" target="_blank" style="color:var(--accent);word-break:break-all">${esc(val)}</a>` : `<pre${isMono?' class="mono"':''} style="color:var(--text)">${esc(val)}</pre>`;
+    return `<div class="card detail-block"><h3>${label}</h3>${c}</div>`;
+  }).join('');
+
+  // Screenshots section
+  const ss = b.screenshots||[];
+  let ssHtml = '';
+  if(ss.length) {
+    ssHtml = `<div class="card detail-block"><h3>Screenshots & Attachments (${ss.length})</h3><div class="ss-grid">`;
+    ss.forEach((s,i) => {
+      const preview = isImage(s.mimetype) ? `<img src="${s.url}" alt="${esc(s.filename)}" loading="lazy">` :
+        (() => {
+          if(isImage(s.mimetype)) return `<img src="${s.url}">`;
+          if(isVideo(s.mimetype)) return `<video src="${s.url}" muted></video>`;
+          const sext=(s.filename||'').split('.').pop().toLowerCase();
+          const si={html:'fa-globe',htm:'fa-globe',pdf:'fa-file-pdf',doc:'fa-file-word',docx:'fa-file-word',xls:'fa-file-excel',xlsx:'fa-file-excel',zip:'fa-file-zipper',txt:'fa-file-lines',log:'fa-file-lines',js:'fa-file-code',json:'fa-file-code',sql:'fa-database',csv:'fa-file-csv'};
+          return `<div class="thumb-file-icon" style="flex-direction:column;gap:4px"><i class="fas ${si[sext]||'fa-paperclip'}"></i><span style="font-size:9px;color:var(--text-muted);text-transform:uppercase;font-weight:700">.${sext}</span></div>`;
+        })();
+      ssHtml += `<div class="ss-item" onclick="openLightbox(${JSON.stringify(ss.map(x=>({url:x.url,mimetype:x.mimetype,filename:x.filename}))).replace(/"/g,'&quot;')},${i})">
+        ${preview}
+        <div class="ss-info"><div class="ss-name">${esc(s.filename)}</div><div class="ss-size">${fmtSize(s.filesize)}</div></div>
+        <button class="ss-del" onclick="event.stopPropagation();deleteScreenshot('${b.id}',${s.id})" title="Delete">✕</button>
+      </div>`;
+    });
+    ssHtml += '</div></div>';
+  }
+
+  // Upload more section
+  const uploadHtml = `<div class="card detail-block">
+    <h3>Upload More Screenshots</h3>
+    <div class="upload-zone" id="detailUploadZone" onclick="document.getElementById('detailFileInput').click()">
+      <input type="file" id="detailFileInput" multiple style="display:none" onchange="uploadToExistingBug('${b.id}',this.files)">
+      <div class="upload-zone-icon"><i class="fas fa-paperclip"></i></div>
+      <div class="upload-zone-text">Drop files here or click to browse</div>
+      <div class="upload-zone-hint">Any file type — max 10 MB each</div>
+    </div>
+    <div id="detailUploadProgress"></div>
+  </div>`;
+
+  document.getElementById('viewDetail').innerHTML = `<div style="animation:fadeIn .25s">
+    <div class="detail-header">
+      <div style="display:flex;align-items:center;gap:12px">
+        <button class="detail-back" onclick="closeDetail()">←</button>
+        <span class="detail-id">${b.id}</span>${pill(SEV_COLORS[b.severity],b.severity)}${pill(STAT_COLORS[b.status],b.status)}
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-sm" onclick="closeDetail();startEdit('${b.id}')"><i class="fas fa-pen"></i> Edit</button>
+        <button class="btn btn-sm btn-danger" onclick="openDeleteModal('${b.id}')"><i class="fas fa-trash-can"></i> Delete</button>
+      </div>
+    </div>
+    <div class="detail-grid">
+      <div class="card" style="padding:20px">
+        <h3 style="font-size:13px;font-weight:700;color:var(--text-sec);text-transform:uppercase;letter-spacing:1px;margin-bottom:14px">Bug Details</h3>
+        ${[['Bug ID',b.id],['Date Found',b.dateFound],['Tester',esc(b.tester)],['Module',esc(b.module)],['Test Account',esc(b.testAccount)||'—']].map(([l,v])=>`<div class="detail-row"><span class="detail-row-label">${l}</span><span class="detail-row-value">${v}</span></div>`).join('')}
+        <div class="detail-row"><span class="detail-row-label">Severity</span><span>${pill(SEV_COLORS[b.severity],b.severity)}</span></div>
+        <div class="detail-row"><span class="detail-row-label">Status</span><span>${pill(STAT_COLORS[b.status],b.status)}</span></div>
+        <div class="detail-row"><span class="detail-row-label">Attachments</span><span class="detail-row-value">${ss.length} file${ss.length!==1?'s':''}</span></div>
+      </div>
+      <div class="card" style="padding:20px">
+        <h3 style="font-size:13px;font-weight:700;color:var(--text-sec);text-transform:uppercase;letter-spacing:1px;margin-bottom:14px">Quick Status Update</h3>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">${statusBtns}</div>
+      </div>
+    </div>
+    ${blocks}${ssHtml}${uploadHtml}
+  </div>`;
+
+  // Setup drag&drop on detail upload zone
+  const dz = document.getElementById('detailUploadZone');
+  if(dz) {
+    dz.addEventListener('dragover', e=>{e.preventDefault();dz.classList.add('dragover');});
+    dz.addEventListener('dragleave', ()=>dz.classList.remove('dragover'));
+    dz.addEventListener('drop', e=>{e.preventDefault();dz.classList.remove('dragover');uploadToExistingBug(b.id,e.dataTransfer.files);});
+  }
+}
+
+function closeDetail() { document.getElementById('viewDetail').classList.add('hidden'); document.getElementById('viewList').classList.remove('hidden'); }
+
+async function quickStatus(bugId,newStatus) {
+  try { await apiFetch('/'+bugId+'/status',{method:'PATCH',body:JSON.stringify({status:newStatus})}); showToast('Status → '+newStatus); await loadBugs(); await loadStats(); showDetail(bugId); }
+  catch(err) { showToast(err.message,'error'); }
+}
+
+async function uploadToExistingBug(bugId, fileList) {
+  if(!fileList.length) return;
+  const prog = document.getElementById('detailUploadProgress');
+  prog.innerHTML = '<div style="margin-top:12px;display:flex;align-items:center;gap:10px"><div class="spinner" style="width:20px;height:20px;margin:0;border-width:2px"></div><span style="font-size:13px;color:var(--text-sec)">Uploading '+fileList.length+' file(s)...</span></div>';
+  try {
+    const result = await apiUpload(bugId, Array.from(fileList));
+    showToast(result.uploaded + ' file(s) uploaded');
+    await loadBugs();
+    showDetail(bugId);
+  } catch(err) { showToast(err.message,'error'); prog.innerHTML=''; }
+}
+
+async function deleteScreenshot(bugId, ssId) {
+  try {
+    await fetch(`${API}/${bugId}/screenshots/${ssId}`, {method:'DELETE',headers:{Authorization:AUTH}});
+    showToast('Screenshot deleted');
+    await loadBugs();
+    showDetail(bugId);
+  } catch(err) { showToast(err.message,'error'); }
+}
+
+// Lightbox
+function openLightbox(items, idx) {
+  lightboxItems=items; lightboxIdx=idx;
+  renderLightbox();
+  document.getElementById('lightbox').classList.remove('hidden');
+  document.addEventListener('keydown', lbKey);
+}
+function closeLightbox() {
+  document.getElementById('lightbox').classList.add('hidden');
+  document.removeEventListener('keydown', lbKey);
+}
+function navLightbox(dir) { lightboxIdx=(lightboxIdx+dir+lightboxItems.length)%lightboxItems.length; renderLightbox(); }
+function lbKey(e) { if(e.key==='Escape')closeLightbox(); if(e.key==='ArrowLeft')navLightbox(-1); if(e.key==='ArrowRight')navLightbox(1); }
+function renderLightbox() {
+  const item=lightboxItems[lightboxIdx];
+  const el=document.getElementById('lightboxContent');
+  if(isImage(item.mimetype)) el.innerHTML=`<img src="${item.url}" alt="${esc(item.filename)}">`;
+  else if(isVideo(item.mimetype)) el.innerHTML=`<video src="${item.url}" controls autoplay style="max-width:90vw;max-height:90vh;border-radius:8px"></video>`;
+  else el.innerHTML=`<div style="background:var(--card);padding:40px;border-radius:16px;text-align:center"><div style="font-size:48px;margin-bottom:12px"><i class="fas fa-file"></i></div><p style="color:var(--text)">${esc(item.filename)}</p><a href="${item.url}" target="_blank" class="btn btn-primary" style="margin-top:16px;text-decoration:none">Download</a></div>`;
+  document.getElementById('lightboxCounter').textContent=`${lightboxIdx+1} / ${lightboxItems.length}`;
+}
+
+// Pending file handling (for new bug form)
+function handleFileSelect(fileList) {
+  Array.from(fileList).forEach(f => { if(f.size>10*1024*1024){showToast(f.name+' exceeds 10MB','error');return;} pendingFiles.push(f); });
+  renderPendingThumbs();
+  document.getElementById('fileInput').value='';
+}
+function removePendingFile(idx) { pendingFiles.splice(idx,1); renderPendingThumbs(); }
+function renderPendingThumbs() {
+  const el=document.getElementById('pendingThumbs');
+  if(!pendingFiles.length) { el.innerHTML=''; return; }
+  el.innerHTML=pendingFiles.map((f,i) => {
+    const isImg=f.type.startsWith('image/'), isVid=f.type.startsWith('video/');
+    const ext=(f.name.split('.').pop()||'').toLowerCase();
+    const extIcons={html:'fa-globe',htm:'fa-globe',pdf:'fa-file-pdf',doc:'fa-file-word',docx:'fa-file-word',xls:'fa-file-excel',xlsx:'fa-file-excel',csv:'fa-file-csv',zip:'fa-file-zipper',rar:'fa-file-zipper','7z':'fa-file-zipper',txt:'fa-file-lines',log:'fa-file-lines',js:'fa-file-code',json:'fa-file-code',sql:'fa-database',sh:'fa-terminal',py:'fa-file-code',php:'fa-file-code',css:'fa-palette',xml:'fa-file-code',mp4:'fa-file-video',mov:'fa-file-video',avi:'fa-file-video',mp3:'fa-file-audio',wav:'fa-file-audio'};
+    const fIcon=extIcons[ext]||'fa-paperclip';
+    let preview='';
+    if(isImg) { const url=URL.createObjectURL(f); preview=`<img src="${url}">`; }
+    else preview=`<div class="thumb-file-icon" style="flex-direction:column;gap:4px"><i class="fas ${fIcon}"></i><span style="font-size:9px;color:var(--text-muted);text-transform:uppercase;font-weight:700">.${ext}</span></div>`;
+    return `<div class="thumb-item">${preview}<div class="thumb-overlay"><button class="thumb-del" onclick="event.stopPropagation();removePendingFile(${i})" title="Remove">✕</button></div></div>`;
+  }).join('');
+}
+
+// Form
+function resetForm() {
+  editId=null; pendingFiles=[];
+  ['fTester','fAccount','fSteps','fExpected','fActual','fScreenshot','fConsole','fLogs','fNotes'].forEach(id=>document.getElementById(id).value='');
+  try {
+    const token = localStorage.getItem('j2_admin_token');
+    if (token) {
+      const payload = JSON.parse(atob(token.split('.')[1]));
+      const name = payload.fullName || payload.full_name || payload.username || payload.name || 'Unknown';
+      document.getElementById('fTester').textContent = name;
+      document.getElementById('fTester').dataset.value = name;
+    }
+  } catch(e) {}
+  const now2 = new Date();
+  const pad2 = n => String(n).padStart(2,'0');
+  const dtStr2 = `${pad2(now2.getMonth()+1)}/${pad2(now2.getDate())}/${now2.getFullYear()} ${pad2(now2.getHours())}:${pad2(now2.getMinutes())}:${pad2(now2.getSeconds())}`;
+  document.getElementById('fDate').textContent = dtStr2;
+  document.getElementById('fDate').dataset.value = dtStr2;
+  document.getElementById('fModule').value=''; document.getElementById('fSeverity').value='Medium'; document.getElementById('fStatus').value='Open';
+  document.getElementById('fStatusWrap').classList.add('hidden');
+  document.getElementById('formTitle').textContent='Report New Bug';
+  document.getElementById('formSubtitle').textContent='Fields marked * are required. Bug ID is auto-generated.';
+  document.getElementById('formSubmitBtn').innerHTML='<i class="fas fa-bug"></i> Submit Bug Report';
+  document.getElementById('pendingThumbs').innerHTML='';
+}
+
+function startEdit(bugId) {
+  const b=bugs.find(x=>x.id===bugId); if(!b)return;
+  editId=bugId; pendingFiles=[];
+  document.getElementById('fTester').textContent=b.tester||''; document.getElementById('fTester').dataset.value=b.tester||''; document.getElementById('fDate').textContent=b.dateFound||''; document.getElementById('fDate').dataset.value=b.dateFound||'';
+  document.getElementById('fModule').value=b.module||''; document.getElementById('fSeverity').value=b.severity||'Medium';
+  document.getElementById('fAccount').value=b.testAccount||''; document.getElementById('fSteps').value=b.steps||'';
+  document.getElementById('fExpected').value=b.expected||''; document.getElementById('fActual').value=b.actual||'';
+  document.getElementById('fScreenshot').value=b.screenshotUrl||''; document.getElementById('fConsole').value=b.consoleErrors||'';
+  document.getElementById('fLogs').value=b.serverLogs||''; document.getElementById('fStatus').value=b.status||'Open';
+  document.getElementById('fNotes').value=b.notes||'';
+  document.getElementById('fStatusWrap').classList.remove('hidden');
+  document.getElementById('formTitle').textContent='Edit '+bugId;
+  document.getElementById('formSubtitle').textContent='Update the bug details below. Use the detail view to manage existing screenshots.';
+  document.getElementById('formSubmitBtn').innerHTML='<i class="fas fa-save"></i> Save Changes';
+  document.getElementById('pendingThumbs').innerHTML='';
+  showView('form');
+}
+
+async function submitForm() {
+  const tester=(document.getElementById('fTester').dataset.value||document.getElementById('fTester').textContent).trim(), module=document.getElementById('fModule').value;
+  const steps=document.getElementById('fSteps').value.trim(), actual=document.getElementById('fActual').value.trim();
+  if(!module||!steps||!actual) { showToast('Required: Module, Steps, Actual Result','error'); return; }
+
+  const body = {
+    tester, dateFound:(document.getElementById('fDate').dataset.value||document.getElementById('fDate').textContent), module, severity:document.getElementById('fSeverity').value,
+    testAccount:document.getElementById('fAccount').value.trim(), steps, expected:document.getElementById('fExpected').value.trim(), actual,
+    screenshotUrl:document.getElementById('fScreenshot').value.trim(), consoleErrors:document.getElementById('fConsole').value.trim(),
+    serverLogs:document.getElementById('fLogs').value.trim(), notes:document.getElementById('fNotes').value.trim(),
+  };
+  if(editId) body.status=document.getElementById('fStatus').value;
+
+  const btn=document.getElementById('formSubmitBtn');
+  btn.disabled=true; btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Saving...';
+
+  try {
+    let bugId;
+    if(editId) {
+      await apiFetch('/'+editId,{method:'PUT',body:JSON.stringify(body)});
+      bugId=editId;
+      showToast(editId+' updated');
+    } else {
+      const created = await apiFetch('',{method:'POST',body:JSON.stringify(body)});
+      bugId=created.id;
+      showToast(bugId+' created');
+    }
+
+    // Upload pending screenshots
+    if(pendingFiles.length) {
+      btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Uploading '+pendingFiles.length+' file(s)...';
+      try {
+        const result = await apiUpload(bugId, pendingFiles);
+        showToast(result.uploaded+' file(s) attached');
+      } catch(err) { showToast('Bug saved but upload failed: '+err.message,'error'); }
+    }
+
+    resetForm();
+    showView('list');
+    await loadBugs(); await loadStats();
+  } catch(err) { showToast(err.message,'error'); }
+  finally { btn.disabled=false; btn.innerHTML=editId?'<i class="fas fa-save"></i> Save Changes':'<i class="fas fa-bug"></i> Submit Bug Report'; }
+}
+
+// Delete
+function openDeleteModal(id) { deleteTarget=id; document.getElementById('deleteId').textContent=id; document.getElementById('deleteModal').classList.remove('hidden'); }
+function closeDeleteModal() { deleteTarget=null; document.getElementById('deleteModal').classList.add('hidden'); }
+async function confirmDelete() {
+  if(!deleteTarget) return;
+  try { await apiFetch('/'+deleteTarget,{method:'DELETE'}); showToast(deleteTarget+' deleted'); closeDeleteModal(); closeDetail(); await loadBugs(); await loadStats(); }
+  catch(err) { showToast(err.message,'error'); }
+}
+
+// Sort
+function toggleSort(col) { if(sortBy===col)sortDir=sortDir==='asc'?'desc':'asc'; else{sortBy=col;sortDir='asc';} loadBugs(); }
+
+// Stats
+function renderStats() {
+  const el=document.getElementById('viewStats');
+  const kpis=[{label:'Total Bugs',val:stats.total,color:'var(--accent)',icon:'<i class="fas fa-bug"></i>'},{label:'Open',val:stats.open,color:'#dc2626',icon:'<i class="fas fa-circle" style="color:#dc2626"></i>'},{label:'In Progress',val:stats.inProgress,color:'#2563eb',icon:'<i class="fas fa-circle" style="color:#2563eb"></i>'},{label:'Fixed',val:stats.fixed,color:'#7c3aed',icon:'<i class="fas fa-circle" style="color:#7c3aed"></i>'},{label:'Verified',val:stats.verified,color:'#16a34a',icon:'<i class="fas fa-circle" style="color:#16a34a"></i>'},{label:'Critical (Open)',val:stats.critical,color:'#dc2626',icon:'<i class="fas fa-triangle-exclamation" style="color:#dc2626"></i>'}];
+  let h='<div style="animation:fadeIn .3s"><div class="grid-stats">';
+  kpis.forEach(k=>{h+=`<div class="card stat-card"><div class="stat-icon">${k.icon}</div><div class="stat-val" style="color:${k.color}">${k.val}</div><div class="stat-label">${k.label}</div></div>`;});
+  h+='</div><div class="grid-charts">';
+  const modules=Object.entries(stats.byModule||{}).sort((a,b)=>b[1].total-a[1].total);
+  const maxMod=Math.max(...modules.map(([,d])=>d.total),1);
+  h+='<div class="card" style="padding:20px"><h3 style="font-size:14px;font-weight:700;margin-bottom:16px">Bugs by Module</h3>';
+  if(modules.length) modules.forEach(([mod,data])=>{const pct=data.total/maxMod*100;h+=`<div style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;margin-bottom:3px"><span style="font-size:12px;color:var(--text-sec)">${esc(mod)}</span><span style="font-size:12px;font-weight:700">${data.total} <span style="color:${data.open>0?'#dc2626':'var(--text-muted)'};font-weight:400">(${data.open} open)</span></span></div><div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${data.open>0?'linear-gradient(90deg,#dc2626,#ea580c)':'var(--accent)'}"></div></div></div>`;});
+  else h+='<p style="font-size:13px;color:var(--text-muted)">No bugs yet.</p>';
+  h+='</div><div class="card" style="padding:20px"><h3 style="font-size:14px;font-weight:700;margin-bottom:16px">Bugs by Severity</h3>';
+  SEVERITIES.forEach(s=>{const c=(stats.bySeverity||{})[s]||0;h+=`<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--input-bg);border-radius:10px;margin-bottom:8px">${pill(SEV_COLORS[s],s)}<div style="flex:1"></div><span style="font-size:20px;font-weight:800;color:${SEV_COLORS[s]};font-family:var(--mono)">${c}</span></div>`;});
+  h+='<h3 style="font-size:14px;font-weight:700;margin:24px 0 16px">Bugs by Status</h3>';
+  STATUSES.forEach(s=>{const c=(stats.byStatus||{})[s]||0;if(!c)return;h+=`<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--input-bg);border-radius:10px;margin-bottom:8px">${pill(STAT_COLORS[s],s)}<div style="flex:1"></div><span style="font-size:20px;font-weight:800;color:${STAT_COLORS[s]};font-family:var(--mono)">${c}</span></div>`;});
+  h+='</div></div></div>';
+  el.innerHTML=h;
+}
+
+// View switch
+function showView(v) {
+  ['viewList','viewDetail','viewForm','viewStats'].forEach(id=>document.getElementById(id).classList.add('hidden'));
+  ['tabList','tabForm','tabStats'].forEach(id=>{document.getElementById(id).classList.remove('btn-active');});
+  if(v==='list'){document.getElementById('viewList').classList.remove('hidden');document.getElementById('tabList').classList.add('btn-active');}
+  else if(v==='form'){document.getElementById('viewForm').classList.remove('hidden');document.getElementById('tabForm').classList.add('btn-active');if(!editId)resetForm();}
+  else if(v==='stats'){loadStats().then(renderStats);document.getElementById('viewStats').classList.remove('hidden');document.getElementById('tabStats').classList.add('btn-active');}
+}
+
+// CSV export
+function exportCSV() {
+  if(!bugs.length)return;
+  const h=["Bug ID","Date Found","Tester","Module","Severity","Test Account","Steps","Expected","Actual","Screenshot URL","Console Errors","Server Logs","Status","Notes","Attachments"];
+  const rows=bugs.map(b=>[b.id,b.dateFound,ce(b.tester),ce(b.module),b.severity,ce(b.testAccount),ce(b.steps),ce(b.expected),ce(b.actual),ce(b.screenshotUrl),ce(b.consoleErrors),ce(b.serverLogs),b.status,ce(b.notes),(b.screenshots||[]).length]);
+  const csv=[h.join(','),...rows.map(r=>r.join(','))].join('\n');
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='j2-bugs-'+new Date().toISOString().slice(0,10)+'.csv';a.click();
+  showToast('Exported to CSV');
+}
+function ce(v){return v?'"'+String(v).replace(/"/g,'""')+'"':'""';}
+
+// Utils
+function esc(s){if(!s)return'';const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
+function showToast(msg,type='success'){const el=document.getElementById('toast');el.className='toast '+(type==='error'?'toast-error':'toast-success');el.innerHTML=(type==='error'?'<i class="fas fa-triangle-exclamation"></i> ':'<i class="fas fa-check"></i> ')+msg;el.classList.remove('hidden');setTimeout(()=>el.classList.add('hidden'),3000);}
+function showError(msg){document.getElementById('errorMsg').innerHTML='<i class="fas fa-triangle-exclamation"></i> API Error: '+msg;document.getElementById('errorBanner').classList.remove('hidden');}
+function hideError(){document.getElementById('errorBanner').classList.add('hidden');}
+</script>
+</body>
+</html>

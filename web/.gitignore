@@ -1,0 +1,24 @@
+# Uploads (user-generated content)
+uploads/
+
+# Backup files
+*.bak
+*.bak_*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+
+# Environment / secrets
+.env
+*.pem
+*.key
+.claude/
+
+# Database backups
+# Note: repo is private — full dumps included for disaster recovery

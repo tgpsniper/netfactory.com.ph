@@ -1,0 +1,62 @@
+// ============================================================
+// jobs/index.js — central scheduler
+// ============================================================
+// Call startJobs(prisma) once at server boot. Idempotent — safe to
+// call twice (existing jobs are stopped and re-registered).
+// Each job is a module that exports { name, schedule, run }.
+// ============================================================
+
+const cron = require('node-cron');
+const diagnostics = require('./tr069-diagnostics');
+const alerts = require('./tr069-alerts');
+const informGuard = require('./tr069-inform-guard');
+const gmailPoll = require('./inbox-gmail-poll');
+const balanceReconcile = require('./balance-reconcile');
+const restrictionSync = require('./restriction-sync');
+const billingRestriction = require('./billing-restriction');
+
+const registered = new Map(); // name -> ScheduledTask
+
+function register(jobDef, prisma, io) {
+  if (registered.has(jobDef.name)) {
+    registered.get(jobDef.name).stop();
+  }
+  // Validate cron expression first
+  if (!cron.validate(jobDef.schedule)) {
+    console.error(`[jobs] invalid cron expression for ${jobDef.name}: ${jobDef.schedule}`);
+    return;
+  }
+  const task = cron.schedule(
+    jobDef.schedule,
+    async () => {
+      const t0 = Date.now();
+      try {
+        await jobDef.run(prisma, io);
+        const dt = Date.now() - t0;
+        if (dt > 1000) console.log(`[jobs] ${jobDef.name} ok in ${dt}ms`);
+      } catch (e) {
+        console.error(`[jobs] ${jobDef.name} failed: ${e.message}`);
+      }
+    },
+    { scheduled: true, timezone: 'Asia/Manila' }
+  );
+  registered.set(jobDef.name, task);
+  console.log(`[jobs] registered ${jobDef.name} @ "${jobDef.schedule}" (Asia/Manila)`);
+}
+
+function startJobs(prisma, io) {
+  register(diagnostics, prisma, io);
+  register(alerts, prisma, io);
+  register(informGuard, prisma, io);
+  register(gmailPoll, prisma, io);
+  register(balanceReconcile, prisma, io);
+  register(restrictionSync, prisma, io);
+  register(billingRestriction, prisma, io);
+}
+
+function stopJobs() {
+  for (const t of registered.values()) t.stop();
+  registered.clear();
+}
+
+module.exports = { startJobs, stopJobs };

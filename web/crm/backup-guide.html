@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Backup & Restore Guide — Netfactory</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Segoe UI', system-ui, sans-serif; background: #f8fafc; padding: 20px; line-height: 1.6; }
+.container { max-width: 900px; margin: 0 auto; background: white; border-radius: 12px; padding: 40px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+h1 { font-size: 32px; font-weight: 800; color: #1e293b; margin-bottom: 8px; }
+.subtitle { font-size: 16px; color: #64748b; margin-bottom: 32px; }
+h2 { font-size: 24px; font-weight: 700; color: #1e293b; margin-top: 40px; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 2px solid #e2e8f0; }
+h3 { font-size: 18px; font-weight: 600; color: #334155; margin-top: 24px; margin-bottom: 12px; }
+p { color: #475569; margin-bottom: 16px; }
+ul, ol { margin-left: 24px; margin-bottom: 16px; color: #475569; }
+li { margin-bottom: 8px; }
+code { background: #f1f5f9; padding: 2px 8px; border-radius: 4px; font-family: 'Courier New', monospace; font-size: 14px; color: #dc2626; }
+pre { background: #1e293b; color: #e2e8f0; padding: 16px; border-radius: 8px; overflow-x: auto; margin-bottom: 16px; }
+pre code { background: none; color: #e2e8f0; padding: 0; }
+.alert { padding: 16px; border-radius: 8px; margin-bottom: 16px; border-left: 4px solid; }
+.alert.info { background: #dbeafe; color: #1e40af; border-left-color: #3b82f6; }
+.alert.warning { background: #fef3c7; color: #92400e; border-left-color: #f59e0b; }
+.alert.danger { background: #fee2e2; color: #991b1b; border-left-color: #ef4444; }
+.alert.success { background: #d1fae5; color: #065f46; border-left-color: #10b981; }
+.step { background: #f8fafc; padding: 20px; border-radius: 8px; margin-bottom: 16px; border-left: 4px solid #3b82f6; }
+.step-number { display: inline-block; background: #3b82f6; color: white; width: 32px; height: 32px; border-radius: 50%; text-align: center; line-height: 32px; font-weight: 700; margin-right: 12px; }
+.toc { background: #f8fafc; padding: 20px; border-radius: 8px; margin-bottom: 32px; }
+.toc ul { list-style: none; margin: 0; }
+.toc li { margin-bottom: 8px; }
+.toc a { color: #3b82f6; text-decoration: none; }
+.toc a:hover { text-decoration: underline; }
+.back-btn { display: inline-block; background: #3b82f6; color: white; padding: 10px 20px; border-radius: 8px; text-decoration: none; margin-bottom: 24px; }
+.back-btn:hover { background: #2563eb; }
+table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+th, td { padding: 12px; border: 1px solid #e2e8f0; text-align: left; }
+th { background: #f1f5f9; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div style="display:flex;gap:12px;margin-bottom:24px;flex-wrap:wrap;">
+    <a href="/crm/downloads/Netfactory-Backup-Restore-Guide.pdf" download class="back-btn" style="background:#ef4444;margin:0;">📄 Download PDF</a>
+    <a href="/crm/downloads/Netfactory-Backup-Restore-Guide.docx" download class="back-btn" style="background:#2563eb;margin:0;">📝 Download Word</a>
+  </div>
+  
+  <h1>📖 Backup & Restore Guide</h1>
+  <p class="subtitle">Complete guide for backing up and restoring your Netfactory CRM system</p>
+  
+  <div class="toc">
+    <h3>📑 Table of Contents</h3>
+    <ul>
+      <li><a href="#overview">System Overview</a></li>
+      <li><a href="#backup-types">Backup Types Explained</a></li>
+      <li><a href="#creating-backups">Creating Backups</a></li>
+      <li><a href="#requirements">Restoration Requirements</a></li>
+      <li><a href="#restore-system">Restoring System Backup</a></li>
+      <li><a href="#restore-dr">Restoring Disaster Recovery Backup</a></li>
+      <li><a href="#troubleshooting">Troubleshooting</a></li>
+    </ul>
+  </div>
+
+  <h2 id="overview">🔍 System Overview</h2>
+  <p>The Netfactory CRM runs on Ubuntu 24.04 and consists of:</p>
+  <ul>
+    <li><strong>CRM Frontend:</strong> Web-based interface at <code>/var/www/netfactory.com.ph/html/crm/</code></li>
+    <li><strong>API Backend:</strong> Node.js application at <code>/home/ubuntu/Node.js_API/j2-api/</code></li>
+    <li><strong>Database:</strong> PostgreSQL database named <code>ispdb</code></li>
+    <li><strong>Web Server:</strong> Nginx serving on port 80/443</li>
+    <li><strong>Process Manager:</strong> PM2 managing Node.js processes</li>
+  </ul>
+
+  <h2 id="backup-types">📦 Backup Types Explained</h2>
+  
+  <h3>💾 System Backup (Partial)</h3>
+  <p><strong>Size:</strong> ~56 MB | <strong>Time:</strong> 10-15 seconds</p>
+  <p><strong>What's included:</strong></p>
+  <ul>
+    <li>CRM files (HTML, CSS, JavaScript)</li>
+    <li>API source code (without node_modules)</li>
+    <li>Database schema (table structures only)</li>
+    <li>Admin users data</li>
+    <li>PM2 configuration</li>
+    <li>Monitor state</li>
+  </ul>
+  <p><strong>Use case:</strong> Daily backups, quick recovery of files, version control</p>
+  <div class="alert warning">
+    <strong>⚠️ Note:</strong> This does NOT include environment variables, SSL certificates, or complete database. You'll need the existing server infrastructure to restore.
+  </div>
+
+  <h3>🚨 Disaster Recovery Backup (Complete)</h3>
+  <p><strong>Size:</strong> ~1.5 MB compressed (8 MB uncompressed) | <strong>Time:</strong> 30-60 seconds</p>
+  <p><strong>What's included:</strong></p>
+  <ul>
+    <li>Everything in System Backup PLUS:</li>
+    <li>Complete database (all tables and data)</li>
+    <li>Environment variables (.env with API keys)</li>
+    <li>Nginx configuration</li>
+    <li>SSL certificates (Let's Encrypt)</li>
+    <li>SSH keys for RADIUS server access</li>
+    <li>Automated RESTORE.sh script</li>
+  </ul>
+  <p><strong>Use case:</strong> Server migration, complete disaster recovery, rebuilding from scratch</p>
+  <div class="alert success">
+    <strong>✅ Recommended:</strong> Create a Disaster Recovery backup at least once per week and before major changes.
+  </div>
+
+  <h2 id="creating-backups">💾 Creating Backups</h2>
+  
+  <div class="step">
+    <h3><span class="step-number">1</span> Access Backup Page</h3>
+    <p>In your CRM, click <strong>💾 System Backup</strong> from the left sidebar menu.</p>
+  </div>
+
+  <div class="step">
+    <h3><span class="step-number">2</span> Choose Backup Type</h3>
+    <p>Click either:</p>
+    <ul>
+      <li><strong>Create System Backup</strong> — for quick daily backups</li>
+      <li><strong>Create DR Backup</strong> — for complete disaster recovery</li>
+    </ul>
+  </div>
+
+  <div class="step">
+    <h3><span class="step-number">3</span> Wait for Completion</h3>
+    <p>System Backup: ~15 seconds | DR Backup: ~60 seconds</p>
+    <p>You'll see a success message with the backup size.</p>
+  </div>
+
+  <div class="step">
+    <h3><span class="step-number">4</span> Download the Backup</h3>
+    <p>The backup appears in the "All Backups" table. Click <strong>Download</strong> to save it to your computer.</p>
+  </div>
+
+  <div class="alert info">
+    <strong>💡 Tip:</strong> Store backups in multiple locations: local computer, external drive, cloud storage (Google Drive, Dropbox).
+  </div>
+
+  <h2 id="requirements">📋 Restoration Requirements</h2>
+
+  <h3>For System Backup Restoration</h3>
+  <p>You need an <strong>existing Netfactory server</strong> with:</p>
+  <table>
+    <tr>
+      <th>Component</th>
+      <th>Requirement</th>
+    </tr>
+    <tr>
+      <td>Operating System</td>
+      <td>Ubuntu 24.04 (already installed)</td>
+    </tr>
+    <tr>
+      <td>Node.js</td>
+      <td>Version 20.x (already installed)</td>
+    </tr>
+    <tr>
+      <td>PostgreSQL</td>
+      <td>Version 16+ (already installed)</td>
+    </tr>
+    <tr>
+      <td>Nginx</td>
+      <td>Latest version (already installed)</td>
+    </tr>
+    <tr>
+      <td>PM2</td>
+      <td>Latest version (already installed)</td>
+    </tr>
+    <tr>
+      <td>Access</td>
+      <td>SSH access with sudo privileges</td>
+    </tr>
+  </table>
+
+  <h3>For Disaster Recovery Restoration</h3>
+  <p>You need:</p>
+  <table>
+    <tr>
+      <th>Component</th>
+      <th>Requirement</th>
+    </tr>
+    <tr>
+      <td>Server</td>
+      <td><strong>Fresh Ubuntu 24.04 server</strong> (can be completely blank)</td>
+    </tr>
+    <tr>
+      <td>RAM</td>
+      <td>Minimum 2 GB (4 GB recommended)</td>
+    </tr>
+    <tr>
+      <td>Disk Space</td>
+      <td>Minimum 20 GB free</td>
+    </tr>
+    <tr>
+      <td>Network</td>
+      <td>Internet connection</td>
+    </tr>
+    <tr>
+      <td>Access</td>
+      <td>SSH/root access (password or key)</td>
+    </tr>
+    <tr>
+      <td>Domain (optional)</td>
+      <td>DNS pointing to new server IP if changing servers</td>
+    </tr>
+  </table>
+
+  <div class="alert warning">
+    <strong>⚠️ Important:</strong> The RESTORE.sh script will install everything automatically. You don't need to install Node.js, PostgreSQL, or any other software beforehand!
+  </div>
+
+  <h2 id="restore-system">🔄 Restoring System Backup</h2>
+  <p><strong>Prerequisites:</strong> Existing Netfactory server with all software installed</p>
+
+  <div class="step">
+    <h3><span class="step-number">1</span> Upload Backup to Server</h3>
+    <p>From your computer, upload the backup file to the server:</p>
+    <pre><code>scp 20260217_154818.tar.gz ubuntu@your-server-ip:~/</code></pre>
+    <p><strong>Windows users:</strong> Use WinSCP or FileZilla to upload the file to <code>/home/ubuntu/</code></p>
+  </div>
+
+  <div class="step">
+    <h3><span class="step-number">2</span> SSH into Server</h3>
+    <pre><code>ssh ubuntu@your-server-ip</code></pre>
+  </div>
+
+  <div class="step">
+    <h3><span class="step-number">3</span> Extract the Backup</h3>
+    <pre><code>cd ~
+tar -xzf 20260217_154818.tar.gz
+cd 20260217_154818</code></pre>
+  </div>
+
+  <div class="step">
+    <h3><span class="step-number">4</span> Restore CRM Files</h3>
+    <pre><code>sudo cp -r crm_backup/* /var/www/netfactory.com.ph/html/crm/
+sudo chown -R www-data:www-data /var/www/netfactory.com.ph/html/crm/</code></pre>
+  </div>
+
+  <div class="step">
+    <h3><span class="step-number">5</span> Restore API Files</h3>
+    <pre><code>cp -r j2-api_backup/* /home/ubuntu/Node.js_API/j2-api/
+cd /home/ubuntu/Node.js_API/j2-api
+npm install
+npx prisma generate</code></pre>
+  </div>
+
+  <div class="step">
+    <h3><span class="step-number">6</span> Restore Database (Optional)</h3>
+    <p>Only if you need to restore admin users:</p>
+    <pre><code>cd ~/20260217_154818
+sudo -u postgres psql ispdb < admin_users_data.sql</code></pre>
+  </div>
+
+  <div class="step">
+    <h3><span class="step-number">7</span> Restart Services</h3>
+    <pre><code>pm2 restart all
+sudo systemctl restart nginx</code></pre>
+  </div>
+
+  <div class="step">
+    <h3><span class="step-number">8</span> Verify Restoration</h3>
+    <p>Open your browser and go to: <code>https://netfactory.com.ph/crm/</code></p>
+    <p>Check that everything works correctly.</p>
+  </div>
+
+  <h2 id="restore-dr">🚨 Restoring Disaster Recovery Backup</h2>
+  <p><strong>Use case:</strong> Building on a brand new server or recovering from complete system failure</p>
+  
+  <div class="alert danger">
+    <strong>⚠️ CRITICAL:</strong> This will COMPLETELY rebuild your server. Only use on a fresh Ubuntu 24.04 installation or when recovering from disaster!
+  </div>
+
+  <div class="step">
+    <h3><span class="step-number">1</span> Provision Fresh Server</h3>
+    <p>Create a new Ubuntu 24.04 server with:</p>
+    <ul>
+      <li>At least 2 GB RAM (4 GB recommended)</li>
+      <li>20 GB+ disk space</li>
+      <li>SSH access enabled</li>
+    </ul>
+    <p><strong>Cloud providers:</strong> AWS EC2, DigitalOcean, Linode, Vultr all work great</p>
+  </div>
+
+  <div class="step">
+    <h3><span class="step-number">2</span> Update DNS (If Changing Servers)</h3>
+    <p>Point your domain <code>netfactory.com.ph</code> to the new server's IP address.</p>
+    <p>Wait 5-15 minutes for DNS propagation.</p>
+  </div>
+
+  <div class="step">
+    <h3><span class="step-number">3</span> Upload Backup to New Server</h3>
+    <p>From your computer:</p>
+    <pre><code>scp 20260217_155805.tar.gz ubuntu@NEW-SERVER-IP:~/</code></pre>
+    <p><strong>Windows:</strong> Use WinSCP/FileZilla to upload to <code>/home/ubuntu/</code></p>
+  </div>
+
+  <div class="step">
+    <h3><span class="step-number">4</span> SSH into New Server</h3>
+    <pre><code>ssh ubuntu@NEW-SERVER-IP</code></pre>
+  </div>
+
+  <div class="step">
+    <h3><span class="step-number">5</span> Extract Backup</h3>
+    <pre><code>cd ~
+tar -xzf 20260217_155805.tar.gz
+cd 20260217_155805</code></pre>
+  </div>
+
+  <div class="step">
+    <h3><span class="step-number">6</span> Make Restore Script Executable</h3>
+    <pre><code>chmod +x RESTORE.sh</code></pre>
+  </div>
+
+  <div class="step">
+    <h3><span class="step-number">7</span> Run the Automated Restore</h3>
+    <pre><code>sudo ./RESTORE.sh</code></pre>
+    <p>When prompted, type <code>yes</code> and press Enter.</p>
+    <p><strong>This will take 15-20 minutes</strong> and will automatically:</p>
+    <ul>
+      <li>Install Node.js, PostgreSQL, Nginx, PM2</li>
+      <li>Restore all files</li>
+      <li>Import complete database</li>
+      <li>Configure SSL certificates</li>
+      <li>Start all services</li>
+    </ul>
+  </div>
+
+  <div class="step">
+    <h3><span class="step-number">8</span> Verify Everything Works</h3>
+    <p>After the script completes, run:</p>
+    <pre><code>pm2 status
+curl http://localhost:3001/api/health</code></pre>
+    <p>Then open your browser: <code>https://netfactory.com.ph/crm/</code></p>
+  </div>
+
+  <div class="step">
+    <h3><span class="step-number">9</span> Configure PM2 Startup (First Time Only)</h3>
+    <p>If this is a brand new server, configure PM2 to start on boot:</p>
+    <pre><code>pm2 startup
+# Copy and run the command it shows you
+pm2 save</code></pre>
+  </div>
+
+  <div class="alert success">
+    <strong>✅ Success!</strong> Your entire system has been restored. All services, databases, configurations, and files are now running on the new server!
+  </div>
+
+  <h2 id="troubleshooting">🔧 Troubleshooting</h2>
+
+  <h3>Problem: "Permission denied" during restore</h3>
+  <p><strong>Solution:</strong> Make sure you're using <code>sudo</code> for commands that need it:</p>
+  <pre><code>sudo ./RESTORE.sh
+sudo cp -r crm_backup/* /var/www/netfactory.com.ph/html/crm/</code></pre>
+
+  <h3>Problem: "npm install" fails</h3>
+  <p><strong>Solution:</strong> Make sure Node.js is installed:</p>
+  <pre><code>node --version
+npm --version</code></pre>
+  <p>If not installed, run:</p>
+  <pre><code>curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs</code></pre>
+
+  <h3>Problem: Database restore fails</h3>
+  <p><strong>Solution:</strong> Check PostgreSQL is running:</p>
+  <pre><code>sudo systemctl status postgresql
+sudo systemctl start postgresql</code></pre>
+
+  <h3>Problem: Nginx shows "502 Bad Gateway"</h3>
+  <p><strong>Solution:</strong> Check if API is running:</p>
+  <pre><code>pm2 status
+pm2 logs j2-api</code></pre>
+  <p>Restart if needed:</p>
+  <pre><code>pm2 restart j2-api</code></pre>
+
+  <h3>Problem: SSL certificates don't work after restore</h3>
+  <p><strong>Solution:</strong> If you changed domains, regenerate certificates:</p>
+  <pre><code>sudo certbot --nginx -d netfactory.com.ph</code></pre>
+
+  <h3>Problem: Can't SSH into new server</h3>
+  <p><strong>Solution:</strong> Check:</p>
+  <ul>
+    <li>Firewall allows port 22: <code>sudo ufw allow 22</code></li>
+    <li>Security group allows SSH (cloud providers)</li>
+    <li>Using correct IP address</li>
+    <li>SSH key is correct</li>
+  </ul>
+
+  <h3>Still Having Issues?</h3>
+  <div class="alert info">
+    <p><strong>📞 Get Help:</strong></p>
+    <ul>
+      <li>Check API logs: <code>pm2 logs j2-api</code></li>
+      <li>Check Nginx logs: <code>sudo tail -f /var/log/nginx/error.log</code></li>
+      <li>Check system logs: <code>sudo journalctl -xe</code></li>
+      <li>Contact your system administrator</li>
+    </ul>
+  </div>
+
+  <hr style="margin: 40px 0; border: none; border-top: 2px solid #e2e8f0;">
+  
+  <div class="alert success">
+    <strong>🎉 You're all set!</strong> You now know how to backup and restore your Netfactory CRM system. Remember to create regular backups and test your restore process periodically!
+  </div>
+
+  <div style="display:flex;gap:12px;margin-bottom:24px;flex-wrap:wrap;">
+    <a href="/crm/downloads/Netfactory-Backup-Restore-Guide.pdf" download class="back-btn" style="background:#ef4444;margin:0;">📄 Download PDF</a>
+    <a href="/crm/downloads/Netfactory-Backup-Restore-Guide.docx" download class="back-btn" style="background:#2563eb;margin:0;">📝 Download Word</a>
+  </div>
+</div>
+</body>
+</html>

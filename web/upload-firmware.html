@@ -1,0 +1,893 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<title>Netfactory — File Manager</title>
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+<style>
+  :root{
+    --bg:#070b14; --bg-alt:#0d1320; --bg-card:#111a2c; --border:#1f2a44;
+    --text:#e3e9f3; --text-muted:#7c8aa3;
+    --accent:#3b82f6; --accent-hover:#2563eb; --accent-glow:rgba(59,130,246,.10);
+    --green:#22c55e; --green-bg:rgba(34,197,94,.08);
+    --red:#ef4444; --red-bg:rgba(239,68,68,.08);
+    --yellow:#f59e0b; --yellow-bg:rgba(245,158,11,.08);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:'Inter','Segoe UI',sans-serif;background:var(--bg);color:var(--text);margin:0}
+  body.login-mode{background:radial-gradient(ellipse at top,#0a1530 0%,#050810 70%);overflow:hidden}
+  body.login-mode #fm{display:none !important}
+  /* ── Login card ─────────────────────────────────────── */
+  body.login-mode #card-login{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+                              width:min(94vw,460px);max-height:calc(100vh - 32px);overflow:auto}
+  .login-shell{background:#0d1320;border:1px solid var(--border);border-radius:14px;padding:32px;box-shadow:0 24px 60px -20px rgba(0,0,0,.6)}
+  .brand{display:flex;align-items:center;gap:14px;margin-bottom:24px}
+  .brand-icon{width:46px;height:46px;border-radius:12px;background:linear-gradient(135deg,#3b82f6,#1d4ed8);
+              display:flex;align-items:center;justify-content:center;color:#fff;font-size:22px;
+              box-shadow:0 8px 24px -8px rgba(59,130,246,.55)}
+  .brand-text h1{font-size:18px;font-weight:700;letter-spacing:.3px;line-height:1.15}
+  .brand-text .tag{font-size:12px;color:var(--text-muted);margin-top:6px;font-weight:500}
+  .login{display:flex;flex-direction:column;gap:18px}
+  .login .field{display:flex;flex-direction:column;gap:8px}
+  .login label{font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.2px;display:flex;align-items:center;gap:6px}
+  .login label i{font-size:11px;opacity:.7}
+  .login input{background:#070b14;border:1px solid var(--border);color:var(--text);border-radius:8px;padding:13px 14px;font-size:14px;font-family:inherit;transition:all .15s}
+  .login input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(59,130,246,.15)}
+  .login .btn{background:linear-gradient(135deg,#4f46e5,#3b82f6);color:#fff;border:0;padding:13px;border-radius:8px;font-weight:600;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;margin-top:6px}
+  .login .btn:hover{filter:brightness(1.1)}
+  .login .err{color:var(--red);font-size:12px;text-align:center;display:none;padding:8px;background:var(--red-bg);border:1px solid rgba(239,68,68,.25);border-radius:6px}
+  .login .err.show{display:block}
+  .login .warn-banner{display:none;align-items:center;gap:8px;font-size:12px;padding:9px 12px;border-radius:8px;
+                       color:var(--yellow);background:var(--yellow-bg);border:1px solid rgba(245,158,11,.3)}
+  .login .warn-banner.show{display:flex}
+  .login .lock-banner{display:none;flex-direction:column;align-items:center;gap:6px;font-size:13px;padding:14px;
+                      border-radius:10px;color:var(--red);background:var(--red-bg);border:1px solid rgba(239,68,68,.35);text-align:center}
+  .login .lock-banner.show{display:flex}
+  .login .lock-banner .clock{font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:700}
+  /* ── Captcha block ─────────────────────────────────── */
+  .captcha-row{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end}
+  .captcha-img{background:#070b14;border:1px solid var(--border);border-radius:8px;padding:6px;
+               display:flex;align-items:center;justify-content:center;cursor:pointer;transition:border-color .15s;
+               width:104px;height:64px}
+  .captcha-img:hover{border-color:var(--accent)}
+  .captcha-img svg{width:100%;height:auto;display:block}
+  .captcha-img .reload{position:absolute;font-size:11px;color:var(--text-muted);text-align:center;width:100%;display:none}
+  .captcha-img.loading .reload{display:block}
+  .captcha-img.loading svg{opacity:.3}
+  .captcha-row input{text-transform:uppercase;letter-spacing:2px;font-family:'JetBrains Mono',monospace;font-weight:700;text-align:center}
+
+  /* ── File-manager view ──────────────────────────────── */
+  .topbar{display:flex;align-items:center;justify-content:space-between;padding:16px 24px;background:var(--bg-card);
+          border-bottom:1px solid var(--border);position:sticky;top:0;z-index:10}
+  .topbar-left{display:flex;align-items:center;gap:14px;min-width:0;flex:1}
+  .logo{width:34px;height:34px;border-radius:8px;background:linear-gradient(135deg,#3b82f6,#1d4ed8);
+        display:flex;align-items:center;justify-content:center;color:#fff;font-size:15px;flex-shrink:0;
+        box-shadow:0 6px 18px -6px rgba(59,130,246,.5)}
+  .topbar h1{font-size:15px;font-weight:700;white-space:nowrap}
+  .crumbs{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-muted);min-width:0;
+          flex-wrap:wrap;margin-left:14px}
+  .crumb{cursor:pointer;padding:5px 10px;border-radius:6px;color:var(--text);font-weight:500;
+         background:var(--bg-alt);border:1px solid var(--border);display:flex;align-items:center;gap:6px;transition:all .12s}
+  .crumb:hover{border-color:var(--accent);color:var(--accent)}
+  .crumb.current{background:var(--accent-glow);border-color:rgba(59,130,246,.35);color:var(--accent)}
+  .sep{color:var(--text-muted)}
+  .topbar-right{display:flex;align-items:center;gap:8px;flex-shrink:0}
+  .btn{background:var(--bg-alt);color:var(--text);border:1px solid var(--border);padding:8px 14px;
+       border-radius:8px;font-size:13px;font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:7px;font-family:inherit;transition:all .12s}
+  .btn:hover{border-color:var(--accent);color:var(--accent)}
+  .btn-primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  .btn-primary:hover{background:var(--accent-hover);color:#fff}
+  .btn-danger{background:var(--red-bg);color:var(--red);border-color:rgba(239,68,68,.35)}
+  .btn-danger:hover{background:rgba(239,68,68,.18);color:#fff}
+  .btn-icon{padding:7px 9px;background:transparent;border:0;color:var(--text-muted);border-radius:6px;cursor:pointer}
+  .btn-icon:hover{color:var(--accent);background:var(--bg-alt)}
+  .btn-icon.danger:hover{color:var(--red);background:var(--red-bg)}
+
+  .main{padding:20px 24px}
+  .table-wrap{background:var(--bg-card);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+  table{width:100%;border-collapse:collapse}
+  thead{background:var(--bg-alt)}
+  th{text-align:left;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;
+     letter-spacing:.8px;padding:14px 18px;border-bottom:1px solid var(--border)}
+  td{padding:13px 18px;border-bottom:1px solid var(--border);font-size:13.5px}
+  tbody tr{transition:background .1s}
+  tbody tr:hover{background:rgba(59,130,246,.04)}
+  tbody tr:last-child td{border-bottom:0}
+  td.name{display:flex;align-items:center;gap:12px;cursor:pointer;font-weight:500}
+  td.name i.icon{font-size:18px;flex-shrink:0;width:22px;text-align:center}
+  td.name i.fa-folder{color:#f59e0b}
+  td.name i.fa-file-zipper{color:#a855f7}
+  td.name i.fa-file-code{color:#22c55e}
+  td.name i.fa-file{color:var(--text-muted)}
+  td.size{color:var(--text-muted);font-family:'JetBrains Mono',monospace;font-size:12px;width:120px}
+  td.modified{color:var(--text-muted);font-size:12.5px;width:200px}
+  td.actions{width:170px;text-align:right;white-space:nowrap}
+  .empty{text-align:center;padding:60px 20px;color:var(--text-muted)}
+  .empty i{font-size:46px;color:var(--border);margin-bottom:14px}
+  .empty p{font-size:14px}
+  .empty .hint{font-size:12px;margin-top:6px;opacity:.7}
+
+  /* Drag-over highlight on the table */
+  .table-wrap.drag-over{border-color:var(--accent);background:var(--accent-glow);
+                       box-shadow:0 0 0 4px rgba(59,130,246,.08) inset}
+  .table-wrap.drag-over::after{content:"Drop files / folder to upload";position:absolute;inset:0;
+    display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:600;color:var(--accent);
+    background:rgba(7,11,20,.85);pointer-events:none;border-radius:12px}
+  .table-wrap{position:relative}
+
+  /* Move-target highlight */
+  tr.move-target{outline:2px dashed var(--accent);outline-offset:-3px;background:var(--accent-glow)!important}
+
+  /* ── Modals ─────────────────────────────────────────── */
+  .modal-bg{position:fixed;inset:0;background:rgba(5,10,20,.78);display:none;align-items:center;justify-content:center;z-index:100;backdrop-filter:blur(4px)}
+  .modal-bg.show{display:flex}
+  .modal{background:var(--bg-card);border:1px solid var(--border);border-radius:14px;padding:24px;width:min(92vw,520px);max-height:90vh;overflow:auto}
+  .modal h3{font-size:16px;margin-bottom:18px;display:flex;align-items:center;gap:10px}
+  .modal h3 i{color:var(--accent)}
+  .modal label{display:block;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.2px;margin-bottom:6px}
+  .modal input[type=text]{width:100%;background:#070b14;border:1px solid var(--border);color:var(--text);border-radius:8px;padding:11px 14px;font-size:14px;font-family:inherit}
+  .modal input[type=text]:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(59,130,246,.15)}
+  .modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:20px;padding-top:16px;border-top:1px solid var(--border)}
+  .move-list{max-height:50vh;overflow:auto;border:1px solid var(--border);border-radius:8px;background:#070b14}
+  .move-item{padding:10px 14px;cursor:pointer;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border);font-size:13px}
+  .move-item:hover{background:var(--accent-glow);color:var(--accent)}
+  .move-item:last-child{border-bottom:0}
+  .move-item i{color:#f59e0b;width:16px;text-align:center}
+
+  /* ── Toast ─────────────────────────────────────────── */
+  .toast{position:fixed;bottom:24px;right:24px;background:var(--bg-card);border:1px solid var(--border);
+         padding:12px 18px;border-radius:10px;color:var(--text);font-size:13px;z-index:1000;
+         transform:translateY(100px);transition:transform .25s, opacity .25s;opacity:0;
+         box-shadow:0 16px 40px -12px rgba(0,0,0,.5);max-width:380px}
+  .toast.show{transform:translateY(0);opacity:1}
+  .toast.ok{border-color:rgba(34,197,94,.35);color:var(--green)}
+  .toast.err{border-color:rgba(239,68,68,.35);color:var(--red)}
+  .toast.warn{border-color:rgba(245,158,11,.35);color:var(--yellow)}
+
+  /* ── Upload progress overlay ───────────────────────── */
+  .upload-bar{position:fixed;bottom:0;left:0;right:0;background:var(--bg-card);border-top:1px solid var(--border);padding:12px 24px;display:none;align-items:center;gap:14px;z-index:50}
+  .upload-bar.show{display:flex}
+  .upload-bar .label{font-size:13px;color:var(--text);min-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .upload-bar .bar{flex:1;height:4px;background:var(--bg-alt);border-radius:2px;overflow:hidden}
+  .upload-bar .bar > div{height:100%;background:var(--accent);width:0%;transition:width .15s}
+  .upload-bar .pct{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--text-muted);min-width:46px;text-align:right}
+</style>
+</head>
+<body class="login-mode">
+
+<!-- ── Login card ───────────────────────────────────── -->
+<div id="card-login">
+  <div class="login-shell">
+    <div class="brand">
+      <div class="brand-icon"><i class="fas fa-cloud-arrow-up"></i></div>
+      <div class="brand-text">
+        <h1>Netfactory &mdash; File Manager</h1>
+        <div class="tag">file drop — sign in to continue</div>
+      </div>
+    </div>
+    <form class="login" id="login-form">
+      <div class="field">
+        <label><i class="fas fa-user"></i> Username</label>
+        <input type="text" id="user" autocomplete="username" required>
+      </div>
+      <div class="field">
+        <label><i class="fas fa-lock"></i> Password</label>
+        <input type="password" id="pass" autocomplete="current-password" required>
+      </div>
+      <div class="field">
+        <label><i class="fas fa-shield-halved"></i> Captcha — type the characters</label>
+        <div class="captcha-row">
+          <input type="text" id="captcha-answer" autocomplete="off" spellcheck="false" maxlength="5" placeholder="ABCDE" required>
+          <div class="captcha-img" id="captcha-img" title="Click to refresh"><span class="reload">loading…</span></div>
+        </div>
+      </div>
+      <p class="warn-banner" id="warn-banner"><i class="fas fa-triangle-exclamation"></i> <span id="warn-text"></span></p>
+      <p class="err" id="login-err"></p>
+      <div class="lock-banner" id="lock-banner">
+        <i class="fas fa-lock" style="font-size:18px"></i>
+        <div>Too many failed attempts. Locked for</div>
+        <div class="clock" id="lock-clock">00:00</div>
+      </div>
+      <button type="submit" class="btn" id="login-btn"><i class="fas fa-right-to-bracket"></i> Sign in</button>
+    </form>
+  </div>
+</div>
+
+<!-- ── File manager view ─────────────────────────────── -->
+<div id="fm" style="display:none">
+  <div class="topbar">
+    <div class="topbar-left">
+      <div class="logo"><i class="fas fa-cloud-arrow-up"></i></div>
+      <h1>File Manager</h1>
+      <div class="crumbs" id="crumbs"></div>
+    </div>
+    <div class="topbar-right">
+      <button class="btn" onclick="openMkdir()"><i class="fas fa-folder-plus"></i> New folder</button>
+      <button class="btn btn-primary" onclick="document.getElementById('file-input').click()"><i class="fas fa-file-arrow-up"></i> Upload files</button>
+      <button class="btn btn-primary" onclick="document.getElementById('folder-input').click()"><i class="fas fa-folder-arrow-up"></i> Upload folder</button>
+      <button class="btn" onclick="signOut()"><i class="fas fa-right-from-bracket"></i> Sign out</button>
+      <input type="file" id="file-input" multiple style="display:none">
+      <input type="file" id="folder-input" webkitdirectory directory multiple style="display:none">
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="table-wrap" id="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:auto">Name</th>
+            <th style="width:120px">Size</th>
+            <th style="width:200px">Modified</th>
+            <th style="width:170px;text-align:right">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ── New-folder modal ─────────────────────────────── -->
+<div class="modal-bg" id="modal-mkdir">
+  <div class="modal">
+    <h3><i class="fas fa-folder-plus"></i> New folder</h3>
+    <label>Folder name</label>
+    <input type="text" id="mkdir-name" placeholder="e.g. T21P_E2 firmware" autocomplete="off">
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('modal-mkdir')">Cancel</button>
+      <button class="btn btn-primary" onclick="submitMkdir()"><i class="fas fa-check"></i> Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Rename modal ─────────────────────────────────── -->
+<div class="modal-bg" id="modal-rename">
+  <div class="modal">
+    <h3><i class="fas fa-pen-to-square"></i> Rename</h3>
+    <label>New name</label>
+    <input type="text" id="rename-new" autocomplete="off">
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('modal-rename')">Cancel</button>
+      <button class="btn btn-primary" onclick="submitRename()"><i class="fas fa-check"></i> Rename</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Move modal ───────────────────────────────────── -->
+<div class="modal-bg" id="modal-move">
+  <div class="modal" style="width:min(94vw,640px)">
+    <h3><i class="fas fa-arrow-right-arrow-left"></i> Move <span id="move-name" style="color:var(--accent)"></span></h3>
+    <label>Destination folder</label>
+    <div class="move-list" id="move-list"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('modal-move')">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Confirm modal ────────────────────────────────── -->
+<div class="modal-bg" id="modal-confirm">
+  <div class="modal">
+    <h3 id="cnf-title"><i class="fas fa-circle-question"></i> Confirm</h3>
+    <p id="cnf-body" style="font-size:13.5px;line-height:1.55;color:var(--text)"></p>
+    <div class="modal-actions">
+      <button class="btn" id="cnf-cancel">Cancel</button>
+      <button class="btn btn-danger" id="cnf-ok"><i class="fas fa-check"></i> Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Upload progress bar ──────────────────────────── -->
+<div class="upload-bar" id="upload-bar">
+  <i class="fas fa-cloud-arrow-up" style="color:var(--accent)"></i>
+  <div class="label" id="upload-label">Uploading…</div>
+  <div class="bar"><div id="upload-fill"></div></div>
+  <div class="pct" id="upload-pct">0%</div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = '/api/upload-firmware';
+let AUTH = '';                 // Basic <base64>
+let CWD = '';                  // current path (relative to root, "" = root)
+let SELECTED = null;           // target item for rename/move/delete
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function fmtSize(n){
+  if(n==null) return '—';
+  if(n < 1024) return n+' B';
+  if(n < 1048576) return (n/1024).toFixed(1)+' KB';
+  if(n < 1073741824) return (n/1048576).toFixed(1)+' MB';
+  return (n/1073741824).toFixed(2)+' GB';
+}
+function fmtDate(iso){
+  if(!iso) return '—';
+  try{ const d=new Date(iso); return d.toLocaleDateString()+' '+d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}); }catch{return iso;}
+}
+function fileIcon(name, type){
+  if(type==='dir') return 'fa-folder';
+  const ext=(name.split('.').pop()||'').toLowerCase();
+  if(['zip','tar','gz','rar','7z'].includes(ext)) return 'fa-file-zipper';
+  if(['rom','bin','img','fw'].includes(ext)) return 'fa-microchip';
+  if(['txt','log','md'].includes(ext)) return 'fa-file-lines';
+  if(['cfg','json','xml','yaml','yml','ini','conf'].includes(ext)) return 'fa-file-code';
+  if(['jpg','jpeg','png','gif','svg','webp'].includes(ext)) return 'fa-file-image';
+  if(['pdf'].includes(ext)) return 'fa-file-pdf';
+  return 'fa-file';
+}
+
+function toast(msg, kind){
+  const t=document.getElementById('toast');
+  t.textContent=msg; t.className='toast show '+(kind||'');
+  setTimeout(()=>t.classList.remove('show'), 4000);
+}
+
+function authHeaders(extra){ return Object.assign({Authorization: AUTH}, extra||{}); }
+
+// ── Captcha ────────────────────────────────────────────
+let CAPTCHA_ID = '';
+let LOCK_TIMER = null;
+
+async function loadCaptcha(){
+  const img = document.getElementById('captcha-img');
+  img.classList.add('loading');
+  document.getElementById('captcha-answer').value = '';
+  CAPTCHA_ID = '';
+  try {
+    const r = await fetch(API + '/captcha');
+    if (r.status === 429) {
+      const j = await r.json().catch(() => ({}));
+      enterLock(j.retryAfter || 900);
+      return;
+    }
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'captcha load failed');
+    CAPTCHA_ID = j.id;
+    img.innerHTML = j.svg;
+    img.classList.remove('loading');
+  } catch (err) {
+    img.innerHTML = '<span style="color:var(--red);font-size:11px">load failed — click to retry</span>';
+    img.classList.remove('loading');
+  }
+}
+document.getElementById('captcha-img').addEventListener('click', loadCaptcha);
+
+// ── Lockout UI ─────────────────────────────────────────
+function enterLock(secs){
+  const banner = document.getElementById('lock-banner');
+  const clock = document.getElementById('lock-clock');
+  const btn = document.getElementById('login-btn');
+  banner.classList.add('show');
+  btn.disabled = true; btn.style.opacity = '.4'; btn.style.cursor = 'not-allowed';
+  ['user','pass','captcha-answer'].forEach(id => document.getElementById(id).disabled = true);
+  document.getElementById('captcha-img').style.pointerEvents = 'none';
+  let remaining = Math.max(1, parseInt(secs, 10));
+  const tick = () => {
+    if (remaining <= 0) { exitLock(); return; }
+    const m = String(Math.floor(remaining/60)).padStart(2,'0');
+    const s = String(remaining%60).padStart(2,'0');
+    clock.textContent = m + ':' + s;
+    remaining--;
+  };
+  tick();
+  if (LOCK_TIMER) clearInterval(LOCK_TIMER);
+  LOCK_TIMER = setInterval(tick, 1000);
+}
+function exitLock(){
+  if (LOCK_TIMER) { clearInterval(LOCK_TIMER); LOCK_TIMER = null; }
+  document.getElementById('lock-banner').classList.remove('show');
+  const btn = document.getElementById('login-btn');
+  btn.disabled = false; btn.style.opacity = ''; btn.style.cursor = '';
+  ['user','pass','captcha-answer'].forEach(id => document.getElementById(id).disabled = false);
+  document.getElementById('captcha-img').style.pointerEvents = '';
+  loadCaptcha();
+}
+
+function showWarnRemaining(remaining){
+  const b = document.getElementById('warn-banner');
+  if (remaining > 0 && remaining < 5) {
+    document.getElementById('warn-text').textContent = remaining + ' attempt' + (remaining===1?'':'s') + ' remaining before lockout';
+    b.classList.add('show');
+  } else {
+    b.classList.remove('show');
+  }
+}
+
+// ── Login ──────────────────────────────────────────────
+document.getElementById('login-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const user = document.getElementById('user').value.trim();
+  const pass = document.getElementById('pass').value;
+  const cap = document.getElementById('captcha-answer').value.trim();
+  const errEl = document.getElementById('login-err');
+  errEl.classList.remove('show');
+  if (!CAPTCHA_ID) { errEl.textContent = 'Captcha not loaded — click the image to refresh'; errEl.classList.add('show'); return; }
+  const auth = 'Basic ' + btoa(user + ':' + pass);
+  try {
+    const r = await fetch(API + '/health', {
+      credentials: 'include',
+      headers: {
+        'Authorization': auth,
+        'X-Captcha-Id': CAPTCHA_ID,
+        'X-Captcha-Answer': cap,
+      },
+    });
+    if (r.status === 429) {
+      const j = await r.json().catch(() => ({}));
+      enterLock(j.retryAfter || 900);
+      return;
+    }
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      // Refresh captcha on every failure (single-use server-side)
+      loadCaptcha();
+      if (j.captcha_failed) errEl.textContent = 'Captcha incorrect — try again';
+      else errEl.textContent = j.error || 'Sign-in failed';
+      errEl.classList.add('show');
+      if (typeof j.remaining === 'number') showWarnRemaining(j.remaining);
+      if (j.locked) enterLock(900);
+      return;
+    }
+    AUTH = auth;
+    sessionStorage.setItem('fm-auth', auth);
+    // If the page was opened from a /download-wp/* link, bounce back there
+    // now that the fw_session cookie has been issued.
+    const nextUrl = new URLSearchParams(location.search).get('next');
+    if (nextUrl && /^\/download-(np|wp)(\/|$)/.test(nextUrl)) {
+      location.replace(nextUrl);
+      return;
+    }
+    enterFm();
+  } catch (err) {
+    errEl.textContent = err.message || 'Sign-in failed';
+    errEl.classList.add('show');
+    loadCaptcha();
+  }
+});
+
+(function autoRestore(){
+  const saved = sessionStorage.getItem('fm-auth');
+  if (!saved) {
+    loadCaptcha();
+    refreshLockState();
+    return;
+  }
+  // Try resuming session — list endpoint requires Basic Auth only
+  // (no captcha for already-authenticated session).
+  fetch(API + '/list?path=', { headers: { Authorization: saved } })
+    .then(r => { if(!r.ok) throw 0; AUTH = saved; enterFm(); })
+    .catch(() => { sessionStorage.removeItem('fm-auth'); loadCaptcha(); refreshLockState(); });
+})();
+
+async function refreshLockState(){
+  try {
+    const r = await fetch(API + '/status');
+    const j = await r.json();
+    if (j.locked && j.retryAfter) enterLock(j.retryAfter);
+    else if (j.attempts > 0) showWarnRemaining(j.threshold - j.attempts);
+  } catch {}
+}
+
+function enterFm(){
+  document.body.classList.remove('login-mode');
+  document.getElementById('card-login').style.display='none';
+  document.getElementById('fm').style.display='block';
+  loadList('');
+}
+
+function signOut(){
+  AUTH=''; sessionStorage.removeItem('fm-auth');
+  document.getElementById('fm').style.display='none';
+  document.getElementById('card-login').style.display='block';
+  document.body.classList.add('login-mode');
+}
+
+// ── List + render ────────────────────────────────────
+async function loadList(p){
+  CWD = p || '';
+  try{
+    const r = await fetch(API+'/list?path='+encodeURIComponent(CWD), { headers: authHeaders() });
+    const j = await r.json();
+    if(!r.ok) throw new Error(j.error||r.statusText);
+    renderCrumbs(j.path);
+    renderRows(j.items);
+  } catch(e){ toast('Load failed: '+e.message, 'err'); }
+}
+
+function renderCrumbs(p){
+  const el = document.getElementById('crumbs');
+  const parts = (p||'').split('/').filter(Boolean);
+  let html = '<span class="crumb'+(parts.length===0?' current':'')+'" onclick="loadList(\'\')"><i class="fas fa-house"></i> Home</span>';
+  let cur = '';
+  parts.forEach((seg, i) => {
+    cur = cur ? (cur+'/'+seg) : seg;
+    const last = i === parts.length-1;
+    html += '<span class="sep">/</span>';
+    html += '<span class="crumb'+(last?' current':'')+'" onclick="loadList(\''+esc(cur)+'\')">'+esc(seg)+'</span>';
+  });
+  el.innerHTML = html;
+}
+
+function renderRows(items){
+  const tb = document.getElementById('tbody');
+  if(!items.length){
+    tb.innerHTML = '<tr><td colspan="4" class="empty"><i class="fas fa-folder-open"></i><p>This folder is empty.</p><p class="hint">Drop files here or use the upload buttons.</p></td></tr>';
+    return;
+  }
+  tb.innerHTML = items.map(it => {
+    const full = (CWD ? CWD+'/' : '') + it.name;
+    const enc = encodeURIComponent(full);
+    const isDir = it.type==='dir';
+    const icon = fileIcon(it.name, it.type);
+    const dlBtn = isDir
+      ? '<button class="btn-icon" onclick="downloadZip(\''+esc(full)+'\')" title="Download as ZIP"><i class="fas fa-download"></i></button>'
+      : '<button class="btn-icon" onclick="download(\''+esc(full)+'\')" title="Download"><i class="fas fa-download"></i></button>';
+    const isCwmpPushable = isDir || /\.(rom|bin|fw|img|cfg)$/i.test(it.name);
+    const syncBtn = isCwmpPushable
+      ? '<button class="btn-icon" onclick="syncToGenieAcs(\''+esc(full)+'\',\''+esc(it.name)+'\','+isDir+')" title="Push to GenieACS file store"><i class="fas fa-cloud-arrow-up"></i></button>'
+      : '';
+    // Shareable link: only files directly inside download-np or download-wp
+    // can be served via /download-(np|wp)/:filename. Nested folders aren't
+    // exposed by those routes, so the icon hides for them.
+    const m = isDir ? null : full.match(/^download-(np|wp)\/([^/]+)$/);
+    const shareBtn = m
+      ? '<button class="btn-icon" onclick="copyShareLink(\''+m[1]+'\',\''+esc(m[2])+'\')" title="Copy '+(m[1]==='np'?'public':'private')+' link"><i class="fas fa-link"></i></button>'
+      : '';
+    return '<tr data-path="'+esc(full)+'" data-type="'+it.type+'">'
+      + '<td class="name" onclick="'+(isDir?'loadList(\''+esc(full)+'\')':'download(\''+esc(full)+'\')')+'"><i class="fas '+icon+' icon"></i>'+esc(it.name)+'</td>'
+      + '<td class="size">'+(isDir?'—':fmtSize(it.size))+'</td>'
+      + '<td class="modified">'+fmtDate(it.modified)+'</td>'
+      + '<td class="actions">'
+      +   dlBtn
+      +   shareBtn
+      +   syncBtn
+      +   '<button class="btn-icon" onclick="openMove(\''+esc(full)+'\',\''+esc(it.name)+'\')" title="Move"><i class="fas fa-arrow-right-arrow-left"></i></button>'
+      +   '<button class="btn-icon" onclick="openRename(\''+esc(full)+'\',\''+esc(it.name)+'\')" title="Rename"><i class="fas fa-pen-to-square"></i></button>'
+      +   '<button class="btn-icon danger" onclick="confirmDelete(\''+esc(full)+'\',\''+esc(it.name)+'\','+isDir+')" title="Delete"><i class="fas fa-trash"></i></button>'
+      + '</td>'
+      + '</tr>';
+  }).join('');
+}
+
+// ── Copy shareable link ──────────────────────────────
+// Builds a public (np) or private (wp) URL for the given filename and
+// copies it to the clipboard. Falls back to a hidden textarea for older
+// browsers / non-secure contexts.
+async function copyShareLink(kind, filename){
+  const url = location.origin + '/download-' + kind + '/' + encodeURIComponent(filename);
+  let ok = false;
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(url);
+      ok = true;
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = url; ta.style.position = 'fixed'; ta.style.top = '-1000px';
+      document.body.appendChild(ta); ta.select();
+      ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+  } catch (e) { ok = false; }
+  showLinkToast(url, kind, ok);
+}
+function showLinkToast(url, kind, ok){
+  let t = document.getElementById('link-toast');
+  if (!t) {
+    t = document.createElement('div');
+    t.id = 'link-toast';
+    t.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#0f172a;border:1px solid #334155;border-radius:10px;padding:12px 16px;color:#e2e8f0;font-size:13px;box-shadow:0 12px 32px rgba(0,0,0,.45);z-index:9999;display:flex;flex-direction:column;gap:6px;max-width:560px;min-width:300px;opacity:0;transition:opacity .2s';
+    document.body.appendChild(t);
+  }
+  const label = kind === 'np' ? '<span style="color:#22c55e">Public link</span>' : '<span style="color:#f59e0b">Private link (login required)</span>';
+  const status = ok
+    ? '<i class="fas fa-circle-check" style="color:#22c55e"></i> Copied to clipboard'
+    : '<i class="fas fa-triangle-exclamation" style="color:#f59e0b"></i> Copy failed — link below, copy manually';
+  t.innerHTML = '<div style="font-weight:700;font-size:11px">'+label+' &middot; '+status+'</div>'
+    + '<input readonly value="'+url+'" style="background:#070b14;border:1px solid #1e293b;border-radius:6px;padding:6px 10px;color:#94a3b8;font-family:monospace;font-size:11.5px;width:100%" onclick="this.select()">';
+  t.style.opacity = '1';
+  clearTimeout(showLinkToast._timer);
+  showLinkToast._timer = setTimeout(() => { t.style.opacity = '0'; }, 5000);
+}
+
+// ── Modal helpers ────────────────────────────────────
+function closeModal(id){ document.getElementById(id).classList.remove('show'); }
+
+// ── New folder ───────────────────────────────────────
+function openMkdir(){
+  document.getElementById('mkdir-name').value='';
+  document.getElementById('modal-mkdir').classList.add('show');
+  setTimeout(()=>document.getElementById('mkdir-name').focus(),50);
+}
+async function submitMkdir(){
+  const name = document.getElementById('mkdir-name').value.trim();
+  if(!name) return;
+  try{
+    const r = await fetch(API+'/mkdir', { method:'POST', headers:authHeaders({'Content-Type':'application/json'}), body:JSON.stringify({path:CWD,name}) });
+    const j = await r.json();
+    if(!r.ok) throw new Error(j.error||r.statusText);
+    toast('Folder created','ok'); closeModal('modal-mkdir'); loadList(CWD);
+  } catch(e){ toast('Create failed: '+e.message,'err'); }
+}
+
+// ── Rename ───────────────────────────────────────────
+function openRename(p, currentName){
+  SELECTED = p;
+  document.getElementById('rename-new').value = currentName;
+  document.getElementById('modal-rename').classList.add('show');
+  setTimeout(()=>{ const i=document.getElementById('rename-new'); i.focus(); i.select(); },50);
+}
+async function submitRename(){
+  const newName = document.getElementById('rename-new').value.trim();
+  if(!newName || !SELECTED) return;
+  try{
+    const r = await fetch(API+'/rename', { method:'POST', headers:authHeaders({'Content-Type':'application/json'}), body:JSON.stringify({path:SELECTED,newName}) });
+    const j = await r.json();
+    if(!r.ok) throw new Error(j.error||r.statusText);
+    toast('Renamed','ok'); closeModal('modal-rename'); loadList(CWD);
+  } catch(e){ toast('Rename failed: '+e.message,'err'); }
+}
+
+// ── Move ─────────────────────────────────────────────
+async function openMove(p, name){
+  SELECTED = p;
+  document.getElementById('move-name').textContent = name;
+  document.getElementById('modal-move').classList.add('show');
+  await renderMoveTree('');
+}
+
+async function renderMoveTree(currentPath){
+  const list = document.getElementById('move-list');
+  list.innerHTML = '<div class="move-item" style="opacity:.6">Loading…</div>';
+  try{
+    const r = await fetch(API+'/list?path='+encodeURIComponent(currentPath), { headers:authHeaders() });
+    const j = await r.json();
+    if(!r.ok) throw new Error(j.error||r.statusText);
+    let html = '';
+    // "Move here" action for the current folder we're browsing
+    html += '<div class="move-item" style="background:var(--accent-glow)" onclick="submitMove(\''+esc(currentPath)+'\')"><i class="fas fa-check"></i> Move into <b>'+(currentPath?esc(currentPath):'Home')+'</b></div>';
+    // Up one level
+    if(currentPath){
+      const parent = currentPath.split('/').slice(0,-1).join('/');
+      html += '<div class="move-item" onclick="renderMoveTree(\''+esc(parent)+'\')"><i class="fas fa-arrow-left"></i> .. (up)</div>';
+    }
+    // Subfolders only
+    for(const it of j.items){
+      if(it.type !== 'dir') continue;
+      const sub = (currentPath?currentPath+'/':'')+it.name;
+      // Don't allow moving into self
+      if(sub === SELECTED || sub.startsWith(SELECTED+'/')) continue;
+      html += '<div class="move-item" onclick="renderMoveTree(\''+esc(sub)+'\')"><i class="fas fa-folder"></i> '+esc(it.name)+'</div>';
+    }
+    list.innerHTML = html || '<div class="move-item" style="opacity:.6">No subfolders</div>';
+  } catch(e){
+    list.innerHTML = '<div class="move-item" style="color:var(--red)">'+esc(e.message)+'</div>';
+  }
+}
+
+async function submitMove(toPath){
+  if(!SELECTED) return;
+  try{
+    const r = await fetch(API+'/move', { method:'POST', headers:authHeaders({'Content-Type':'application/json'}), body:JSON.stringify({from:SELECTED, to:toPath}) });
+    const j = await r.json();
+    if(!r.ok) throw new Error(j.error||r.statusText);
+    toast('Moved','ok'); closeModal('modal-move'); loadList(CWD);
+  } catch(e){ toast('Move failed: '+e.message,'err'); }
+}
+
+// ── Sync to GenieACS file store ──────────────────────
+async function syncToGenieAcs(p, name, isDir){
+  toast('Syncing '+name+(isDir?' (folder)':'')+' to GenieACS…', 'warn');
+  try{
+    const r = await fetch(API+'/sync-to-genieacs', { method:'POST', headers:authHeaders({'Content-Type':'application/json'}), body:JSON.stringify({path:p}) });
+    const j = await r.json();
+    if(!r.ok) throw new Error(j.error||r.statusText);
+    const okCount = (j.results||[]).filter(x=>x.ok).length;
+    const failCount = (j.results||[]).filter(x=>!x.ok).length;
+    if (failCount === 0) {
+      toast('Pushed '+okCount+' file(s) to GenieACS — now available in TR-069 push dropdown', 'ok');
+    } else {
+      toast('Synced '+okCount+', failed '+failCount, 'warn');
+    }
+  } catch(e){ toast('Sync failed: '+e.message, 'err'); }
+}
+
+// ── Delete ───────────────────────────────────────────
+function confirmDelete(p, name, isDir){
+  const cnf = document.getElementById('modal-confirm');
+  document.getElementById('cnf-title').innerHTML = '<i class="fas fa-trash" style="color:var(--red)"></i> Delete '+(isDir?'folder':'file');
+  document.getElementById('cnf-body').innerHTML = 'Permanently delete <b>'+esc(name)+'</b>'+(isDir?' and everything inside it':'')+'?';
+  const ok = document.getElementById('cnf-ok');
+  ok.onclick = async () => {
+    closeModal('modal-confirm');
+    try{
+      const r = await fetch(API+'/delete?path='+encodeURIComponent(p), { method:'DELETE', headers:authHeaders() });
+      const j = await r.json();
+      if(!r.ok) throw new Error(j.error||r.statusText);
+      toast('Deleted','ok'); loadList(CWD);
+    } catch(e){ toast('Delete failed: '+e.message,'err'); }
+  };
+  document.getElementById('cnf-cancel').onclick = () => closeModal('modal-confirm');
+  cnf.classList.add('show');
+}
+
+// ── Download single ─────────────────────────────────
+function download(p){
+  // Use a temporary form so we can include the auth header via fetch + blob
+  fetch(API+'/download?path='+encodeURIComponent(p), { headers:authHeaders() })
+    .then(r => { if(!r.ok) throw new Error('download failed'); return r.blob().then(b=>({b,r})); })
+    .then(({b,r}) => {
+      const cd = r.headers.get('Content-Disposition')||'';
+      const m = cd.match(/filename="?([^"]+)"?/);
+      const name = m ? m[1] : p.split('/').pop();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(b);
+      a.download = name;
+      a.click();
+      setTimeout(()=>URL.revokeObjectURL(a.href), 5000);
+    })
+    .catch(e => toast('Download failed: '+e.message,'err'));
+}
+
+function downloadZip(p){
+  toast('Building ZIP…','warn');
+  fetch(API+'/download-zip?path='+encodeURIComponent(p), { headers:authHeaders() })
+    .then(r => { if(!r.ok) throw new Error('zip failed'); return r.blob(); })
+    .then(b => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(b);
+      a.download = (p.split('/').pop()||'firmware')+'.zip';
+      a.click();
+      setTimeout(()=>URL.revokeObjectURL(a.href), 5000);
+      toast('Downloaded','ok');
+    })
+    .catch(e => toast('ZIP failed: '+e.message,'err'));
+}
+
+// ── Upload (files + folder) ──────────────────────────
+document.getElementById('file-input').addEventListener('change', e => {
+  uploadFiles(Array.from(e.target.files), false);
+  e.target.value = '';
+});
+document.getElementById('folder-input').addEventListener('change', e => {
+  uploadFiles(Array.from(e.target.files), true);
+  e.target.value = '';
+});
+
+async function uploadFiles(files, preservePaths){
+  if(!files.length) return;
+  const fd = new FormData();
+  for(const f of files){
+    fd.append('files', f, f.name);
+    const rel = preservePaths && f.webkitRelativePath ? f.webkitRelativePath : f.name;
+    fd.append('relativePath', rel);
+  }
+  const bar = document.getElementById('upload-bar');
+  const fill = document.getElementById('upload-fill');
+  const pct = document.getElementById('upload-pct');
+  const lbl = document.getElementById('upload-label');
+  bar.classList.add('show');
+  lbl.textContent = files.length===1 ? files[0].name : ('Uploading '+files.length+' files…');
+  fill.style.width = '0%'; pct.textContent = '0%';
+  await new Promise(resolve => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', API+'/upload?path='+encodeURIComponent(CWD));
+    xhr.setRequestHeader('Authorization', AUTH);
+    xhr.upload.addEventListener('progress', e => {
+      if(!e.lengthComputable) return;
+      const p = Math.round(e.loaded/e.total*100);
+      fill.style.width = p+'%'; pct.textContent = p+'%';
+    });
+    xhr.onload = () => {
+      let body={}; try{ body=JSON.parse(xhr.responseText); }catch{}
+      if(xhr.status>=200 && xhr.status<300){
+        toast('Uploaded '+(body.count||files.length)+' file(s)','ok');
+      } else {
+        toast('Upload failed: '+(body.error||('HTTP '+xhr.status)),'err');
+      }
+      setTimeout(()=>bar.classList.remove('show'), 600);
+      loadList(CWD);
+      resolve();
+    };
+    xhr.onerror = () => { toast('Network error','err'); bar.classList.remove('show'); resolve(); };
+    xhr.send(fd);
+  });
+}
+
+// ── Drag & drop ──────────────────────────────────────
+// Window-level preventDefault stops the browser from opening the
+// file when the drop misses the table-wrap by a pixel.
+window.addEventListener('dragover', e => { e.preventDefault(); }, false);
+window.addEventListener('drop', e => { e.preventDefault(); }, false);
+
+const tw = document.getElementById('table-wrap');
+
+// Visual highlight via simple flag (counter-based logic was flaky
+// because dragenter/dragleave fire on children too).
+let dragInside = false;
+tw.addEventListener('dragenter', e => { e.preventDefault(); dragInside = true; tw.classList.add('drag-over'); });
+tw.addEventListener('dragover',  e => { e.preventDefault(); tw.classList.add('drag-over'); });
+tw.addEventListener('dragleave', e => {
+  // Only clear when leaving the wrapper itself (not a child).
+  if (e.target === tw || e.relatedTarget === null || !tw.contains(e.relatedTarget)) {
+    tw.classList.remove('drag-over'); dragInside = false;
+  }
+});
+
+tw.addEventListener('drop', async e => {
+  e.preventDefault();
+  e.stopPropagation();
+  tw.classList.remove('drag-over');
+  dragInside = false;
+
+  const dt = e.dataTransfer;
+  if (!dt) { toast('No data in drop event', 'err'); return; }
+
+  let files = [];
+  let usedEntries = false;
+
+  // Try the modern entries API to preserve folder structure
+  if (dt.items && dt.items.length && typeof dt.items[0].webkitGetAsEntry === 'function') {
+    const entries = [];
+    for (let i = 0; i < dt.items.length; i++) {
+      const item = dt.items[i];
+      if (item.kind !== 'file') continue;
+      const ent = item.webkitGetAsEntry();
+      if (ent) entries.push(ent);
+    }
+    if (entries.length) {
+      usedEntries = true;
+      try { await Promise.all(entries.map(ent => walkEntry(ent, '', files))); }
+      catch (err) { toast('Read error: ' + err.message, 'err'); return; }
+    }
+  }
+
+  // Fallback — flat file list (no folder structure preserved)
+  if (!files.length && dt.files && dt.files.length) {
+    files = Array.from(dt.files);
+  }
+
+  if (!files.length) {
+    toast('No files detected in drop. If this was a folder, your browser may not support folder drops.', 'err');
+    return;
+  }
+
+  const hasFolder = usedEntries && files.some(f => f.webkitRelativePath && f.webkitRelativePath.includes('/'));
+  uploadFiles(files, hasFolder);
+});
+
+// Recursively walk a FileSystemEntry into a flat list of File
+// objects, each carrying a synthesised webkitRelativePath so the
+// server can recreate the folder tree.
+function walkEntry(entry, prefix, out){
+  return new Promise(resolve => {
+    if (!entry) return resolve();
+    if (entry.isFile) {
+      entry.file(f => {
+        const rel = prefix + entry.name;
+        try { Object.defineProperty(f, 'webkitRelativePath', { value: rel, writable:false, configurable:true }); }
+        catch { try { f.webkitRelativePath = rel; } catch {} }
+        out.push(f); resolve();
+      }, err => { console.warn('entry.file() failed:', err); resolve(); });
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      const subPromises = [];
+      const readAll = () => reader.readEntries(ents => {
+        if (!ents.length) {
+          Promise.all(subPromises).then(resolve);
+        } else {
+          for (const sub of ents) subPromises.push(walkEntry(sub, prefix + entry.name + '/', out));
+          readAll(); // keep reading until empty (browsers batch this)
+        }
+      }, err => { console.warn('readEntries failed:', err); resolve(); });
+      readAll();
+    } else { resolve(); }
+  });
+}
+</script>
+</body>
+</html>

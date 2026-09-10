@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+// ── Secure Fetch Interceptor ─────────────────────────────
+(function(){
+  const _fetch = window.fetch;
+  window.fetch = function(url, opts) {
+    opts = opts || {};
+    const urlStr = typeof url === 'string' ? url : (url.url || '');
+    if (urlStr.startsWith('/api') || urlStr.includes('/api/')) {
+      opts.credentials = 'include';
+      const method = (opts.method || 'GET').toUpperCase();
+      if (['POST','PUT','DELETE','PATCH'].includes(method)) {
+        opts.headers = opts.headers || {};
+        if (!opts.headers['X-CSRF-Token'] && !opts.headers['x-csrf-token']) {
+          const m = document.cookie.match(/j2_csrf=([^;]+)/);
+          if (m) opts.headers['X-CSRF-Token'] = m[1];
+        }
+      }
+    }
+    return _fetch.call(this, url, opts);
+  };
+})();
+</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>System Backup — Netfactory CRM</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<style>
+:root {
+  --bg: #1a1f2e;
+  --bg-card: #222838;
+  --bg-hover: #2a3148;
+  --border: #2e3650;
+  --border-hover: #3d4760;
+  --text: #e2e8f0;
+  --text-sec: #94a3b8;
+  --text-muted: #64748b;
+  --accent: #3b82f6;
+  --accent-dk: #2563eb;
+  --success: #10b981;
+  --danger: #ef4444;
+  --warning: #f59e0b;
+  --purple: #8b5cf6;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); padding: 20px; color: var(--text); }
+.container { max-width: 1200px; margin: 0 auto; }
+.page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:24px; }
+.page-header h1 { font-size: 24px; font-weight: 800; color: var(--text); display:flex; align-items:center; gap:10px; }
+.page-header h1 i { color: var(--accent); }
+.header-right { display:flex; align-items:center; gap:10px; }
+.back-link { display:flex;align-items:center;gap:6px;color:var(--text-muted);text-decoration:none;font-size:13px;font-weight:500;padding:6px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-card);transition:all .2s;white-space:nowrap; }
+.back-link:hover { border-color:var(--border-hover);color:var(--text); }
+.section { background: var(--bg-card); border-radius: 12px; padding: 24px; margin-bottom: 20px; border: 1px solid var(--border); }
+.section h2 { font-size: 18px; font-weight: 700; color: var(--text); margin-bottom: 16px; display:flex; align-items:center; gap:8px; }
+.section h2 i { color: var(--accent); font-size:16px; }
+.section h3 { font-size: 16px; font-weight: 600; color: var(--text); margin-bottom: 12px; display:flex; align-items:center; gap:8px; }
+.section h3 i { font-size:14px; }
+.backup-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+.backup-option { padding: 20px; border-radius: 10px; border: 2px solid var(--border); cursor: pointer; transition: all .2s; display: flex; flex-direction: column; background: var(--bg); }
+.backup-option:hover { border-color: var(--accent); box-shadow: 0 4px 12px rgba(59,130,246,0.15); }
+.backup-option.dr:hover { border-color: var(--warning); box-shadow: 0 4px 12px rgba(245,158,11,0.15); }
+.backup-option h3 { font-size: 16px; font-weight: 700; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+.backup-option p { font-size: 13px; color: var(--text-sec); line-height: 1.6; margin-bottom: 12px; }
+.backup-option ul { margin-left: 20px; font-size: 12px; color: var(--text-muted); margin-bottom: 12px; flex-grow: 1; }
+.backup-option ul li { margin-bottom: 4px; }
+.btn { background: var(--accent); color: white; border: none; padding: 10px 20px; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 13px; display: inline-flex; align-items: center; gap: 6px; width: 100%; justify-content: center; margin-top: auto; transition: background .2s; }
+.btn:hover { background: var(--accent-dk); }
+.btn:disabled { background: var(--text-muted); cursor: not-allowed; }
+.btn.success { background: var(--success); }
+.btn.success:hover { background: #059669; }
+.btn.danger { background: var(--danger); }
+.btn.danger:hover { background: #dc2626; }
+.alert { padding: 16px; border-radius: 8px; margin-bottom: 16px; font-size: 14px; }
+.alert.success { background: rgba(16,185,129,.1); color: var(--success); border-left: 4px solid var(--success); }
+.alert.error { background: rgba(239,68,68,.1); color: var(--danger); border-left: 4px solid var(--danger); }
+.alert.info { background: rgba(59,130,246,.1); color: var(--accent); border-left: 4px solid var(--accent); }
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; padding: 12px; background: var(--bg); font-size: 12px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; }
+td { padding: 12px; border-bottom: 1px solid var(--border); font-size: 14px; color: var(--text-sec); }
+.loading { text-align: center; padding: 40px; color: var(--text-muted); }
+.spinner { display: inline-block; width: 20px; height: 20px; border: 3px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.empty-state { text-align: center; padding: 60px 20px; color: var(--text-muted); }
+.badge { display: inline-block; padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+.badge.dr { background: rgba(245,158,11,.15); color: var(--warning); }
+.badge.simple { background: rgba(59,130,246,.15); color: var(--accent); }
+label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; color: var(--text-sec); }
+input[type="text"], input[type="password"], input[type="number"], input[type="time"], select { width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; background: var(--bg); color: var(--text); transition: border-color .2s; }
+input[type="text"]:focus, input[type="password"]:focus, input[type="number"]:focus, input[type="time"]:focus, select:focus { outline:none; border-color: var(--accent); }
+input[type="checkbox"] { margin-right: 8px; accent-color: var(--accent); }
+select option { background: var(--bg-card); color: var(--text); }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+.button-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+.button-group { display: flex; gap: 12px; flex-wrap: wrap; }
+.dl-link { display:inline-flex;align-items:center;gap:6px;color:white;padding:8px 16px;border-radius:6px;text-decoration:none;font-size:13px;font-weight:600;transition:opacity .2s; }
+.dl-link:hover { opacity:.85; }
+
+/* Toast notifications */
+.toast-container{position:fixed;top:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:10px;pointer-events:none;}
+.toast{pointer-events:auto;display:flex;align-items:center;gap:10px;padding:14px 20px;border-radius:10px;font-size:13px;font-weight:500;color:#fff;box-shadow:0 8px 24px rgba(0,0,0,.35);backdrop-filter:blur(12px);transform:translateX(120%);animation:toastIn .35s ease forwards;min-width:280px;max-width:440px;}
+.toast.success{background:rgba(16,185,129,.92);border:1px solid rgba(16,185,129,.5);}
+.toast.error{background:rgba(239,68,68,.92);border:1px solid rgba(239,68,68,.5);}
+.toast.info{background:rgba(59,130,246,.92);border:1px solid rgba(59,130,246,.5);}
+.toast.warning{background:rgba(245,158,11,.92);border:1px solid rgba(245,158,11,.5);}
+.toast.removing{animation:toastOut .3s ease forwards;}
+@keyframes toastIn{from{transform:translateX(120%);opacity:0}to{transform:translateX(0);opacity:1}}
+@keyframes toastOut{from{transform:translateX(0);opacity:1}to{transform:translateX(120%);opacity:0}}
+
+/* Custom confirm modal */
+.confirm-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(4px);z-index:10000;display:flex;align-items:center;justify-content:center;animation:fadeIn .2s ease;}
+.confirm-box{background:var(--bg-card);border:1px solid var(--border);border-radius:14px;padding:28px;max-width:420px;width:90%;box-shadow:0 16px 48px rgba(0,0,0,.4);animation:scaleIn .25s ease;}
+.confirm-box .confirm-icon{font-size:36px;text-align:center;margin-bottom:16px;}
+.confirm-box .confirm-title{font-size:16px;font-weight:700;color:var(--text);text-align:center;margin-bottom:8px;}
+.confirm-box .confirm-msg{font-size:13px;color:var(--text-sec);text-align:center;line-height:1.6;margin-bottom:24px;}
+.confirm-box .confirm-actions{display:flex;gap:10px;justify-content:center;}
+.confirm-box .confirm-actions button{padding:9px 24px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;border:none;transition:all .2s;}
+.confirm-box .confirm-cancel{background:var(--bg);color:var(--text-sec);border:1px solid var(--border) !important;}
+.confirm-box .confirm-cancel:hover{border-color:var(--border-hover) !important;color:var(--text);}
+.confirm-box .confirm-ok{background:var(--danger);color:#fff;}
+.confirm-box .confirm-ok:hover{background:#dc2626;}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes scaleIn{from{transform:scale(.9);opacity:0}to{transform:scale(1);opacity:1}}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="page-header">
+    <h1><i class="fas fa-database"></i> System Backup</h1>
+    <div class="header-right">
+      <a href="/crm/" class="back-link">&larr; Back to CRM</a>
+    </div>
+  </div>
+
+  <div class="button-row">
+    <div class="button-group">
+      <a href="/crm/backup-guide.html" target="_blank" class="dl-link" style="background:var(--success);"><i class="fas fa-book-open"></i> Online Guide</a>
+      <a href="/crm/downloads/Netfactory-Backup-Restore-Guide.pdf" download class="dl-link" style="background:var(--danger);"><i class="fas fa-file-pdf"></i> Download PDF</a>
+      <a href="/crm/downloads/Netfactory-Backup-Restore-Guide.docx" download class="dl-link" style="background:var(--accent);"><i class="fas fa-file-word"></i> Download Word</a>
+    </div>
+    <div class="button-group">
+      <a href="/crm/downloads/Netfactory-Domain-Change-Guide.docx" download class="dl-link" style="background:var(--purple);"><i class="fas fa-globe"></i> Domain Guide</a>
+      <a href="/crm/downloads/Netfactory-RADIUS-Server-Guide.docx" download class="dl-link" style="background:var(--warning);"><i class="fas fa-satellite-dish"></i> RADIUS Guide</a>
+      <button class="btn" onclick="loadBackups()" style="padding:8px 16px;font-size:13px;border-radius:6px;width:auto"><i class="fas fa-arrows-rotate"></i> Refresh</button>
+      <button class="btn danger" onclick="deleteAllBackups()" style="padding:8px 16px;font-size:13px;border-radius:6px;width:auto"><i class="fas fa-trash-can"></i> Delete All</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2><i class="fas fa-box-archive"></i> Choose Backup Type</h2>
+
+    <div id="alertContainer"></div>
+
+    <div class="backup-grid">
+      <div class="backup-option">
+        <h3><i class="fas fa-database" style="color:var(--accent)"></i> System Backup</h3>
+        <p>Quick backup of essential files for daily backups.</p>
+        <ul>
+          <li>Full web root (CRM, Portal, Landing, GIS, Logistics, OSP, DevTools, Agents, Accounting)</li>
+          <li>API source code</li>
+          <li>Database schema</li>
+          <li>Admin users data</li>
+          <li>PM2 configuration</li>
+          <li>RADIUS schema</li>
+          <li>Portal files (index, payment, reset)</li>
+          <li>Landing page</li>
+          <li>AI assistant route</li>
+          <li>Portal API route</li>
+        </ul>
+        <button class="btn" onclick="createSimpleBackup()" id="simpleBtn">
+          <i class="fas fa-database"></i> Create System Backup
+        </button>
+      </div>
+
+      <div class="backup-option dr" style="border-color: var(--warning);">
+        <h3><i class="fas fa-shield-halved" style="color:var(--warning)"></i> Disaster Recovery Backup</h3>
+        <p>Complete backup that can rebuild your entire server.</p>
+        <ul>
+          <li>Everything in System Backup PLUS:</li>
+          <li>Complete database (all tables)</li>
+          <li>Environment variables (.env)</li>
+          <li>Nginx configuration</li>
+          <li>SSL certificates</li>
+          <li>SSH keys</li>
+          <li>Automated restore script</li>
+          <li>Backup automation config</li>
+          <li>RADIUS tables (in ispdb database)</li>
+
+        </ul>
+        <button class="btn danger" onclick="createDRBackup()" id="drBtn">
+          <i class="fas fa-shield-halved"></i> Create DR Backup
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2><i class="fas fa-robot"></i> Automated Backups</h2>
+    <div class="alert info" id="automationStatus">
+      <strong>Status:</strong> Loading...
+    </div>
+
+    <div class="grid-2">
+      <div>
+        <h3><i class="fas fa-clock" style="color:var(--accent)"></i> Schedule</h3>
+        <div style="margin-bottom:12px;">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="automationEnabled" onchange="toggleAutomation(this.checked)">
+            <span style="font-weight:600;color:var(--text);">Enable Automated Backups</span>
+          </label>
+        </div>
+        <div style="margin-bottom:12px;">
+          <label>Frequency:</label>
+          <select id="schedule">
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly (Sunday)</option>
+            <option value="monthly">Monthly (1st)</option>
+          </select>
+        </div>
+        <div style="margin-bottom:12px;">
+          <label>Time:</label>
+          <input type="time" id="backupTime" value="02:00">
+        </div>
+        <div style="margin-bottom:12px;">
+          <label>Backup Type:</label>
+          <select id="backupType">
+            <option value="system">System Backup (Quick)</option>
+            <option value="dr">Disaster Recovery (Complete)</option>
+          </select>
+        </div>
+        <div style="margin-bottom:12px;">
+          <label>Retention (days):</label>
+          <input type="number" id="retention" value="30" min="1" max="365">
+        </div>
+      </div>
+
+      <div>
+        <h3><i class="fas fa-cloud-arrow-up" style="color:var(--purple)"></i> SFTP Upload</h3>
+        <div style="margin-bottom:12px;">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="sftpEnabled">
+            <span style="font-weight:600;color:var(--text);">Upload to Remote Server</span>
+          </label>
+        </div>
+        <div style="margin-bottom:12px;">
+          <label>Host:</label>
+          <input type="text" id="sftpHost" placeholder="ftp.example.com">
+        </div>
+        <div style="margin-bottom:12px;">
+          <label>Port:</label>
+          <input type="number" id="sftpPort" value="22">
+        </div>
+        <div style="margin-bottom:12px;">
+          <label>Username:</label>
+          <input type="text" id="sftpUsername" placeholder="username">
+        </div>
+        <div style="margin-bottom:12px;">
+          <label>Password:</label>
+          <input type="password" id="sftpPassword" placeholder="password">
+        </div>
+        <div style="margin-bottom:12px;">
+          <label>Remote Path:</label>
+          <input type="text" id="sftpPath" value="/backups">
+        </div>
+        <button class="btn" onclick="testSFTP()" style="width:auto;"><i class="fas fa-plug"></i> Test Connection</button>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:12px;margin-top:16px;">
+      <button class="btn success" onclick="saveAutomation()"><i class="fas fa-floppy-disk"></i> Save Configuration</button>
+      <button class="btn" onclick="loadAutomationConfig()"><i class="fas fa-arrows-rotate"></i> Reload</button>
+    </div>
+  </div>
+
+  <div class="section">
+
+
+
+
+    <table>
+      <thead>
+        <tr>
+          <th>Backup ID</th>
+          <th>Type</th>
+          <th>Size</th>
+          <th>Created</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="backupsBody">
+        <tr><td colspan="5" class="loading">Loading backups...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+const API = window.location.origin + '/api';
+const token = localStorage.getItem('j2_admin_token');
+
+if (!token) {
+  window.location.href = '/crm/';
+}
+
+function toast(message, type = 'info', duration = 4000) {
+  const container = document.getElementById('toastContainer');
+  const icons = { success:'fa-circle-check', error:'fa-circle-xmark', info:'fa-circle-info', warning:'fa-triangle-exclamation' };
+  const el = document.createElement('div');
+  el.className = 'toast ' + type;
+  el.innerHTML = '<i class="fas ' + (icons[type]||icons.info) + '"></i><span>' + message + '</span>';
+  container.appendChild(el);
+  setTimeout(() => { el.classList.add('removing'); setTimeout(() => el.remove(), 300); }, duration);
+}
+
+function customConfirm(title, message, icon) {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'confirm-overlay';
+    overlay.innerHTML =
+      '<div class="confirm-box">' +
+        '<div class="confirm-icon">' + (icon || '<i class="fas fa-triangle-exclamation" style="color:var(--warning)"></i>') + '</div>' +
+        '<div class="confirm-title">' + title + '</div>' +
+        '<div class="confirm-msg">' + message + '</div>' +
+        '<div class="confirm-actions">' +
+          '<button class="confirm-cancel">Cancel</button>' +
+          '<button class="confirm-ok">Confirm</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(overlay);
+    overlay.querySelector('.confirm-cancel').onclick = () => { overlay.remove(); resolve(false); };
+    overlay.querySelector('.confirm-ok').onclick = () => { overlay.remove(); resolve(true); };
+    overlay.addEventListener('click', e => { if (e.target === overlay) { overlay.remove(); resolve(false); } });
+  });
+}
+
+async function createSimpleBackup() {
+  const btn = document.getElementById('simpleBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Creating...';
+
+  try {
+    const res = await fetch(API + '/admin/backup/create-simple', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + token,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    const data = await res.json();
+
+    if (data.success) {
+      toast('System backup created! Size: ' + data.backup.sizeFormatted, 'success');
+      loadBackups();
+    } else {
+      toast('Failed: ' + (data.error || 'Unknown error'), 'error');
+    }
+  } catch (err) {
+    console.error('Backup error:', err);
+    toast('Network error', 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fas fa-database"></i> Create System Backup';
+  }
+}
+
+async function createDRBackup() {
+  const btn = document.getElementById('drBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Creating (30-60s)...';
+
+  try {
+    const res = await fetch(API + '/admin/backup/create', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + token,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    const data = await res.json();
+
+    if (data.success) {
+      toast('DR backup created! Size: ' + data.backup.sizeFormatted, 'success', 6000);
+      loadBackups();
+    } else {
+      toast('Failed: ' + (data.error || 'Unknown error'), 'error');
+    }
+  } catch (err) {
+    console.error('Backup error:', err);
+    toast('Network error', 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fas fa-shield-halved"></i> Create DR Backup';
+  }
+}
+
+async function deleteBackup(filename) {
+    const ok = await customConfirm(
+      'Delete Backup',
+      'Are you sure you want to delete <strong>' + filename + '</strong>?',
+      '<i class="fas fa-trash-can" style="color:var(--danger)"></i>'
+    );
+    if (!ok) return;
+    try {
+      const res = await fetch(API + '/admin/backup/delete/' + filename, {
+        method: 'DELETE',
+        headers: { 'Authorization': 'Bearer ' + token }
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast('Backup deleted: ' + filename, 'success');
+        loadBackups();
+      } else {
+        toast('Failed: ' + (data.error || 'Unknown error'), 'error');
+      }
+    } catch (e) {
+      toast('Error: ' + e.message, 'error');
+    }
+  }
+
+  async function deleteAllBackups() {
+    const ok = await customConfirm(
+      'Delete All Backups',
+      'This will permanently delete <strong>ALL</strong> backup files. This action cannot be undone.',
+      '<i class="fas fa-triangle-exclamation" style="color:var(--danger)"></i>'
+    );
+    if (!ok) return;
+    const ok2 = await customConfirm(
+      'Final Confirmation',
+      'Are you absolutely sure? Every backup file will be permanently removed.',
+      '<i class="fas fa-skull-crossbones" style="color:var(--danger)"></i>'
+    );
+    if (!ok2) return;
+    try {
+      const res = await fetch(API + '/admin/backup/delete-all', {
+        method: 'DELETE',
+        headers: { 'Authorization': 'Bearer ' + token }
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast('All backups deleted', 'success');
+        loadBackups();
+      } else {
+        toast('Failed: ' + (data.error || 'Unknown error'), 'error');
+      }
+    } catch (e) {
+      toast('Error: ' + e.message, 'error');
+    }
+  }
+
+  async function loadBackups() {
+  try {
+    const res = await fetch(API + '/admin/backup/list-all', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+
+    const data = await res.json();
+    const backups = data.backups || [];
+
+    if (backups.length === 0) {
+      document.getElementById('backupsBody').innerHTML = `
+        <tr>
+          <td colspan="5" class="empty-state">
+            <div style="font-size:48px;margin-bottom:16px;"><i class="fas fa-box-open" style="color:var(--text-muted)"></i></div>
+            <div>No backups found. Create your first backup above!</div>
+          </td>
+        </tr>
+      `;
+      return;
+    }
+
+    const html = backups.map(b => {
+      const id = b.filename.replace('.tar.gz', '');
+      const typeLabel = b.type === 'disaster_recovery' ? '<span class="badge dr"><i class="fas fa-shield-halved"></i> Disaster Recovery</span>' : '<span class="badge simple"><i class="fas fa-database"></i> System Backup</span>';
+      const downloadEndpoint = b.type === 'disaster_recovery' ? 'backup/download' : 'backup/download-simple';
+
+      return `
+        <tr>
+          <td style="font-family:monospace;font-size:13px;">${id}</td>
+          <td>${typeLabel}</td>
+          <td><strong>${b.sizeFormatted}</strong></td>
+          <td>${b.created}</td>
+          <td style="white-space:nowrap">
+            <div style="display:flex;gap:10px;align-items:center">
+              <i class="fas fa-download" title="Download" onclick="downloadBackup('${b.filename}', '${downloadEndpoint}')" style="font-size:15px;color:var(--success);cursor:pointer;opacity:.7;transition:opacity .2s" onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=.7"></i>
+              <i class="fas fa-trash-can" title="Delete" onclick="deleteBackup('${b.filename}')" style="font-size:15px;color:var(--danger);cursor:pointer;opacity:.7;transition:opacity .2s" onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=.7"></i>
+            </div>
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    document.getElementById('backupsBody').innerHTML = html;
+  } catch (err) {
+    console.error('Load backups error:', err);
+    document.getElementById('backupsBody').innerHTML = `
+      <tr><td colspan="5" style="text-align:center;padding:40px;color:var(--danger);">
+        <i class="fas fa-circle-xmark"></i> Failed to load backups
+      </td></tr>
+    `;
+  }
+}
+
+function downloadBackup(filename, endpoint) {
+  const downloadUrl = API + '/admin/' + endpoint + '/' + filename + '?token=' + token;
+  window.location.href = downloadUrl;
+  toast('Downloading ' + filename + '...', 'info');
+}
+
+async function loadAutomationConfig() {
+  try {
+    const res = await fetch(API + '/admin/backup/config', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+
+    const config = await res.json();
+
+    document.getElementById('automationEnabled').checked = config.enabled || false;
+    document.getElementById('schedule').value = config.schedule || 'daily';
+    document.getElementById('backupTime').value = config.time || '02:00';
+    document.getElementById('backupType').value = config.backupType || 'system';
+    document.getElementById('retention').value = config.retention || 30;
+
+    document.getElementById('sftpEnabled').checked = config.sftp?.enabled || false;
+    document.getElementById('sftpHost').value = config.sftp?.host || '';
+    document.getElementById('sftpPort').value = config.sftp?.port || 22;
+    document.getElementById('sftpUsername').value = config.sftp?.username || '';
+    document.getElementById('sftpPassword').value = config.sftp?.password || '';
+    document.getElementById('sftpPath').value = config.sftp?.remotePath || '/backups';
+
+    updateAutomationStatus(config);
+  } catch (err) {
+    console.error('Load automation config error:', err);
+  }
+}
+
+function updateAutomationStatus(config) {
+  const statusEl = document.getElementById('automationStatus');
+
+  if (config.enabled) {
+    const scheduleText = config.schedule === 'daily' ? 'Daily' : config.schedule === 'weekly' ? 'Weekly (Sunday)' : 'Monthly (1st)';
+    const backupTypeText = config.backupType === 'system' ? 'System' : 'Disaster Recovery';
+    const sftpText = config.sftp?.enabled ? ' | Uploading to ' + config.sftp.host : '';
+
+    statusEl.innerHTML = '<strong><i class="fas fa-circle-check"></i> Enabled:</strong> ' + scheduleText + ' at ' + config.time + ' | ' + backupTypeText + ' backup | ' + config.retention + ' days retention' + sftpText;
+    statusEl.className = 'alert success';
+  } else {
+    statusEl.innerHTML = '<strong><i class="fas fa-circle-xmark"></i> Disabled:</strong> Automated backups are not running';
+    statusEl.className = 'alert info';
+  }
+}
+
+async function saveAutomation() {
+  const config = {
+    enabled: document.getElementById('automationEnabled').checked,
+    schedule: document.getElementById('schedule').value,
+    time: document.getElementById('backupTime').value,
+    backupType: document.getElementById('backupType').value,
+    retention: parseInt(document.getElementById('retention').value),
+    sftp: {
+      enabled: document.getElementById('sftpEnabled').checked,
+      host: document.getElementById('sftpHost').value,
+      port: parseInt(document.getElementById('sftpPort').value),
+      username: document.getElementById('sftpUsername').value,
+      password: document.getElementById('sftpPassword').value,
+      remotePath: document.getElementById('sftpPath').value
+    }
+  };
+
+  try {
+    const res = await fetch(API + '/admin/backup/config', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + token,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(config)
+    });
+
+    const data = await res.json();
+
+    if (data.success) {
+      toast('Automation configuration saved!', 'success');
+      updateAutomationStatus(config);
+    } else {
+      toast('Failed to save: ' + (data.error || 'Unknown error'), 'error');
+    }
+  } catch (err) {
+    console.error('Save automation error:', err);
+    toast('Network error', 'error');
+  }
+}
+
+async function testSFTP() {
+  const config = {
+    host: document.getElementById('sftpHost').value,
+    port: parseInt(document.getElementById('sftpPort').value),
+    username: document.getElementById('sftpUsername').value,
+    password: document.getElementById('sftpPassword').value,
+    remotePath: document.getElementById('sftpPath').value
+  };
+
+  if (!config.host || !config.username || !config.password) {
+    toast('Please fill in all SFTP fields', 'error');
+    return;
+  }
+
+  toast('Testing SFTP connection...', 'info');
+
+  try {
+    const res = await fetch(API + '/admin/backup/test-sftp', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + token,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(config)
+    });
+
+    const data = await res.json();
+
+    if (data.success) {
+      toast('SFTP connection successful!', 'success');
+    } else {
+      toast('SFTP connection failed: ' + (data.error || 'Unknown error'), 'error');
+    }
+  } catch (err) {
+    console.error('SFTP test error:', err);
+    toast('Network error', 'error');
+  }
+}
+
+function toggleAutomation(enabled) {
+  updateAutomationStatus({
+    enabled,
+    schedule: document.getElementById('schedule').value,
+    time: document.getElementById('backupTime').value,
+    backupType: document.getElementById('backupType').value,
+    retention: document.getElementById('retention').value,
+    sftp: { enabled: document.getElementById('sftpEnabled').checked }
+  });
+}
+
+loadBackups();
+loadAutomationConfig();
+setInterval(loadBackups, 30000);
+</script>
+</body>
+</html>

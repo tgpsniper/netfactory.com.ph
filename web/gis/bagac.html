@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bagac FTTH (Reference) — Isolated GIS</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+  html,body { margin:0; padding:0; height:100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  #app { display:flex; height:100vh; }
+  #sidebar { width:280px; background:#0f172a; color:#e2e8f0; padding:16px; overflow-y:auto; flex-shrink:0; transition:margin-left .25s ease, width .25s ease, padding .25s ease; position:relative; }
+  #app.collapsed #sidebar { margin-left:-280px; }
+  /* Collapse handle docked on the sidebar's right edge */
+  #sidebarToggle { position:absolute; top:14px; right:-14px; width:28px; height:28px;
+    background:#1e293b; color:#fbbf24; border:1px solid #334155; border-radius:50%;
+    display:flex; align-items:center; justify-content:center; cursor:pointer; z-index:1100;
+    box-shadow:0 4px 12px rgba(0,0,0,.35); transition:transform .25s ease; font-size:13px; }
+  #sidebarToggle:hover { background:#334155; }
+  /* Floating "open" button when sidebar is fully collapsed */
+  #sidebarOpen { position:fixed; top:14px; left:14px; width:36px; height:36px;
+    background:#0f172a; color:#fbbf24; border:1px solid #334155; border-radius:8px;
+    display:none; align-items:center; justify-content:center; cursor:pointer;
+    z-index:1100; box-shadow:0 6px 18px rgba(0,0,0,.4); }
+  #app.collapsed #sidebarOpen { display:flex; }
+  #sidebarOpen:hover { background:#1e293b; }
+  #sidebar h1 { font-size:15px; margin:0 0 4px 0; color:#fbbf24; }
+  #sidebar .sub { font-size:11px; color:#94a3b8; margin-bottom:14px; }
+  #sidebar .warn { background:#78350f; color:#fef3c7; font-size:11px; padding:8px 10px; border-radius:6px; margin-bottom:16px; line-height:1.4; }
+  #sidebar .layer { display:flex; align-items:center; justify-content:space-between; padding:8px 10px; background:#1e293b; border-radius:6px; margin-bottom:6px; cursor:pointer; font-size:13px; user-select:none; }
+  #sidebar .layer:hover { background:#334155; }
+  #sidebar .layer .count { font-size:11px; color:#94a3b8; background:#0f172a; padding:2px 6px; border-radius:10px; }
+  #sidebar .layer input { margin-right:8px; pointer-events:none; }
+  #sidebar .back { display:inline-block; margin-top:16px; color:#60a5fa; text-decoration:none; font-size:13px; }
+  #sidebar .back:hover { text-decoration:underline; }
+  #sidebar .search { width:100%; padding:7px 10px; border-radius:6px; border:1px solid #334155; background:#1e293b; color:#e2e8f0; margin-bottom:12px; box-sizing:border-box; font-size:13px; }
+  #sidebar .legend-dot { display:inline-block; width:12px; height:12px; border-radius:50%; margin-right:8px; vertical-align:middle; }
+  #map { flex:1; }
+  .leaflet-popup-content { font-size:12px; max-width:320px; max-height:400px; overflow-y:auto; }
+  .leaflet-popup-content b { color:#0f172a; }
+  .search-results { max-height:300px; overflow-y:auto; background:#1e293b; border-radius:6px; margin-bottom:12px; display:none; }
+  .search-results .item { padding:7px 10px; font-size:12px; cursor:pointer; border-bottom:1px solid #334155; }
+  .search-results .item:hover { background:#334155; }
+  .search-results .item .t { color:#94a3b8; font-size:10px; text-transform:uppercase; }
+  #loading { position:absolute; top:50%; left:calc(50% + 140px); transform:translate(-50%,-50%); background:#0f172a; color:#fbbf24; padding:16px 24px; border-radius:8px; font-size:14px; z-index:1000; }
+  /* Upload button + modal */
+  #sidebar .btn-upload { width:100%; padding:10px; background:#0ea5e9; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:13px; font-weight:700; margin-bottom:6px; display:flex; align-items:center; justify-content:center; gap:6px; }
+  #sidebar .btn-upload:hover { background:#0284c7; }
+  #sidebar .btn-clear { width:100%; padding:7px; background:transparent; color:#fca5a5; border:1px solid #7f1d1d; border-radius:6px; cursor:pointer; font-size:11px; margin-bottom:14px; display:none; }
+  #sidebar .btn-clear:hover { background:#450a0a; }
+  .kmz-overlay { position:fixed; inset:0; background:rgba(0,0,0,.55); display:none; align-items:center; justify-content:center; z-index:2000; }
+  .kmz-overlay.active { display:flex; }
+  .kmz-modal { background:#fff; color:#0f172a; width:420px; max-width:92vw; border-radius:12px; box-shadow:0 20px 60px rgba(0,0,0,.4); overflow:hidden; }
+  .kmz-modal h3 { margin:0; padding:14px 18px; background:#0f172a; color:#fbbf24; font-size:14px; display:flex; align-items:center; gap:8px; }
+  .kmz-modal .body { padding:18px; }
+  .kmz-modal label { display:block; font-size:11px; font-weight:700; color:#64748b; text-transform:uppercase; margin-bottom:6px; }
+  .kmz-modal input[type=file] { width:100%; padding:8px; border:1px dashed #cbd5e1; border-radius:6px; font-size:12px; box-sizing:border-box; }
+  .kmz-modal .hint { font-size:11px; color:#94a3b8; margin-top:6px; line-height:1.4; }
+  .kmz-modal .preview { margin-top:14px; padding:10px 12px; background:#f1f5f9; border-radius:6px; font-size:12px; color:#334155; display:none; }
+  .kmz-modal .preview .ln { padding:2px 0; }
+  .kmz-modal .preview .ln b { color:#0f172a; }
+  .kmz-modal .footer { padding:12px 18px; border-top:1px solid #e2e8f0; display:flex; justify-content:flex-end; gap:8px; }
+  .kmz-modal .footer button { padding:8px 16px; border-radius:6px; border:none; cursor:pointer; font-size:12px; font-weight:700; }
+  .kmz-modal .footer .btn-cancel { background:#e2e8f0; color:#475569; }
+  .kmz-modal .footer .btn-cancel:hover { background:#cbd5e1; }
+  .kmz-modal .footer .btn-go { background:#0ea5e9; color:#fff; }
+  .kmz-modal .footer .btn-go:hover { background:#0284c7; }
+  .kmz-modal .footer .btn-go:disabled { background:#94a3b8; cursor:not-allowed; }
+  .kmz-modal .err { margin-top:10px; padding:8px 10px; background:#fef2f2; color:#991b1b; border:1px solid #fecaca; border-radius:6px; font-size:12px; display:none; }
+</style>
+</head>
+<body>
+<button id="sidebarOpen" title="Show sidebar" onclick="toggleSidebar()"><i class="fas fa-bars"></i></button>
+<div id="app">
+  <div id="sidebar">
+    <button id="sidebarToggle" title="Hide sidebar" onclick="toggleSidebar()"><i class="fas fa-chevron-left"></i></button>
+    <h1><i class="fas fa-map-marked-alt"></i> Bagac FTTH</h1>
+    <div class="sub">Reference data (KMZ import)</div>
+    <div class="warn"><i class="fas fa-shield-alt"></i> Isolated view — this data is static and does NOT write to the production network DB.</div>
+
+    <input type="text" id="search" class="search" placeholder="Search NAPs, customers..." />
+    <div id="searchResults" class="search-results"></div>
+
+    <div class="layer" onclick="toggleLayer('naps', this)">
+      <span><input type="checkbox" checked><span class="legend-dot" style="background:#0288D1"></span>NAPs</span>
+      <span class="count" id="count-naps">0</span>
+    </div>
+    <div class="layer" onclick="toggleLayer('customers', this)">
+      <span><input type="checkbox" checked><span class="legend-dot" style="background:#A52714"></span>Customers</span>
+      <span class="count" id="count-customers">0</span>
+    </div>
+    <div class="layer" onclick="toggleLayer('proposed', this)">
+      <span><input type="checkbox" checked><span class="legend-dot" style="background:#FFEA00;border:1px solid #666"></span>Proposed</span>
+      <span class="count" id="count-proposed">0</span>
+    </div>
+    <div class="layer" onclick="toggleLayer('cables', this)">
+      <span><input type="checkbox" checked><span class="legend-dot" style="background:#E65100"></span>Cables</span>
+      <span class="count" id="count-cables">0</span>
+    </div>
+    <div class="layer" id="uploadedRow" onclick="toggleLayer('uploaded', this)" style="display:none">
+      <span><input type="checkbox" checked><span class="legend-dot" style="background:#22c55e"></span>Uploaded</span>
+      <span class="count" id="count-uploaded">0</span>
+    </div>
+
+    <div id="uploadedFoldersWrap" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid #1e293b"></div>
+
+    <div style="margin-top:14px">
+      <button class="btn-upload" onclick="openKmzModal()"><i class="fas fa-file-import"></i> Upload KMZ / KML</button>
+      <button class="btn-clear" id="btnClearUploaded" onclick="clearUploaded()"><i class="fas fa-trash"></i> Clear uploaded data</button>
+    </div>
+
+    <a href="/gis/" class="back"><i class="fas fa-arrow-left"></i> Back to main GIS</a>
+  </div>
+  <div id="map"></div>
+</div>
+<div id="loading">Loading Bagac dataset…</div>
+
+<div class="kmz-overlay" id="kmzOverlay" onclick="if(event.target===this)closeKmzModal()">
+  <div class="kmz-modal">
+    <h3><i class="fas fa-file-import"></i> Upload KMZ / KML</h3>
+    <div class="body">
+      <label>Select file</label>
+      <input type="file" id="kmzFile" accept=".kmz,.kml,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz">
+      <div class="hint"><i class="fas fa-circle-info"></i> Parsed in your browser only. Data is added to a separate "Uploaded" layer and never leaves this page.</div>
+      <div class="preview" id="kmzPreview"></div>
+      <div class="err" id="kmzErr"></div>
+    </div>
+    <div class="footer">
+      <button class="btn-cancel" onclick="closeKmzModal()">Cancel</button>
+      <button class="btn-go" id="kmzGo" disabled onclick="applyUpload()">Add to map</button>
+    </div>
+  </div>
+</div>
+
+<script src="bagac-data.js"></script>
+
+<script>
+// Sidebar collapse — toggles the sidebar off-screen and tells Leaflet to
+// recalculate the map size so it fills the freed-up space.
+function toggleSidebar(){
+  const app = document.getElementById('app');
+  const isOpen = !app.classList.toggle('collapsed');
+  const tBtn = document.querySelector('#sidebarToggle i');
+  if (tBtn) tBtn.className = isOpen ? 'fas fa-chevron-left' : 'fas fa-chevron-right';
+  const tEl = document.getElementById('sidebarToggle');
+  if (tEl) tEl.title = isOpen ? 'Hide sidebar' : 'Show sidebar';
+  // Wait for the CSS transition to finish, then resize the map
+  setTimeout(()=>{ if (typeof map !== 'undefined' && map && map.invalidateSize) map.invalidateSize(); }, 280);
+  try { localStorage.setItem('bagac_sidebar', isOpen ? 'open' : 'collapsed'); } catch {}
+}
+// Restore last state on load
+(function(){
+  try {
+    if (localStorage.getItem('bagac_sidebar') === 'collapsed') {
+      document.addEventListener('DOMContentLoaded', () => {
+        document.getElementById('app').classList.add('collapsed');
+        const tBtn = document.querySelector('#sidebarToggle i'); if (tBtn) tBtn.className = 'fas fa-chevron-right';
+        setTimeout(()=>{ if (typeof map !== 'undefined' && map && map.invalidateSize) map.invalidateSize(); }, 50);
+      });
+    }
+  } catch {}
+})();
+
+const BAGAC_CENTER = [14.6038, 120.3971];
+const map = L.map('map').setView(BAGAC_CENTER, 14);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© OpenStreetMap',
+  maxZoom: 19
+}).addTo(map);
+
+const layers = {
+  naps: L.layerGroup().addTo(map),
+  customers: L.layerGroup().addTo(map),
+  proposed: L.layerGroup().addTo(map),
+  cables: L.layerGroup().addTo(map),
+  uploaded: L.layerGroup().addTo(map)
+};
+let uploadedCount = 0;
+
+function esc(s) { return (s||'').replace(/<script/gi,'&lt;script'); }
+function descHtml(desc) {
+  if (!desc) return '';
+  return '<div style="margin-top:6px;color:#334155;line-height:1.5">' + esc(desc) + '</div>';
+}
+
+function renderPoints(arr, layer, opts, typeLabel) {
+  arr.forEach(p => {
+    const marker = L.circleMarker([p[2], p[1]], opts);
+    const name = p[0], desc = p[3];
+    marker.bindPopup('<b>' + esc(name) + '</b>' + (typeLabel ? ' <span style="background:#fde68a;color:#78350f;font-size:10px;padding:1px 6px;border-radius:3px;margin-left:6px">' + typeLabel + '</span>' : '') + descHtml(desc));
+    marker.bindTooltip(name, { direction:'top', offset:[0,-6] });
+    marker.addTo(layer);
+  });
+}
+
+function renderCables() {
+  const colorFor = (name, desc) => {
+    const t = (name + ' ' + (desc||'')).toLowerCase();
+    if (/72\s*core/.test(t)) return '#01579B';
+    if (/48\s*core/.test(t)) return '#0288D1';
+    if (/24\s*core/.test(t)) return '#E65100';
+    if (/12\s*core/.test(t)) return '#FFD600';
+    if (/2\s*core/.test(t)) return '#9C27B0';
+    return '#E65100';
+  };
+  BAGAC_CABLES.forEach(c => {
+    const [name, desc, coords] = c;
+    if (!coords || coords.length < 2) return;
+    const latlngs = coords.map(p => [p[1], p[0]]); // stored as [lon,lat]
+    const color = colorFor(name, desc);
+    const line = L.polyline(latlngs, { color, weight: 3, opacity: 0.85 });
+    line.bindPopup('<b>' + esc(name) + '</b>' + descHtml(desc) + '<div style="margin-top:4px;color:#64748b;font-size:11px">' + coords.length + ' vertices</div>');
+    line.bindTooltip(name, { sticky:true });
+    line.addTo(layers.cables);
+  });
+  document.getElementById('count-cables').textContent = BAGAC_CABLES.length;
+}
+
+function toggleLayer(name, el) {
+  const cb = el.querySelector('input');
+  cb.checked = !cb.checked;
+  if (cb.checked) layers[name].addTo(map);
+  else map.removeLayer(layers[name]);
+}
+
+const searchEl = document.getElementById('search');
+const resultsEl = document.getElementById('searchResults');
+searchEl.addEventListener('input', () => {
+  const q = searchEl.value.trim().toLowerCase();
+  if (q.length < 2) { resultsEl.style.display='none'; resultsEl.innerHTML=''; return; }
+  const hits = [];
+  const collect = (arr, type) => arr.forEach(p => {
+    if (p[0] && p[0].toLowerCase().includes(q)) hits.push({ type, name:p[0], lat:p[2], lon:p[1] });
+  });
+  collect(BAGAC_NAPS, 'nap');
+  collect(BAGAC_CUSTOMERS, 'customer');
+  collect(BAGAC_PROPOSED, 'proposed');
+  if (hits.length === 0) { resultsEl.innerHTML = '<div class="item" style="color:#94a3b8">No matches</div>'; resultsEl.style.display='block'; return; }
+  resultsEl.innerHTML = hits.slice(0,50).map((h,i) => `<div class="item" onclick="flyToResult(${i})"><div class="t">${h.type}</div>${h.name}</div>`).join('');
+  resultsEl.style.display='block';
+  window._searchHits = hits;
+});
+function flyToResult(i) {
+  const h = window._searchHits[i]; if (!h) return;
+  map.setView([h.lat, h.lon], 18);
+  resultsEl.style.display='none';
+}
+
+// ── KMZ/KML upload ──────────────────────────────────────────
+// Everything runs in-browser: KMZ is unzipped client-side via JSZip,
+// the inner KML is parsed with DOMParser, and Placemarks are rendered
+// onto the "uploaded" layer. No backend involvement (page is isolated).
+
+function openKmzModal(){
+  document.getElementById('kmzFile').value = '';
+  document.getElementById('kmzPreview').style.display = 'none';
+  document.getElementById('kmzPreview').innerHTML = '';
+  document.getElementById('kmzErr').style.display = 'none';
+  document.getElementById('kmzGo').disabled = true;
+  document.getElementById('kmzOverlay').classList.add('active');
+}
+function closeKmzModal(){ document.getElementById('kmzOverlay').classList.remove('active'); }
+
+let _pendingParse = null; // Result of parseKml — folders/styles/stats
+
+// Modal markup is in the body before this script, so the input already exists.
+document.getElementById('kmzFile').addEventListener('change', onKmzFileChange);
+
+async function onKmzFileChange(e){
+  const file = e.target.files && e.target.files[0];
+  const errEl = document.getElementById('kmzErr');
+  const prevEl = document.getElementById('kmzPreview');
+  errEl.style.display = 'none';
+  prevEl.style.display = 'none';
+  document.getElementById('kmzGo').disabled = true;
+  _pendingParse = null;
+  if (!file) return;
+  try {
+    const kmlText = file.name.toLowerCase().endsWith('.kmz')
+      ? await extractKmlFromKmz(file)
+      : await file.text();
+    const parsed = parseKml(kmlText);
+    if (!parsed.stats.placemarks) throw new Error('No Placemarks found in this file.');
+    _pendingParse = parsed;
+    // Build a small folder summary for the modal preview.
+    const folderRows = parsed.folders.map(f => {
+      const total = f.points.length + f.lines.length + f.polygons.length;
+      const swatch = '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:'+(f.color||'#22c55e')+';margin-right:6px;vertical-align:middle"></span>';
+      return '<div class="ln">'+swatch+'<b>'+esc(f.name||'(root)')+'</b> — '+total+'</div>';
+    }).join('');
+    const km = (parsed.stats.totalLengthMeters / 1000).toFixed(2);
+    prevEl.innerHTML =
+      '<div class="ln" style="margin-bottom:6px;color:#0f172a;font-weight:700">Found '+parsed.stats.placemarks+' placemarks across '+parsed.folders.length+' folders</div>' +
+      '<div class="ln"><b>'+parsed.stats.points+'</b> points · <b>'+parsed.stats.lines+'</b> lines · <b>'+parsed.stats.polygons+'</b> polygons</div>' +
+      (parsed.stats.totalLengthMeters > 0 ? '<div class="ln">Total line length: <b>'+km+' km</b></div>' : '') +
+      '<div class="ln" style="margin-top:8px;border-top:1px solid #e2e8f0;padding-top:6px">'+folderRows+'</div>' +
+      '<div class="ln" style="margin-top:8px;color:#64748b;font-size:11px">Each folder becomes a toggleable layer with its own KML styling. ExtendedData attributes are shown in popups.</div>';
+    prevEl.style.display = 'block';
+    document.getElementById('kmzGo').disabled = false;
+  } catch (err) {
+    errEl.textContent = 'Could not read file: ' + err.message;
+    errEl.style.display = 'block';
+  }
+}
+
+async function extractKmlFromKmz(file){
+  if (typeof JSZip === 'undefined') throw new Error('JSZip not loaded');
+  const zip = await JSZip.loadAsync(file);
+  // Find the first .kml file inside the archive (KMZ standard is doc.kml at root,
+  // but some exports nest it in a folder — accept either).
+  const kmlEntry = Object.values(zip.files).find(f => !f.dir && f.name.toLowerCase().endsWith('.kml'));
+  if (!kmlEntry) throw new Error('No .kml found inside KMZ');
+  return await kmlEntry.async('text');
+}
+
+// ── KML helpers ──────────────────────────────────────────────
+// KML stores colors as AABBGGRR (alpha first, BGR), per the OGC KML spec.
+function kmlColorToHex(kmlColor){
+  if (!kmlColor || kmlColor.length !== 8) return null;
+  const r = kmlColor.substring(6,8);
+  const g = kmlColor.substring(4,6);
+  const b = kmlColor.substring(2,4);
+  return '#' + r + g + b;
+}
+function kmlAlpha(kmlColor){
+  if (!kmlColor || kmlColor.length !== 8) return 1;
+  return Math.max(0, Math.min(1, parseInt(kmlColor.substring(0,2), 16) / 255));
+}
+function parseCoordTuple(text){
+  return text.trim().split(/\s+/).map(tup => {
+    const p = tup.split(',').map(s=>parseFloat(s));
+    return (p.length>=2 && isFinite(p[0]) && isFinite(p[1])) ? [p[1], p[0]] : null;
+  }).filter(Boolean);
+}
+function haversine(a, b){
+  const R = 6371000, toRad = d => d*Math.PI/180;
+  const dLat = toRad(b[0]-a[0]), dLng = toRad(b[1]-a[1]);
+  const la1 = toRad(a[0]), la2 = toRad(b[0]);
+  const h = Math.sin(dLat/2)**2 + Math.cos(la1)*Math.cos(la2)*Math.sin(dLng/2)**2;
+  return 2*R*Math.asin(Math.sqrt(h));
+}
+function lineLength(coords){
+  let m = 0;
+  for (let i = 1; i < coords.length; i++) m += haversine(coords[i-1], coords[i]);
+  return m;
+}
+
+// Walk <Style> and <StyleMap> elements at any depth, returning a registry
+// keyed by `#id`. StyleMaps resolve their `normal` styleUrl to a real Style.
+function collectStyles(doc){
+  const styles = {};
+  const directs = doc.getElementsByTagName('Style');
+  for (let i = 0; i < directs.length; i++){
+    const s = directs[i];
+    const id = s.getAttribute('id');
+    if (!id) continue;
+    const lineColor = s.querySelector('LineStyle > color')?.textContent?.trim();
+    const lineWidth = parseFloat(s.querySelector('LineStyle > width')?.textContent || '');
+    const polyColor = s.querySelector('PolyStyle > color')?.textContent?.trim();
+    const polyFill  = s.querySelector('PolyStyle > fill')?.textContent?.trim();
+    const polyOutline = s.querySelector('PolyStyle > outline')?.textContent?.trim();
+    const iconHref = s.querySelector('IconStyle > Icon > href')?.textContent?.trim();
+    const iconColor = s.querySelector('IconStyle > color')?.textContent?.trim();
+    const iconScale = parseFloat(s.querySelector('IconStyle > scale')?.textContent || '');
+    styles['#'+id] = {
+      lineColor: kmlColorToHex(lineColor),
+      lineAlpha: kmlAlpha(lineColor),
+      lineWidth: isFinite(lineWidth) ? lineWidth : null,
+      polyColor: kmlColorToHex(polyColor),
+      polyAlpha: kmlAlpha(polyColor),
+      polyFill: polyFill === '0' ? false : true,
+      polyOutline: polyOutline === '0' ? false : true,
+      iconHref,
+      iconColor: kmlColorToHex(iconColor),
+      iconScale: isFinite(iconScale) ? iconScale : 1
+    };
+  }
+  // StyleMap: pick the "normal" pair.
+  const maps = doc.getElementsByTagName('StyleMap');
+  for (let i = 0; i < maps.length; i++){
+    const sm = maps[i];
+    const id = sm.getAttribute('id');
+    if (!id) continue;
+    const pairs = sm.getElementsByTagName('Pair');
+    let normalUrl = null;
+    for (let j = 0; j < pairs.length; j++){
+      const key = pairs[j].querySelector('key')?.textContent?.trim();
+      const url = pairs[j].querySelector('styleUrl')?.textContent?.trim();
+      if (key === 'normal' && url) { normalUrl = url; break; }
+    }
+    if (normalUrl && styles[normalUrl]) styles['#'+id] = styles[normalUrl];
+  }
+  return styles;
+}
+
+function extractExtendedData(pm){
+  const ed = {};
+  const node = pm.getElementsByTagName('ExtendedData')[0];
+  if (!node) return ed;
+  const datas = node.getElementsByTagName('Data');
+  for (let i = 0; i < datas.length; i++){
+    const k = datas[i].getAttribute('name');
+    const v = datas[i].querySelector('value')?.textContent?.trim();
+    if (k) ed[k] = v || '';
+  }
+  // SimpleData (used inside SchemaData)
+  const simples = node.getElementsByTagName('SimpleData');
+  for (let i = 0; i < simples.length; i++){
+    const k = simples[i].getAttribute('name');
+    const v = simples[i].textContent?.trim();
+    if (k) ed[k] = v || '';
+  }
+  return ed;
+}
+
+// Auto-color folders that have no inherited style. Cycles through a small
+// palette so each folder ends up visually distinct on the map and in the legend.
+const FOLDER_PALETTE = ['#22c55e','#0ea5e9','#f97316','#a855f7','#eab308','#ef4444','#14b8a6','#ec4899','#3b82f6','#84cc16','#f59e0b','#06b6d4'];
+let _folderColorIdx = 0;
+function nextFolderColor(){ const c = FOLDER_PALETTE[_folderColorIdx % FOLDER_PALETTE.length]; _folderColorIdx++; return c; }
+
+function parseKml(text){
+  const doc = new DOMParser().parseFromString(text, 'text/xml');
+  if (doc.querySelector('parsererror')) throw new Error('Invalid XML');
+  _folderColorIdx = 0;
+  const styles = collectStyles(doc);
+  // Find the document root: <kml><Document>... or <kml>... directly.
+  const root = doc.querySelector('Document') || doc.documentElement;
+  const folders = []; // flat list, in DOM order
+  const stats = { points: 0, lines: 0, polygons: 0, placemarks: 0, totalLengthMeters: 0 };
+
+  function emptyFolder(name, path){
+    return { id: 'fld_' + folders.length, name, path, color: nextFolderColor(),
+             points: [], lines: [], polygons: [], lengthMeters: 0 };
+  }
+
+  function collectPlacemark(folder, pm){
+    stats.placemarks++;
+    const name = (pm.getElementsByTagName('name')[0]?.textContent || '').trim();
+    const desc = (pm.getElementsByTagName('description')[0]?.textContent || '').trim();
+    const styleUrl = (pm.getElementsByTagName('styleUrl')[0]?.textContent || '').trim();
+    const style = styles[styleUrl] || null;
+    const ed = extractExtendedData(pm);
+
+    // Points (including those nested inside MultiGeometry).
+    const pts = pm.getElementsByTagName('Point');
+    for (let i = 0; i < pts.length; i++){
+      const c = pts[i].getElementsByTagName('coordinates')[0]?.textContent || '';
+      const parsed = parseCoordTuple(c);
+      if (parsed.length >= 1) {
+        folder.points.push({ name, desc, ed, style, lat: parsed[0][0], lon: parsed[0][1] });
+        stats.points++;
+      }
+    }
+    // LineStrings (including nested in MultiGeometry).
+    const ls = pm.getElementsByTagName('LineString');
+    for (let i = 0; i < ls.length; i++){
+      const c = ls[i].getElementsByTagName('coordinates')[0]?.textContent || '';
+      const coords = parseCoordTuple(c);
+      if (coords.length >= 2) {
+        const len = lineLength(coords);
+        folder.lines.push({ name, desc, ed, style, coords, lengthMeters: len });
+        folder.lengthMeters += len;
+        stats.lines++;
+        stats.totalLengthMeters += len;
+      }
+    }
+    // Polygons — outer boundary only (Leaflet handles ring → polygon).
+    const polys = pm.getElementsByTagName('Polygon');
+    for (let i = 0; i < polys.length; i++){
+      const outer = polys[i].querySelector('outerBoundaryIs > LinearRing > coordinates')?.textContent || '';
+      const ring = parseCoordTuple(outer);
+      if (ring.length >= 3) {
+        folder.polygons.push({ name, desc, ed, style, ring });
+        stats.polygons++;
+      }
+    }
+  }
+
+  function walk(node, path){
+    // Direct Placemark children get attached to the current folder.
+    let current = folders.find(f => f.path === path);
+    if (!current) { current = emptyFolder(path[path.length-1] || '(root)', path); folders.push(current); }
+    for (let i = 0; i < node.children.length; i++){
+      const ch = node.children[i];
+      if (ch.tagName === 'Placemark') collectPlacemark(current, ch);
+      else if (ch.tagName === 'Folder' || ch.tagName === 'Document') {
+        const fname = (ch.getElementsByTagName('name')[0]?.textContent || '').trim() || 'Folder';
+        // Only descend into a Folder/Document that is a direct child (avoid
+        // double-walking nested Documents).
+        const childPath = path.concat([fname]);
+        walk(ch, childPath);
+      }
+    }
+  }
+  walk(root, [(root.getElementsByTagName('name')[0]?.textContent || '').trim() || 'Document']);
+  // Drop folders that ended up empty (e.g. a parent folder containing only sub-folders).
+  const nonEmpty = folders.filter(f => f.points.length || f.lines.length || f.polygons.length);
+  // If every Placemark ended up at the root and there's nothing else, name it neatly.
+  if (nonEmpty.length === 1 && nonEmpty[0].path.length === 1) nonEmpty[0].name = nonEmpty[0].name || 'Uploaded';
+  // Inherit color from the dominant style on the folder, when one exists.
+  nonEmpty.forEach(f => {
+    const items = f.points.concat(f.lines).concat(f.polygons);
+    const styled = items.find(x => x.style && (x.style.iconColor || x.style.lineColor || x.style.polyColor));
+    if (styled) {
+      f.color = styled.style.iconColor || styled.style.lineColor || styled.style.polyColor || f.color;
+    }
+  });
+  return { folders: nonEmpty, styles, stats };
+}
+
+// ── Render ──────────────────────────────────────────────────
+function buildPopupHtml(name, desc, ed, extras){
+  let h = '<b>' + esc(name||'(unnamed)') + '</b>' +
+    ' <span style="background:#dcfce7;color:#166534;font-size:10px;padding:1px 6px;border-radius:3px;margin-left:6px">UPLOADED</span>';
+  if (extras) h += ' <span style="font-size:10px;color:#64748b;margin-left:4px">'+extras+'</span>';
+  if (desc) h += '<div style="margin-top:6px;color:#334155;line-height:1.5;max-height:140px;overflow:auto">' + esc(desc) + '</div>';
+  const keys = ed ? Object.keys(ed) : [];
+  if (keys.length){
+    h += '<table style="margin-top:8px;border-collapse:collapse;font-size:11px;width:100%">';
+    keys.forEach(k => {
+      h += '<tr><td style="padding:3px 6px;color:#64748b;font-weight:600;border-bottom:1px solid #f1f5f9;vertical-align:top">'+esc(k)+'</td>'+
+           '<td style="padding:3px 6px;color:#0f172a;border-bottom:1px solid #f1f5f9">'+esc(ed[k]||'—')+'</td></tr>';
+    });
+    h += '</table>';
+  }
+  return h;
+}
+
+const _uploadedFolderLayers = {}; // folderId → L.layerGroup
+let _uploadedAllBounds = null;
+
+function renderParsed(parsed){
+  // Wipe any previous upload, including the now-deprecated "uploaded" group.
+  clearUploaded();
+  _uploadedAllBounds = L.latLngBounds([]);
+
+  parsed.folders.forEach(folder => {
+    const lg = L.layerGroup().addTo(map);
+    _uploadedFolderLayers[folder.id] = lg;
+    const folderColor = folder.color || '#22c55e';
+
+    // Points
+    folder.points.forEach(p => {
+      const color = (p.style && p.style.iconColor) || folderColor;
+      const m = L.circleMarker([p.lat, p.lon], {
+        radius: 6, color: shade(color,-15), weight: 2, fillColor: color, fillOpacity: 0.9
+      });
+      m.bindPopup(buildPopupHtml(p.name, p.desc, p.ed));
+      if (p.name) m.bindTooltip(p.name, { direction:'top', offset:[0,-6] });
+      m.addTo(lg);
+      _uploadedAllBounds.extend([p.lat, p.lon]);
+    });
+
+    // Lines
+    folder.lines.forEach(l => {
+      const color = (l.style && l.style.lineColor) || folderColor;
+      const weight = (l.style && l.style.lineWidth) || 3;
+      const opacity = (l.style && isFinite(l.style.lineAlpha)) ? l.style.lineAlpha : 0.85;
+      const line = L.polyline(l.coords, { color, weight, opacity });
+      const km = (l.lengthMeters / 1000).toFixed(2);
+      line.bindPopup(buildPopupHtml(l.name, l.desc, l.ed, l.coords.length+' vertices · '+km+' km'));
+      if (l.name) line.bindTooltip(l.name, { sticky:true });
+      line.addTo(lg);
+      l.coords.forEach(c => _uploadedAllBounds.extend(c));
+    });
+
+    // Polygons
+    folder.polygons.forEach(po => {
+      const fill = (po.style && po.style.polyColor) || folderColor;
+      const stroke = (po.style && po.style.lineColor) || shade(fill, -15);
+      const fillOp = (po.style && isFinite(po.style.polyAlpha)) ? po.style.polyAlpha : 0.35;
+      const opts = {
+        color: stroke, weight: (po.style && po.style.lineWidth) || 2,
+        fillColor: fill, fillOpacity: (po.style && po.style.polyFill === false) ? 0 : fillOp,
+        opacity: (po.style && po.style.polyOutline === false) ? 0 : 0.9
+      };
+      const poly = L.polygon(po.ring, opts);
+      poly.bindPopup(buildPopupHtml(po.name, po.desc, po.ed, po.ring.length+' vertices'));
+      if (po.name) poly.bindTooltip(po.name, { sticky:true });
+      poly.addTo(lg);
+      po.ring.forEach(c => _uploadedAllBounds.extend(c));
+    });
+  });
+
+  renderUploadedSidebar(parsed);
+  if (_uploadedAllBounds.isValid()) map.fitBounds(_uploadedAllBounds, { padding:[24,24], maxZoom:17 });
+}
+
+// Slightly darken/lighten a hex color so stroke and fill stay distinct.
+function shade(hex, amt){
+  const m = /^#?([\da-f]{6})$/i.exec(hex||''); if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  let r = (n>>16)&0xff, g = (n>>8)&0xff, b = n&0xff;
+  const adj = v => Math.max(0, Math.min(255, v + amt));
+  r = adj(r); g = adj(g); b = adj(b);
+  return '#' + r.toString(16).padStart(2,'0') + g.toString(16).padStart(2,'0') + b.toString(16).padStart(2,'0');
+}
+
+function renderUploadedSidebar(parsed){
+  const wrap = document.getElementById('uploadedFoldersWrap');
+  const stats = parsed.stats;
+  const km = (stats.totalLengthMeters / 1000).toFixed(2);
+  let html = '';
+  html += '<div style="background:#0f172a;border:1px solid #1e293b;border-radius:6px;padding:10px;margin-bottom:8px">';
+  html += '<div style="font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;margin-bottom:6px">Imported summary</div>';
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px">';
+  html += '<div><span style="color:#94a3b8">Points</span> <b style="color:#fbbf24">'+stats.points+'</b></div>';
+  html += '<div><span style="color:#94a3b8">Lines</span> <b style="color:#fbbf24">'+stats.lines+'</b></div>';
+  html += '<div><span style="color:#94a3b8">Polygons</span> <b style="color:#fbbf24">'+stats.polygons+'</b></div>';
+  html += '<div><span style="color:#94a3b8">Length</span> <b style="color:#fbbf24">'+km+' km</b></div>';
+  html += '</div></div>';
+  parsed.folders.forEach(f => {
+    const total = f.points.length + f.lines.length + f.polygons.length;
+    const lenLabel = f.lengthMeters > 0 ? ' · ' + (f.lengthMeters/1000).toFixed(2) + ' km' : '';
+    html += '<div class="layer" data-fid="'+f.id+'" onclick="toggleUploadedFolder(\''+f.id+'\', this)" title="'+esc(f.path.join(' › '))+'">';
+    html += '<span><input type="checkbox" checked><span class="legend-dot" style="background:'+f.color+'"></span>'+esc(f.name||'(folder)')+'</span>';
+    html += '<span class="count">'+total+lenLabel+'</span>';
+    html += '</div>';
+  });
+  wrap.innerHTML = html;
+  wrap.style.display = 'block';
+  document.getElementById('btnClearUploaded').style.display = 'block';
+  // Hide the legacy single Uploaded row — we use per-folder rows now.
+  document.getElementById('uploadedRow').style.display = 'none';
+}
+
+function toggleUploadedFolder(fid, el){
+  const cb = el.querySelector('input');
+  cb.checked = !cb.checked;
+  const lg = _uploadedFolderLayers[fid];
+  if (!lg) return;
+  if (cb.checked) lg.addTo(map);
+  else map.removeLayer(lg);
+}
+
+function applyUpload(){
+  if (!_pendingParse) return;
+  renderParsed(_pendingParse);
+  _pendingParse = null;
+  closeKmzModal();
+}
+
+function clearUploaded(){
+  // Remove every per-folder layer.
+  Object.values(_uploadedFolderLayers).forEach(lg => map.removeLayer(lg));
+  for (const k of Object.keys(_uploadedFolderLayers)) delete _uploadedFolderLayers[k];
+  // Also wipe the legacy single-layer container in case any old data is in it.
+  if (layers.uploaded) layers.uploaded.clearLayers();
+  uploadedCount = 0;
+  document.getElementById('count-uploaded').textContent = '0';
+  document.getElementById('uploadedRow').style.display = 'none';
+  const wrap = document.getElementById('uploadedFoldersWrap');
+  if (wrap) { wrap.innerHTML = ''; wrap.style.display = 'none'; }
+  document.getElementById('btnClearUploaded').style.display = 'none';
+}
+
+(function boot(){
+  try {
+    if (typeof BAGAC_NAPS === 'undefined') throw new Error('Data not loaded');
+    renderPoints(BAGAC_NAPS, layers.naps, { radius:6, color:'#01579B', weight:2, fillColor:'#0288D1', fillOpacity:0.9 });
+    renderPoints(BAGAC_CUSTOMERS, layers.customers, { radius:4, color:'#7f1d1d', weight:1, fillColor:'#A52714', fillOpacity:0.85 });
+    renderPoints(BAGAC_PROPOSED, layers.proposed, { radius:6, color:'#b45309', weight:2, fillColor:'#FFEA00', fillOpacity:0.9 }, 'PROPOSED');
+    renderCables();
+    document.getElementById('count-naps').textContent = BAGAC_NAPS.length;
+    document.getElementById('count-customers').textContent = BAGAC_CUSTOMERS.length;
+    document.getElementById('count-proposed').textContent = BAGAC_PROPOSED.length;
+    document.getElementById('loading').remove();
+  } catch(e) {
+    console.error(e);
+    const el = document.getElementById('loading');
+    el.textContent = 'Error: ' + e.message;
+    el.style.background = '#7f1d1d'; el.style.color = '#fecaca';
+  }
+})();
+</script>
+</body>
+</html>

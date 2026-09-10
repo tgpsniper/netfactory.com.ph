@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SQL Console — Netfactory</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0c1222;--bg-alt:#141b2e;--bg-card:#1a2238;--border:#2a334d;
+    --text:#e8ecf4;--text-muted:#8896b0;--accent:#60a5fa;--accent-glow:rgba(96,165,250,.15);
+    --green:#4ade80;--green-bg:rgba(74,222,128,.15);--red:#f87171;--red-bg:rgba(248,113,113,.15);
+    --yellow:#fbbf24;--yellow-bg:rgba(251,191,36,.15);
+    --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:'DM Sans',system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);font-size:14px;height:100vh;overflow:hidden}
+  header{background:var(--bg-card);border-bottom:1px solid var(--border);padding:12px 20px;display:flex;align-items:center;gap:14px}
+  header .logo{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#60a5fa,#3b82f6);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:900;font-size:15px}
+  header h1{margin:0;font-size:16px;font-weight:700}
+  header .sub{color:var(--text-muted);font-size:12px;margin-left:6px}
+  header .right{margin-left:auto;display:flex;gap:8px;align-items:center}
+  .btn{background:var(--bg-alt);border:1px solid var(--border);color:var(--text);padding:8px 14px;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:6px}
+  .btn:hover{background:#202a45;border-color:#3a4669}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .btn-primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  .btn-primary:hover{background:#3b82f6}
+  .btn-danger{background:#dc2626;border-color:#dc2626;color:#fff}
+  .btn-danger:hover{background:#b91c1c}
+  .btn-sm{padding:5px 10px;font-size:12px}
+  .container{display:grid;grid-template-columns:240px 1fr;height:calc(100vh - 58px)}
+  .sidebar{background:var(--bg-card);border-right:1px solid var(--border);overflow-y:auto;padding:14px}
+  .sidebar h3{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--text-muted);margin:0 0 10px}
+  .sidebar input{width:100%;padding:7px 10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;margin-bottom:10px;font-family:inherit}
+  .table-list{display:flex;flex-direction:column;gap:1px}
+  .table-item{padding:6px 8px;border-radius:5px;cursor:pointer;font-family:var(--mono);font-size:12px;display:flex;justify-content:space-between;align-items:center;color:var(--text)}
+  .table-item:hover{background:var(--bg-alt)}
+  .table-item.expanded{background:var(--accent-glow);color:var(--accent)}
+  .table-item .approx{color:var(--text-muted);font-size:10px;font-family:'DM Sans'}
+  .col-list{padding:4px 8px 8px 18px;font-family:var(--mono);font-size:11px}
+  .col-list div{padding:2px 0;color:var(--text-muted);cursor:pointer}
+  .col-list div:hover{color:var(--accent)}
+  .col-list .pk{color:var(--yellow)}
+  .col-type{color:#7dd3fc}
+  .main{display:flex;flex-direction:column;overflow:hidden}
+  .toolbar{padding:10px 14px;background:var(--bg-card);border-bottom:1px solid var(--border);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .toolbar label{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-muted);cursor:pointer;user-select:none}
+  .toolbar input[type=checkbox]{accent-color:var(--accent);width:14px;height:14px}
+  .editor-wrap{flex:0 0 auto;border-bottom:1px solid var(--border)}
+  textarea#editor{width:100%;min-height:200px;max-height:380px;padding:12px 14px;background:var(--bg);color:var(--text);border:0;outline:0;resize:vertical;font-family:var(--mono);font-size:13px;line-height:1.55}
+  .results{flex:1;overflow:auto;background:var(--bg);padding:0}
+  .results-empty{padding:60px 30px;text-align:center;color:var(--text-muted);font-size:13px}
+  .results-meta{padding:10px 14px;background:var(--bg-card);border-bottom:1px solid var(--border);font-size:12px;color:var(--text-muted);display:flex;gap:14px;align-items:center}
+  .results-meta .pill{padding:2px 8px;border-radius:4px;font-weight:600;font-size:11px;background:var(--bg-alt)}
+  .results-meta .pill.ok{background:var(--green-bg);color:var(--green)}
+  .results-meta .pill.err{background:var(--red-bg);color:var(--red)}
+  .results-meta .pill.warn{background:var(--yellow-bg);color:var(--yellow)}
+  table.data{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12px}
+  table.data th{text-align:left;padding:8px 12px;background:var(--bg-card);border-bottom:1px solid var(--border);position:sticky;top:0;font-weight:600;color:var(--text);white-space:nowrap}
+  table.data td{padding:6px 12px;border-bottom:1px solid var(--border);vertical-align:top;max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  table.data tr:hover td{background:var(--bg-alt)}
+  table.data .null{color:var(--text-muted);font-style:italic}
+  pre.error{margin:0;padding:14px 18px;color:var(--red);background:var(--red-bg);font-family:var(--mono);font-size:12px;white-space:pre-wrap;border-left:3px solid var(--red)}
+  .tabs{display:flex;background:var(--bg-card);border-bottom:1px solid var(--border)}
+  .tabs button{background:transparent;border:0;padding:10px 18px;font-size:12px;font-weight:600;color:var(--text-muted);cursor:pointer;font-family:inherit;border-bottom:2px solid transparent;margin-bottom:-1px}
+  .tabs button.active{color:var(--accent);border-bottom-color:var(--accent)}
+  .tabs button:hover{color:var(--text)}
+  .toast{position:fixed;bottom:20px;right:20px;background:var(--bg-card);border:1px solid var(--border);padding:12px 16px;border-radius:8px;font-size:13px;font-weight:500;z-index:1000;box-shadow:0 8px 24px rgba(0,0,0,.4);display:none}
+  .toast.ok{border-left:3px solid var(--green)}
+  .toast.err{border-left:3px solid var(--red)}
+  .toast.show{display:block;animation:slideIn .25s ease}
+  @keyframes slideIn{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
+  .audit-list{padding:0}
+  .audit-row{padding:10px 14px;border-bottom:1px solid var(--border);font-size:12px;cursor:pointer}
+  .audit-row:hover{background:var(--bg-alt)}
+  .audit-sql{font-family:var(--mono);color:var(--text);margin-top:4px;white-space:pre-wrap;overflow:hidden;text-overflow:ellipsis;max-height:42px}
+  .audit-meta{display:flex;gap:14px;color:var(--text-muted);font-size:11px}
+  .warn-banner{background:var(--yellow-bg);border:1px solid var(--yellow);color:var(--yellow);padding:8px 14px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:8px}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">NF</div>
+  <h1>SQL Console</h1>
+  <span class="sub">— direct database access (superadmin only)</span>
+  <div class="right">
+    <button class="btn btn-sm" onclick="loadAudit()"><i class="fas fa-clock-rotate-left"></i> History</button>
+    <a href="/crm/" class="btn btn-sm"><i class="fas fa-arrow-left"></i> Back to CRM</a>
+  </div>
+</header>
+
+<div class="container">
+  <aside class="sidebar">
+    <h3>Tables</h3>
+    <input type="search" id="schema-filter" placeholder="Filter…" oninput="renderTables()">
+    <div class="table-list" id="tables"></div>
+  </aside>
+
+  <main class="main">
+    <div class="toolbar">
+      <button class="btn btn-primary" id="run-btn" onclick="runQuery()"><i class="fas fa-play"></i> Run <span style="opacity:.7;font-weight:400;font-size:11px;margin-left:4px">Ctrl+Enter</span></button>
+      <label><input type="checkbox" id="readonly" checked onchange="onReadOnlyChange()"> Read-only</label>
+      <span style="font-size:11px;color:var(--red);background:var(--red-bg);padding:3px 8px;border-radius:4px;font-weight:600"><i class="fas fa-ban" style="margin-right:4px"></i>DELETE / UPDATE / DROP / TRUNCATE blocked</span>
+      <span style="flex:1"></span>
+      <button class="btn btn-sm" onclick="formatSQL()"><i class="fas fa-broom"></i> Format</button>
+      <button class="btn btn-sm" onclick="document.getElementById('editor').value=''"><i class="fas fa-eraser"></i> Clear</button>
+    </div>
+    <div id="write-warn" class="warn-banner" style="display:none">
+      <i class="fas fa-triangle-exclamation"></i>
+      Read-only is OFF. Writes will be persisted to the production database.
+    </div>
+    <div class="editor-wrap">
+      <textarea id="editor" placeholder="-- Try:&#10;SELECT id, account_number, first_name, last_name, status FROM subscribers LIMIT 25;"></textarea>
+    </div>
+
+    <div class="tabs">
+      <button class="active" id="tab-data" onclick="showTab('data')">Data</button>
+      <button id="tab-msg" onclick="showTab('msg')">Messages</button>
+      <button id="tab-hist" onclick="showTab('hist')">History</button>
+    </div>
+
+    <div class="results" id="pane-data">
+      <div class="results-empty">Run a query to see results here.</div>
+    </div>
+    <div class="results" id="pane-msg" style="display:none">
+      <div class="results-empty">Status messages will appear here.</div>
+    </div>
+    <div class="results" id="pane-hist" style="display:none">
+      <div class="audit-list" id="audit-list"></div>
+    </div>
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = '/api/admin/sql';
+const TOK = () => localStorage.getItem('j2_admin_token') || '';
+let TABLES = [];
+let EXPANDED = new Set();
+let TABLE_COLS = {};
+
+function authHeaders(extra){ return { 'Authorization':'Bearer '+TOK(), 'Content-Type':'application/json', ...(extra||{}) }; }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function toast(msg, kind){ const t=document.getElementById('toast'); t.className='toast '+(kind||'')+' show'; t.textContent=msg; clearTimeout(toast._t); toast._t=setTimeout(()=>t.classList.remove('show'),3000); }
+function showTab(name){ ['data','msg','hist'].forEach(k=>{ document.getElementById('tab-'+k).classList.toggle('active',k===name); document.getElementById('pane-'+k).style.display = k===name?'block':'none'; }); }
+
+function onReadOnlyChange(){
+  document.getElementById('write-warn').style.display = document.getElementById('readonly').checked ? 'none' : 'flex';
+}
+
+async function loadSchema(){
+  try{
+    const r = await fetch(API+'/schema',{headers:authHeaders()});
+    if(r.status===401){ toast('Login required','err'); return; }
+    if(r.status===403){ toast('Superadmin only — access denied','err'); document.body.innerHTML = '<div style="padding:60px;text-align:center"><h2>Access denied</h2><p>This page requires superadmin role.</p><a href="/crm/" class="btn">Back to CRM</a></div>'; return; }
+    const j = await r.json();
+    TABLES = j.tables||[];
+    renderTables();
+  }catch(e){ toast('Schema load failed: '+e.message,'err'); }
+}
+
+function renderTables(){
+  const f = (document.getElementById('schema-filter').value||'').toLowerCase();
+  const html = TABLES
+    .filter(t => !f || t.name.toLowerCase().includes(f))
+    .map(t => {
+      const exp = EXPANDED.has(t.name);
+      let row = '<div class="table-item '+(exp?'expanded':'')+'" onclick="toggleTable(\''+t.name+'\')"><span><i class="fas fa-table" style="font-size:10px;margin-right:6px;opacity:.6"></i>'+esc(t.name)+'</span><span class="approx">'+(t.approx_rows!=null?Number(t.approx_rows).toLocaleString():'')+'</span></div>';
+      if(exp && TABLE_COLS[t.name]){
+        row += '<div class="col-list">' + TABLE_COLS[t.name].map(c =>
+          '<div onclick="event.stopPropagation();insertText(\''+esc(c.name)+'\')" title="'+esc(c.type)+(c.nullable==='YES'?' NULL':' NOT NULL')+'">'+esc(c.name)+' <span class="col-type">'+esc(c.type)+'</span></div>'
+        ).join('') + '</div>';
+      }
+      return row;
+    }).join('');
+  document.getElementById('tables').innerHTML = html || '<div style="color:var(--text-muted);font-size:12px;padding:8px">No tables.</div>';
+}
+
+async function toggleTable(name){
+  if(EXPANDED.has(name)){ EXPANDED.delete(name); renderTables(); return; }
+  EXPANDED.add(name);
+  if(!TABLE_COLS[name]){
+    try{
+      const r = await fetch(API+'/schema/'+encodeURIComponent(name),{headers:authHeaders()});
+      const j = await r.json();
+      TABLE_COLS[name] = j.columns||[];
+    }catch(e){ TABLE_COLS[name] = []; }
+  }
+  renderTables();
+}
+
+function insertText(t){
+  const ed = document.getElementById('editor');
+  const s = ed.selectionStart, e = ed.selectionEnd;
+  ed.value = ed.value.slice(0,s) + t + ed.value.slice(e);
+  ed.focus();
+  ed.selectionStart = ed.selectionEnd = s + t.length;
+}
+
+function isDestructive(sql){
+  return /\b(drop|truncate|delete\s+from|update\s+\w+\s+set)\b/i.test(sql);
+}
+
+async function runQuery(){
+  const sql = document.getElementById('editor').value.trim();
+  if(!sql){ toast('Nothing to run','err'); return; }
+  const readOnly = document.getElementById('readonly').checked;
+  if(!readOnly && document.getElementById('confirm-writes').checked && isDestructive(sql)){
+    if(!confirm('This statement modifies or deletes data:\n\n' + sql.slice(0,300) + (sql.length>300?'…':'') + '\n\nProceed?')) return;
+  }
+
+  const btn = document.getElementById('run-btn');
+  btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Running…';
+  const start = Date.now();
+
+  try{
+    const r = await fetch(API+'/execute',{ method:'POST', headers:authHeaders(), body:JSON.stringify({sql, readOnly}) });
+    const j = await r.json();
+    if(!r.ok){
+      renderError(j.error || ('HTTP '+r.status), j.duration_ms);
+      showTab('msg');
+    } else {
+      renderResults(j, sql);
+      showTab('data');
+    }
+  }catch(e){
+    renderError(e.message, Date.now()-start);
+    showTab('msg');
+  }finally{
+    btn.disabled = false; btn.innerHTML = '<i class="fas fa-play"></i> Run <span style="opacity:.7;font-weight:400;font-size:11px;margin-left:4px">Ctrl+Enter</span>';
+  }
+}
+
+function renderResults(j, sql){
+  const data = document.getElementById('pane-data');
+  const msg = document.getElementById('pane-msg');
+  const isSelect = /^\s*(select|with|explain|show)\b/i.test(sql);
+  const meta = '<div class="results-meta">'
+    + '<span class="pill ok"><i class="fas fa-check"></i> OK</span>'
+    + '<span>'+j.rowCount.toLocaleString()+' '+(isSelect?'row(s) returned':'row(s) affected')+'</span>'
+    + '<span>'+j.duration_ms+' ms</span>'
+    + (j.truncated ? '<span class="pill warn">⚠ truncated to default LIMIT 1000 — add explicit LIMIT for more</span>' : '')
+    + (j.final_sql ? '<span class="pill warn" title="'+esc(j.final_sql)+'">auto-LIMIT applied</span>' : '')
+    + '</div>';
+  if(isSelect){
+    if(!j.rows.length){
+      data.innerHTML = meta + '<div class="results-empty">No rows.</div>';
+    } else {
+      const cols = j.columns;
+      const head = '<thead><tr>'+cols.map(c=>'<th>'+esc(c)+'</th>').join('')+'</tr></thead>';
+      const body = '<tbody>'+j.rows.map(r=>'<tr>'+cols.map(c=>{
+        const v = r[c];
+        if(v===null||v===undefined) return '<td class="null">NULL</td>';
+        if(typeof v==='object') return '<td title="'+esc(JSON.stringify(v))+'">'+esc(JSON.stringify(v))+'</td>';
+        return '<td title="'+esc(v)+'">'+esc(v)+'</td>';
+      }).join('')+'</tr>').join('')+'</tbody>';
+      data.innerHTML = meta + '<table class="data">'+head+body+'</table>';
+    }
+  } else {
+    data.innerHTML = meta + '<div class="results-empty">Statement executed. '+j.rowCount+' row(s) affected.</div>';
+  }
+  msg.innerHTML = meta + '<pre style="margin:0;padding:14px 18px;color:var(--green);font-family:var(--mono);font-size:12px">Query OK — '+j.rowCount+' '+(isSelect?'row(s) returned':'row(s) affected')+', '+j.duration_ms+' ms</pre>';
+}
+
+function renderError(err, dur){
+  document.getElementById('pane-data').innerHTML = '<div class="results-empty">Query failed. See Messages tab.</div>';
+  document.getElementById('pane-msg').innerHTML =
+    '<div class="results-meta"><span class="pill err"><i class="fas fa-xmark"></i> ERROR</span><span>'+(dur||0)+' ms</span></div>'
+    + '<pre class="error">'+esc(err)+'</pre>';
+}
+
+async function loadAudit(){
+  try{
+    const r = await fetch(API+'/audit',{headers:authHeaders()});
+    const j = await r.json();
+    const html = (j.audit||[]).map(a => {
+      const cls = a.error ? 'err' : 'ok';
+      return '<div class="audit-row" onclick="document.getElementById(\'editor\').value='+JSON.stringify(a.sql)+'; showTab(\'data\');">'
+        + '<div class="audit-meta">'
+        + '<span class="pill '+cls+'">'+(a.error?'ERROR':'OK')+'</span>'
+        + '<span>'+esc(a.admin_username)+'</span>'
+        + '<span>'+(a.read_only?'read-only':'<span style="color:var(--yellow)">WRITE</span>')+'</span>'
+        + '<span>'+a.duration_ms+' ms</span>'
+        + '<span>'+a.row_count+' rows</span>'
+        + '<span style="margin-left:auto">'+new Date(a.created_at).toLocaleString()+'</span>'
+        + '</div>'
+        + '<div class="audit-sql">'+esc(a.sql)+(a.sql.length>=500?'…':'')+'</div>'
+        + (a.error ? '<div style="color:var(--red);font-size:11px;margin-top:4px">'+esc(a.error)+'</div>' : '')
+        + '</div>';
+    }).join('');
+    document.getElementById('audit-list').innerHTML = html || '<div class="results-empty">No history yet.</div>';
+    showTab('hist');
+  }catch(e){ toast('Audit load failed: '+e.message,'err'); }
+}
+
+function formatSQL(){
+  const ed = document.getElementById('editor');
+  let s = ed.value;
+  s = s.replace(/\s+/g,' ').trim();
+  s = s.replace(/\b(SELECT|FROM|WHERE|JOIN|LEFT JOIN|RIGHT JOIN|INNER JOIN|GROUP BY|ORDER BY|HAVING|LIMIT|OFFSET|UNION|VALUES|SET|RETURNING)\b/gi, '\n$1');
+  ed.value = s.trim();
+}
+
+document.getElementById('editor').addEventListener('keydown', e => {
+  if((e.ctrlKey||e.metaKey) && e.key==='Enter'){ e.preventDefault(); runQuery(); }
+});
+
+if(!TOK()){
+  document.body.innerHTML = '<div style="padding:60px;text-align:center"><h2>Login required</h2><p>Please <a href="/crm/" style="color:var(--accent)">log in</a> first.</p></div>';
+} else {
+  loadSchema();
+  onReadOnlyChange();
+}
+</script>
+</body>
+</html>

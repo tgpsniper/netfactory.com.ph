@@ -1,0 +1,144 @@
+# GenieACS behind nginx, split by hostname.
+#
+# Only 80 and 443 are forwarded to this box from outside (verified from an
+# external router: 8443 and 7547 both time out). So both services ride 443 by
+# SNI rather than asking for new port forwards. Each hostname is its own
+# origin, which the GenieACS UI needs anyway — it fetches root-absolute /api/
+# and owns the routes /devices and /login, so it cannot live under a sub-path.
+#
+# These start as plain :80 blocks. Once the A records exist, certbot --nginx
+# adds the matching 443 blocks and the redirect.
+
+# ── ACS admin panel ────────────────────────────────────────────────
+server {
+    server_name acs.netfactory.com.ph;
+
+    # Restrict to trusted addresses by uncommenting and listing them.
+    # allow 10.0.98.0/24;
+    # deny  all;
+
+    access_log /var/log/nginx/acs-access.log;
+    error_log  /var/log/nginx/acs-error.log;
+
+    client_max_body_size 64m;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        "upgrade";
+        proxy_read_timeout 300s;
+    }
+
+    listen 443 ssl; # managed by Certbot
+    listen [::]:443 ssl ipv6only=on; # managed by Certbot
+    ssl_certificate /etc/letsencrypt/live/acs-netfactory/fullchain.pem; # managed by Certbot
+    ssl_certificate_key /etc/letsencrypt/live/acs-netfactory/privkey.pem; # managed by Certbot
+    include /etc/letsencrypt/options-ssl-nginx.conf; # managed by Certbot
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem; # managed by Certbot
+
+}
+
+# ── TR-069 CWMP endpoint — this is where the CPEs inform ───────────
+server {
+    server_name cwmp.netfactory.com.ph;
+
+    access_log /var/log/nginx/cwmp-access.log;
+    error_log  /var/log/nginx/cwmp-error.log;
+
+    # Firmware and config files a CPE downloads can be large.
+    client_max_body_size 128m;
+
+    location / {
+        proxy_pass http://127.0.0.1:7547;
+        proxy_http_version 1.1;
+
+        # A TR-069 session is a run of POSTs that must land on the same
+        # connection state, so keepalive is left on and the hop-by-hop
+        # Connection header is cleared rather than set to "upgrade".
+        proxy_set_header Connection        "";
+        proxy_set_header Host              $host;
+        # GenieACS records the address it will send connection requests to,
+        # so the CPE's real IP has to survive the proxy.
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Informs can sit while the ACS walks a large parameter tree.
+        proxy_connect_timeout 30s;
+        proxy_send_timeout    300s;
+        proxy_read_timeout    300s;
+        proxy_buffering       off;
+    }
+
+    listen 443 ssl; # managed by Certbot
+    listen [::]:443 ssl; # managed by Certbot
+    ssl_certificate /etc/letsencrypt/live/acs-netfactory/fullchain.pem; # managed by Certbot
+    ssl_certificate_key /etc/letsencrypt/live/acs-netfactory/privkey.pem; # managed by Certbot
+    include /etc/letsencrypt/options-ssl-nginx.conf; # managed by Certbot
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem; # managed by Certbot
+
+}
+
+# ── Interim LAN access on 8443 ─────────────────────────────────────
+# Not reachable from outside (8443 is not forwarded), but it lets staff on
+# 10.0.98.0/24 reach the panel before the DNS records land. Safe to delete
+# once acs.netfactory.com.ph is serving.
+server {
+    listen 8443 ssl;
+    listen [::]:8443 ssl;
+    server_name netfactory.com.ph www.netfactory.com.ph;
+
+    ssl_certificate     /etc/letsencrypt/live/netfactory.com.ph/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/netfactory.com.ph/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    access_log /var/log/nginx/acs-access.log;
+    error_log  /var/log/nginx/acs-error.log;
+
+    client_max_body_size 64m;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host:$server_port;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        "upgrade";
+        proxy_read_timeout 300s;
+    }
+}
+
+server {
+    if ($host = acs.netfactory.com.ph) {
+        return 301 https://$host$request_uri;
+    } # managed by Certbot
+
+
+    listen 80;
+    listen [::]:80;
+    server_name acs.netfactory.com.ph;
+    return 404; # managed by Certbot
+
+
+}
+server {
+    if ($host = cwmp.netfactory.com.ph) {
+        return 301 https://$host$request_uri;
+    } # managed by Certbot
+
+
+    listen 80;
+    listen [::]:80;
+    server_name cwmp.netfactory.com.ph;
+    return 404; # managed by Certbot
+
+
+}
