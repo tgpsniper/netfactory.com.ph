@@ -14,6 +14,8 @@ const gmailPoll = require('./inbox-gmail-poll');
 const balanceReconcile = require('./balance-reconcile');
 const restrictionSync = require('./restriction-sync');
 const billingRestriction = require('./billing-restriction');
+const prepaidExpiry = require('./prepaid-expiry');
+const monthlyInvoices = require('./monthly-invoices');
 
 const registered = new Map(); // name -> ScheduledTask
 
@@ -52,6 +54,8 @@ function startJobs(prisma, io) {
   register(balanceReconcile, prisma, io);
   register(restrictionSync, prisma, io);
   register(billingRestriction, prisma, io);
+  register(prepaidExpiry, prisma, io);
+  register(monthlyInvoices, prisma, io);
 }
 
 function stopJobs() {

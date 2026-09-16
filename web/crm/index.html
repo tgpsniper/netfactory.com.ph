@@ -177,9 +177,35 @@ const J2CRM = () => {
   };
   const unformatPhone = (val) => val.replace(/\D/g, "").substring(0, 11);
   const toTitleCase = (s) => (s||"").toLowerCase().replace(/(?:^|\s|[\-\/\(])\S/g, c => c.toUpperCase());
+  // Surname first — "Dela Cruz, Juan Santos". Staff read these lists by family name and
+  // the intake forms capture the name in that order, so the display matches the input.
+  // Accepts camelCase or snake_case because subscriber records arrive in both shapes
+  // depending on which endpoint loaded them.
   const subDisplayName = (s) => {
-    if (s.firstName || s.lastName) return `${s.firstName||""}${s.middleName ? " " + s.middleName : ""} ${s.lastName||""}`.trim();
-    return s.companyName || s.acct || "—";
+    if (!s) return "—";
+    const last   = String(s.lastName   || s.last_name   || "").trim();
+    const first  = String(s.firstName  || s.first_name  || "").trim();
+    const middle = String(s.middleName || s.middle_name || "").trim();
+    const given  = `${first}${middle ? " " + middle : ""}`.trim();
+    if (last && given) return `${last}, ${given}`;
+    if (last || given) return last || given;
+    return s.companyName || s.company_name || s.acct || "—";
+  };
+  // A name search has to keep working whichever order the person types. Once the display
+  // flips to surname-first, matching against it alone would stop "juan dela" from finding
+  // "Dela Cruz, Juan" — so the haystack carries the parts as well as the formatted name.
+  const subSearchName = (s) => {
+    if (!s) return "";
+    const last   = String(s.lastName   || s.last_name   || "").trim();
+    const first  = String(s.firstName  || s.first_name  || "").trim();
+    const middle = String(s.middleName || s.middle_name || "").trim();
+    const company = String(s.companyName || s.company_name || "");
+    // "first last" is listed separately from "first middle last" on purpose: staff type
+    // a name without the middle far more often than with it, and a middle name sitting
+    // between the two would otherwise break the match.
+    return [subDisplayName(s), company, first, middle, last,
+            first + " " + last, first + " " + middle + " " + last]
+      .join(" ").replace(/\s+/g, " ").toLowerCase();
   };
 
 
@@ -189,6 +215,8 @@ const J2CRM = () => {
   const [subSortDir, setSubSortDir] = useState("asc");
   const subsPerPage = 8;
   const [selectedSub, setSelectedSub] = useState(null);
+  const [prepaidInfo, setPrepaidInfo] = useState(null);
+  const [prepaidBusy, setPrepaidBusy] = useState(false);
   const [showSubModal, setShowSubModal] = useState(false);
   const [creditHistory, setCreditHistory] = useState([]);
   const [creditLoading, setCreditLoading] = useState(false);
@@ -333,6 +361,33 @@ const J2CRM = () => {
     if (showSubModal && selectedSub?.id) loadXuiLine(selectedSub.id);
     else setXuiLine(null);
   }, [showSubModal, selectedSub?.id]);
+
+  // Prepaid standing for the open subscriber. Cleared first so a slow response can
+  // never show the previous subscriber's expiry against this one's name.
+  const loadPrepaid = async (subId) => {
+    setPrepaidInfo(null);
+    try {
+      const res = await apiFetch("/admin/prepaid/status/" + subId);
+      setPrepaidInfo(res && res.prepaid ? res : null);
+    } catch (e) { setPrepaidInfo(null); }
+  };
+
+  const doTopUp = async (periods) => {
+    if (!selectedSub || prepaidBusy) return;
+    setPrepaidBusy(true);
+    try {
+      const res = await apiFetch("/admin/prepaid/topup/" + selectedSub.id, {
+        method: "POST",
+        body: JSON.stringify({ days: periods * (prepaidInfo?.validityDays || 30), method: "cash" })
+      });
+      showToast(`Topped up ${res.days} days — ${res.invoiceNumber}` + (res.accessRestored ? ", service restored" : ""), "success");
+      await loadPrepaid(selectedSub.id);
+      fetchCrmData();
+    } catch (e) {
+      showToast(e.message || "Top-up failed", "error");
+    }
+    setPrepaidBusy(false);
+  };
 
   const loadCreditHistory = async (subId) => {
     setCreditLoading(true);
@@ -723,7 +778,7 @@ const J2CRM = () => {
   const [staffLoading, setStaffLoading] = useState(false);
   const [showAddPlan, setShowAddPlan] = useState(false);
   const [showEditPlan, setShowEditPlan] = useState(null);
-  const [planForm, setPlanForm] = useState({ name:"", speedMbps:"", speedLabel:"", price:"", description:"", colorHex:"#3b82f6", isPopular:false, isActive:true, sortOrder:"", routerType:"", features:[""], activationFee:"", installationFee:"", showFeesOnWebsite:false, burstDownloadMbps:"", burstUploadMbps:"", burstThresholdPct:"80", burstTimeS:"16" });
+  const [planForm, setPlanForm] = useState({ name:"", speedMbps:"", speedLabel:"", price:"", description:"", colorHex:"#3b82f6", isPopular:false, isActive:true, sortOrder:"", routerType:"", features:[""], activationFee:"", installationFee:"", showFeesOnWebsite:false, burstDownloadMbps:"", burstUploadMbps:"", burstThresholdPct:"80", burstTimeS:"16", billingType:"postpaid", validityPeriod:"" });
   const [planLoading, setPlanLoading] = useState(false);
   const [showPayModal, setShowPayModal] = useState(null);
   const [payForm, setPayForm] = useState({ method:"gcash", referenceNumber:"", amount:"", orNumber:"", paymentDate: new Date().toISOString().slice(0,10) });
@@ -1074,7 +1129,7 @@ const J2CRM = () => {
       fetch(`${API}/admin/packages`,{headers:h}).then(r=>r.json()).catch(()=>({packages:[]})),
     ]).then(([dash, subs, invs, tix, plansData, notifs, pkgData]) => {
       setDashStats(dash);
-      if(plansData.plans) setPlans(plansData.plans.map(p=>({id:p.id, name:p.name, speed: p.speedLabel || p.speed_label || (p.speedMbps >= 1000 || p.speed_mbps >= 1000 ? "1 Gbps" : `${p.speedMbps||p.speed_mbps} Mbps`), price:p.price, speedRaw:p.speedMbps||p.speed_mbps, slug:p.slug, isActive:p.isActive??p.is_active, isPopular:p.isPopular??p.is_popular, color:p.color||p.color_hex, description:p.description, sortOrder:p.sortOrder||p.sort_order, routerType:p.routerType||p.router_type, subscriberCount:p.subscriberCount||p.subscriber_count||0, features:p.features||[], activationFee:p.activationFee||p.activation_fee||0, installationFee:p.installationFee||p.installation_fee||0, showFeesOnWebsite:p.showFeesOnWebsite||p.show_fees_on_website||false,burstDownloadMbps:p.burstDownloadMbps??p.burst_download_mbps??null,burstUploadMbps:p.burstUploadMbps??p.burst_upload_mbps??null,burstThresholdPct:p.burstThresholdPct??p.burst_threshold_pct??80,burstTimeS:p.burstTimeS??p.burst_time_s??16})));
+      if(plansData.plans) setPlans(plansData.plans.map(p=>({id:p.id, name:p.name, speed: p.speedLabel || p.speed_label || (p.speedMbps >= 1000 || p.speed_mbps >= 1000 ? "1 Gbps" : `${p.speedMbps||p.speed_mbps} Mbps`), price:p.price, speedRaw:p.speedMbps||p.speed_mbps, slug:p.slug, isActive:p.isActive??p.is_active, isPopular:p.isPopular??p.is_popular, color:p.color||p.color_hex, description:p.description, sortOrder:p.sortOrder||p.sort_order, routerType:p.routerType||p.router_type, subscriberCount:p.subscriberCount||p.subscriber_count||0, features:p.features||[], activationFee:p.activationFee||p.activation_fee||0, installationFee:p.installationFee||p.installation_fee||0, showFeesOnWebsite:p.showFeesOnWebsite||p.show_fees_on_website||false,burstDownloadMbps:p.burstDownloadMbps??p.burst_download_mbps??null,burstUploadMbps:p.burstUploadMbps??p.burst_upload_mbps??null,burstThresholdPct:p.burstThresholdPct??p.burst_threshold_pct??80,burstTimeS:p.burstTimeS??p.burst_time_s??16,billingType:p.billingType||p.billing_type||"postpaid",validityPeriod:p.validityPeriod??p.validity_period??null})));
       if(pkgData.packages) setInstallPackages(pkgData.packages);
       if(subs.subscribers) setSubscribers(prev => {
         // Build a map of locally-known notes (API may not return notes field)
@@ -1135,7 +1190,7 @@ const J2CRM = () => {
       } else if (data.type === 'answered' || data.type === 'ended') {
         setIncomingCall(prev => prev?.callId === data.callId ? null : prev);
       } else if (data.type === 'missed') {
-        showToast(`Missed call from ${data.subscriber ? data.subscriber.first_name + ' ' + data.subscriber.last_name : data.callerNumber}`, "warning");
+        showToast(`Missed call from ${data.subscriber ? subDisplayName(data.subscriber) : data.callerNumber}`, "warning");
       }
     });
     socket.on('inbox_message', (data) => {
@@ -1490,6 +1545,46 @@ const J2CRM = () => {
         } else showToast(d.error || "Failed to record referral", "error");
       }).catch(() => showToast("Network error", "error"));
   };
+  // Emails the subscriber a link that opens this one invoice and a Xendit checkout,
+  // without a portal login. That matters most for pending applicants: they have no
+  // portal account at all, because credentials are only minted at activation.
+  //
+  // Confirmed before sending, showing the address it goes to. This leaves the building
+  // and cannot be recalled, and the link lets whoever holds it pay the invoice — so a
+  // mistyped address is a real problem, not a cosmetic one.
+  const [payLinkSending, setPayLinkSending] = useState(null);
+  const handleSendPayLink = (inv) => {
+    const sub = getSub(inv.subId);
+    if (!sub.email) {
+      showConfirm({ icon:"fa-triangle-exclamation", title:"No Email Address",
+        message: subDisplayName(sub) + " has no email address on file, so there is nowhere to send the link. Add one on the subscriber record first.",
+        confirmText:"OK", confirmColor:"primary", onConfirm:()=>setShowConfirmModal(null) });
+      return;
+    }
+    showConfirm({
+      icon: "fa-paper-plane",
+      title: "Send Payment Link",
+      message: "Email a payment link for " + inv.number + " (" + fmt(inv.balance > 0 ? inv.balance : inv.amount) + ") to " + sub.email + "?\n\nThey can pay by GCash, Maya, card, online banking or over the counter without logging in. Anyone with the link can pay this invoice, so check the address is right.",
+      confirmText: "Send Link",
+      confirmColor: "primary",
+      onConfirm: async () => {
+        setShowConfirmModal(null);
+        setPayLinkSending(inv.id);
+        try {
+          const res = await fetch(API + "/admin/invoices/" + inv.id + "/send-payment-link", { method:"POST", headers: authHeaders() });
+          const data = await res.json();
+          if (!res.ok || data.error) throw new Error(data.error || "Failed to send");
+          showToast("Payment link sent to " + data.email, "success");
+        } catch (e) {
+          showConfirm({ icon:"fa-circle-xmark", title:"Could Not Send", message:e.message,
+            confirmText:"OK", confirmColor:"primary", onConfirm:()=>setShowConfirmModal(null) });
+        } finally {
+          setPayLinkSending(null);
+        }
+      }
+    });
+  };
+
   const handlePasswordReset = (sub) => {
     showConfirm({
       icon: 'fa-lock',
@@ -2040,7 +2135,7 @@ const J2CRM = () => {
     if (field === 'subSearch') {
       const q = value.toLowerCase();
       setNewInvSubResults(q.length < 2 ? [] : subscribers.filter(s => {
-        const name = subDisplayName(s).toLowerCase();
+        const name = subSearchName(s);
         return name.includes(q) || (s.acct||'').toLowerCase().includes(q);
       }).slice(0, 8));
     }
@@ -2231,12 +2326,14 @@ const J2CRM = () => {
         burstUploadMbps:   planForm.burstUploadMbps   === "" ? null : parseInt(planForm.burstUploadMbps),
         burstThresholdPct: planForm.burstThresholdPct === "" ? null : parseInt(planForm.burstThresholdPct),
         burstTimeS:        planForm.burstTimeS        === "" ? null : parseInt(planForm.burstTimeS),
-        showFeesOnWebsite: planForm.showFeesOnWebsite
+        showFeesOnWebsite: planForm.showFeesOnWebsite,
+        billingType: planForm.billingType || "postpaid",
+        validityPeriod: planForm.billingType === "prepaid" ? (parseInt(planForm.validityPeriod) || 0) : null
       })
     }).then(r => r.json()).then(data => {
       if(data.error) { setPlanLoading(false); return; }
       setShowAddPlan(false);
-      setPlanForm({ name:"", speedMbps:"", speedLabel:"", price:"", description:"", colorHex:"#3b82f6", isPopular:false, isActive:true, sortOrder:"", routerType:"", features:[""], activationFee:"", installationFee:"", showFeesOnWebsite:false, burstDownloadMbps:"", burstUploadMbps:"", burstThresholdPct:"80", burstTimeS:"16" });
+      setPlanForm({ name:"", speedMbps:"", speedLabel:"", price:"", description:"", colorHex:"#3b82f6", isPopular:false, isActive:true, sortOrder:"", routerType:"", features:[""], activationFee:"", installationFee:"", showFeesOnWebsite:false, burstDownloadMbps:"", burstUploadMbps:"", burstThresholdPct:"80", burstTimeS:"16", billingType:"postpaid", validityPeriod:"" });
       fetchCrmData();
       setPlanLoading(false);
     }).catch(() => { setPlanLoading(false); });
@@ -2265,12 +2362,14 @@ const J2CRM = () => {
         burstUploadMbps:   planForm.burstUploadMbps   === "" ? null : parseInt(planForm.burstUploadMbps),
         burstThresholdPct: planForm.burstThresholdPct === "" ? null : parseInt(planForm.burstThresholdPct),
         burstTimeS:        planForm.burstTimeS        === "" ? null : parseInt(planForm.burstTimeS),
-        showFeesOnWebsite: planForm.showFeesOnWebsite
+        showFeesOnWebsite: planForm.showFeesOnWebsite,
+        billingType: planForm.billingType || "postpaid",
+        validityPeriod: planForm.billingType === "prepaid" ? (parseInt(planForm.validityPeriod) || 0) : null
       })
     }).then(r => r.json()).then(data => {
       if(data.error) { setPlanLoading(false); return; }
       setShowEditPlan(null);
-      setPlanForm({ name:"", speedMbps:"", speedLabel:"", price:"", description:"", colorHex:"#3b82f6", isPopular:false, isActive:true, sortOrder:"", routerType:"", features:[""], activationFee:"", installationFee:"", showFeesOnWebsite:false, burstDownloadMbps:"", burstUploadMbps:"", burstThresholdPct:"80", burstTimeS:"16" });
+      setPlanForm({ name:"", speedMbps:"", speedLabel:"", price:"", description:"", colorHex:"#3b82f6", isPopular:false, isActive:true, sortOrder:"", routerType:"", features:[""], activationFee:"", installationFee:"", showFeesOnWebsite:false, burstDownloadMbps:"", burstUploadMbps:"", burstThresholdPct:"80", burstTimeS:"16", billingType:"postpaid", validityPeriod:"" });
       fetchCrmData();
       setPlanLoading(false);
     }).catch(() => { setPlanLoading(false); });
@@ -2321,7 +2420,9 @@ const J2CRM = () => {
       burstUploadMbps:   p.burstUploadMbps   ? String(p.burstUploadMbps)   : "",
       burstThresholdPct: String(p.burstThresholdPct ?? 80),
       burstTimeS:        String(p.burstTimeS ?? 16),
-      showFeesOnWebsite: p.showFeesOnWebsite || false
+      showFeesOnWebsite: p.showFeesOnWebsite || false,
+      billingType: p.billingType || "postpaid",
+      validityPeriod: p.validityPeriod ? String(p.validityPeriod) : ""
     });
     setShowEditPlan(p.id);
   };
@@ -2480,10 +2581,65 @@ const J2CRM = () => {
   const statusColor = (s) => ({ active:t.success, surveyed:"#f59e0b", approved:"#8b5cf6", pending:t.warning, prospective:t.info, declined:"#ef4444", suspended:t.danger, disconnected:t.textMuted, partial:"#f59e0b", paid:t.success, overdue:t.danger, open:t.warning, in_progress:t.info, resolved:t.success, closed:t.textMuted, archived:"#6b7280" }[s] || t.textMuted);
   const priorityColor = (p) => ({ low:t.success, medium:t.warning, high:"#f97316", critical:t.danger }[p] || t.textMuted);
 
+  // ── search ──────────────────────────────────────────────────
+  // Two separate things were making searches quietly return nothing.
+  //
+  // First, a query had to match ONE field as a single unbroken string. "raymond
+  // avelliana" found nothing, because the stored name has "Trinidad" sitting between
+  // the two words. Second, terms from different fields could never combine: "raymond
+  // 999" had no single field containing both.
+  //
+  // Splitting the query on whitespace and requiring every term to appear SOMEWHERE in
+  // the record fixes both, and matches what people expect from a search box. Currency
+  // symbols and thousands separators are stripped from both sides so ₱1,200, 1,200 and
+  // 1200 are the same query.
+  const searchTerms = (q) => String(q||"").toLowerCase().replace(/[₱,]/g, "").trim().split(/\s+/).filter(Boolean);
+  const matchesTerms = (hay, terms) => {
+    const h = String(hay||"").toLowerCase().replace(/[₱,]/g, "");
+    return terms.every(x => h.includes(x));
+  };
+  // Everything visible in a row, plus the things people search by that the row does not
+  // show (email, phone, address). Dates go in twice — formatted the way the table prints
+  // them ("Sep 25, 2026") and raw ("2026-09-25") — so both "sep 25" and "2026-09" work.
+  const invoiceHay = (inv, sub) => [
+    inv.number, inv.period, inv.status, inv.method, inv.methodName, inv.subName,
+    subSearchName(sub), sub.acct || inv.subAcct, sub.email, sub.phone, formatPhoneDisplay(sub.phone),
+    sub.barangay, sub.municipality, sub.subdivision, sub.address, getPlan(sub.planId).name,
+    inv.amount, Number(inv.amount||0).toFixed(2),
+    inv.balance, Number(inv.balance||0).toFixed(2),
+    inv.totalPaid, Number(inv.totalPaid||0).toFixed(2),
+    fmtDate(inv.dueDate), String(inv.dueDate||"").slice(0,10),
+    fmtDate(inv.invoiceDate), String(inv.invoiceDate||"").slice(0,10),
+    fmtDate(inv.paidAt), String(inv.paidAt||"").slice(0,10),
+  ].filter(v => v !== null && v !== undefined && v !== "").join(" ");
+
+  const subscriberHay = (s) => [
+    subSearchName(s), s.acct, s.email, s.phone, formatPhoneDisplay(s.phone),
+    s.barangay, s.municipality, s.subdivision, s.address, s.status,
+    getPlan(s.planId).name, s.planName, s.mac, s.pkg,
+  ].filter(v => v !== null && v !== undefined && v !== "").join(" ");
+
+  // Built once per data load instead of once per keystroke. Formatting every invoice's
+  // dates through toLocaleDateString is the bulk of the work a search does, and none of
+  // it changes while someone types. Normalised here too, so matching is a plain substring
+  // test. Keyed by id; the fallback covers a row that arrived after the memo was built.
+  const invoiceHayMap = React.useMemo(() => {
+    const m = new Map();
+    for (const inv of invoices) m.set(inv.id, invoiceHay(inv, getSub(inv.subId)).toLowerCase().replace(/[₱,]/g, ""));
+    return m;
+  }, [invoices, subscribers, plans]);
+  const subscriberHayMap = React.useMemo(() => {
+    const m = new Map();
+    for (const s of subscribers) m.set(s.id, subscriberHay(s).toLowerCase().replace(/[₱,]/g, ""));
+    return m;
+  }, [subscribers, plans]);
+  const invoiceHayOf = (inv) => invoiceHayMap.get(inv.id) || invoiceHay(inv, getSub(inv.subId));
+  const subscriberHayOf = (s) => subscriberHayMap.get(s.id) || subscriberHay(s);
+
   const filteredSubs = subscribers.filter(s => {
     const matchStatus = subStatusFilter === "all" || (subStatusFilter === "referred" ? !!s.referred : s.status === subStatusFilter);
-    const q = searchQuery.toLowerCase();
-    const matchSearch = !q || (s.firstName||"").toLowerCase().includes(q) || (s.lastName||"").toLowerCase().includes(q) || (s.companyName||"").toLowerCase().includes(q) || (s.acct||"").toLowerCase().includes(q) || (s.email||"").toLowerCase().includes(q) || (s.barangay||"").toLowerCase().includes(q);
+    const terms = searchTerms(searchQuery);
+    const matchSearch = !terms.length || matchesTerms(subscriberHayOf(s), terms);
     const matchBarangay = !subBarangayFilter || (s.barangay||"").toLowerCase() === subBarangayFilter.toLowerCase() || (!s.barangay && subBarangayFilter === "Unspecified");
     return matchStatus && matchSearch && matchBarangay;
   }).sort((a, b) => {
@@ -3651,7 +3807,7 @@ const J2CRM = () => {
                 <tr key={s.id} style={{ cursor:"pointer", transition:"background .2s", background: blastSelectedIds.includes(s.id) ? `${t.accent}10` : "transparent" }}
                   onMouseEnter={e => { if(!blastSelectedIds.includes(s.id)) e.currentTarget.style.background = `${t.accent}08`; }}
                   onMouseLeave={e => { e.currentTarget.style.background = blastSelectedIds.includes(s.id) ? `${t.accent}10` : "transparent"; }}
-                  onClick={() => { setSelectedSub(s); setShowSubModal(true); loadCreditHistory(s.id); loadCallHistory(s.id); loadSmsHistory(s.id); }}>
+                  onClick={() => { setSelectedSub(s); setShowSubModal(true); loadCreditHistory(s.id); loadCallHistory(s.id); loadSmsHistory(s.id); loadPrepaid(s.id); }}>
                   <TableCell style={{textAlign:"center",padding:"8px 4px"}} onClick={e=>e.stopPropagation()}>
                     <input type="checkbox" checked={blastSelectedIds.includes(s.id)} onChange={e=>{
                       if (e.target.checked) setBlastSelectedIds(prev => [...prev, s.id]);
@@ -3681,8 +3837,8 @@ const J2CRM = () => {
                   <TableCell style={{ fontSize:12, color:t.textSec, whiteSpace:"nowrap" }}>{s.updatedAt ? (<><div>{new Date(s.updatedAt).toLocaleDateString("en-US",{year:"numeric",month:"short",day:"numeric"})}</div><div style={{fontSize:10,color:t.textMuted}}>{new Date(s.updatedAt).toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})}</div></>) : <span style={{color:t.textMuted}}>—</span>}</TableCell>
                   <TableCell>
                     <div style={{display:"flex",gap:10,alignItems:"center",justifyContent:"flex-end",paddingRight:32}}>
-                      <i className="fas fa-eye" title="View Details" onClick={e => { e.stopPropagation(); setSelectedSub(s); setShowSubModal(true); loadCreditHistory(s.id); loadCallHistory(s.id); loadSmsHistory(s.id); }} style={{fontSize:14,color:t.accent,cursor:"pointer",opacity:.7,transition:"opacity .2s"}} onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=.7}></i>
-                      <i className="fas fa-pen" title="Edit" onClick={e => { e.stopPropagation(); setSelectedSub(s); setShowSubModal(true); loadCreditHistory(s.id); loadCallHistory(s.id); loadSmsHistory(s.id); }} style={{fontSize:14,color:t.textSec,cursor:"pointer",opacity:.7,transition:"opacity .2s"}} onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=.7}></i>
+                      <i className="fas fa-eye" title="View Details" onClick={e => { e.stopPropagation(); setSelectedSub(s); setShowSubModal(true); loadCreditHistory(s.id); loadCallHistory(s.id); loadSmsHistory(s.id); loadPrepaid(s.id); }} style={{fontSize:14,color:t.accent,cursor:"pointer",opacity:.7,transition:"opacity .2s"}} onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=.7}></i>
+                      <i className="fas fa-pen" title="Edit" onClick={e => { e.stopPropagation(); setSelectedSub(s); setShowSubModal(true); loadCreditHistory(s.id); loadCallHistory(s.id); loadSmsHistory(s.id); loadPrepaid(s.id); }} style={{fontSize:14,color:t.textSec,cursor:"pointer",opacity:.7,transition:"opacity .2s"}} onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=.7}></i>
                       <i className="fas fa-key" title="Reset Password" onClick={e => { e.stopPropagation(); handlePasswordReset(s); }} style={{fontSize:14,color:t.warning||"#f59e0b",cursor:"pointer",opacity:.7,transition:"opacity .2s"}} onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=.7}></i>
                       {s.status==='active' && <i className="fas fa-ban" title="Suspend" onClick={e => { e.stopPropagation(); handleSuspendSubscriber(s); }} style={{fontSize:14,color:"#f59e0b",cursor:"pointer",opacity:.7,transition:"opacity .2s"}} onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=.7}></i>}
                       {adminUser?.role==='superadmin' && <i className="fas fa-trash-can" title="Delete" onClick={e => { e.stopPropagation(); handleDeleteSubscriber(s); }} style={{fontSize:14,color:t.danger,cursor:"pointer",opacity:.7,transition:"opacity .2s"}} onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=.7}></i>}
@@ -3721,13 +3877,9 @@ const J2CRM = () => {
   );
 
   const InvoicesPage = () => {
-    const searchedInvoices = filteredInvoices.filter(inv => {
-      if (!invoiceSearch) return true;
-      const q = invoiceSearch.toLowerCase();
-      const sub = getSub(inv.subId);
-      const subName = subDisplayName(sub).toLowerCase() || (inv.subName||"").toLowerCase();
-      return inv.number?.toLowerCase().includes(q) || subName.includes(q) || (sub.acct||inv.subAcct||"").toLowerCase().includes(q);
-    });
+    const invTerms = searchTerms(invoiceSearch);
+    const searchedInvoices = !invTerms.length ? filteredInvoices
+      : filteredInvoices.filter(inv => matchesTerms(invoiceHayOf(inv), invTerms));
     const totalInvPages = Math.ceil(searchedInvoices.length / invoicesPerPage);
     const pagedInv = showAllInvoices ? searchedInvoices : searchedInvoices.slice((invoicePage-1)*invoicesPerPage, invoicePage*invoicesPerPage);
 
@@ -3787,7 +3939,7 @@ const J2CRM = () => {
       <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:16 }}>
         <div style={{ position:"relative", flex:1 }}>
           <i className="fas fa-search" style={{ position:"absolute", left:12, top:"50%", transform:"translateY(-50%)", color:t.textMuted, fontSize:13 }}></i>
-          <input value={invoiceSearch} onChange={e => { setInvoiceSearch(e.target.value); setInvoicePage(1); }} placeholder="Search by invoice #, subscriber name, or account number..." style={{ width:"100%", padding:"10px 12px 10px 36px", background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:10, color:t.text, fontSize:13, outline:"none" }} />
+          <input value={invoiceSearch} onChange={e => { setInvoiceSearch(e.target.value); setInvoicePage(1); }} placeholder="Search invoice #, name, account, amount, status, period, date, plan, address..." style={{ width:"100%", padding:"10px 12px 10px 36px", background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:10, color:t.text, fontSize:13, outline:"none" }} />
           {invoiceSearch && <i className="fas fa-times-circle" onClick={() => { setInvoiceSearch(""); setInvoicePage(1); }} style={{ position:"absolute", right:12, top:"50%", transform:"translateY(-50%)", color:t.textMuted, cursor:"pointer", fontSize:13 }}></i>}
         </div>
         {invoiceSearch && <div style={{ fontSize:12, color:t.textMuted, whiteSpace:"nowrap" }}>{searchedInvoices.length} result{searchedInvoices.length!==1?"s":""}</div>}
@@ -3847,6 +3999,7 @@ const J2CRM = () => {
                         {inv.status !== "paid" && inv.status !== "cancelled" && <Btn small primary onClick={()=>{setPayForm({method:"gcash",referenceNumber:"",amount:(inv.balance>0?inv.balance:inv.amount).toFixed(2),orNumber:"",paymentDate:new Date().toISOString().slice(0,10),invoiceDate:inv.invoiceDate?new Date(inv.invoiceDate).toISOString().slice(0,10):""}); setShowPayModal(inv);}} title="Record Payment"><i className="fas fa-money-bill-wave"></i></Btn>}
                         {(inv.status === "paid" || inv.status === "partial") && <Btn small onClick={()=>printThermalReceipt(inv.id)} title={"Print "+receiptWidth+"mm thermal receipt"} style={{background:"rgba(139,92,246,.15)",color:"#a78bfa",border:"1px solid rgba(139,92,246,.3)"}}><i className="fas fa-receipt"></i></Btn>}
                         {(inv.status === "paid" || inv.status === "partial") && adminUser?.role==='superadmin' && <Btn small onClick={()=>handleVoidPayment(inv)} title="Void Payment" style={{background:"rgba(251,146,60,.15)",color:"#fb923c",border:"1px solid rgba(251,146,60,.3)"}}><i className="fas fa-rotate-left"></i></Btn>}
+                        {inv.status !== "paid" && inv.status !== "cancelled" && <Btn small onClick={()=>handleSendPayLink(inv)} disabled={payLinkSending===inv.id} title="Email a payment link (no portal login needed)" style={{background:"rgba(34,197,94,.15)",color:"#22c55e",border:"1px solid rgba(34,197,94,.3)"}}><i className={payLinkSending===inv.id ? "fas fa-spinner fa-spin" : "fas fa-paper-plane"}></i></Btn>}
                         {inv.status === "pending" && <Btn small onClick={()=>handleInvoiceStatus(inv.id,"overdue")} title="Mark as Overdue"><i className="fas fa-triangle-exclamation"></i></Btn>}
                         {(inv.status === "pending" || inv.status === "overdue") && <Btn small onClick={()=>handleInvoiceStatus(inv.id,"cancelled")} title="Cancel Invoice"><i className="fas fa-xmark"></i></Btn>}
                         {adminUser?.role==='superadmin' && <Btn small onClick={()=>handleDeleteInvoice(inv)} title="Delete Invoice" style={{background:"rgba(239,68,68,.15)",color:"#ef4444",border:"1px solid rgba(239,68,68,.3)"}}><i className="fas fa-trash-can"></i></Btn>}
@@ -4390,12 +4543,8 @@ const J2CRM = () => {
         list = invoices.filter(inv => inv.period && validPeriods.includes(inv.period));
       }
       if (invRptSearch) {
-        const q = invRptSearch.toLowerCase();
-        list = list.filter(inv => {
-          const sub = getSub(inv.subId);
-          const subName = subDisplayName(sub).toLowerCase() || (inv.subName||"").toLowerCase();
-          return inv.number?.toLowerCase().includes(q) || subName.includes(q) || (sub.acct||inv.subAcct||"").toLowerCase().includes(q);
-        });
+        const rptTerms = searchTerms(invRptSearch);
+        list = list.filter(inv => matchesTerms(invoiceHayOf(inv), rptTerms));
       }
       return list;
     })();
@@ -4543,7 +4692,7 @@ const J2CRM = () => {
     if (soaOpen) {
       const soaSubResults = soaSubSearch.length >= 2 ? subscribers.filter(s => {
         const q = soaSubSearch.toLowerCase();
-        const name = subDisplayName(s).toLowerCase();
+        const name = subSearchName(s);
         return name.includes(q) || (s.acct||'').toLowerCase().includes(q);
       }).slice(0, 8) : [];
 
@@ -4758,7 +4907,7 @@ const J2CRM = () => {
         const q = collRptSearch.toLowerCase();
         collInvs = collInvs.filter(inv => {
           const sub = getSub(inv.subId);
-          const name = sub.firstName ? (sub.firstName+(sub.middleName?' '+sub.middleName:'')+' '+sub.lastName).toLowerCase() : (inv.subName||'').toLowerCase();
+          const name = subSearchName(sub) || (inv.subName||'').toLowerCase();
           return inv.number?.toLowerCase().includes(q) || name.includes(q) || (sub.acct||inv.subAcct||'').toLowerCase().includes(q);
         });
       }
@@ -4910,7 +5059,7 @@ const J2CRM = () => {
                 {collPaged.length === 0 && <tr><td colSpan={10} style={{ padding:40, textAlign:"center", color:t.textMuted }}>No invoices found</td></tr>}
                 {collPaged.map(inv => {
                   const sub = getSub(inv.subId);
-                  const subName = sub.firstName ? (sub.firstName+(sub.middleName?' '+sub.middleName+' ':' ')+sub.lastName) : (inv.subName||'—');
+                  const subName = (sub.firstName||sub.lastName) ? subDisplayName(sub) : (inv.subName||'—');
                   const daysOver = (inv.status==='pending'||inv.status==='overdue') && inv.dueDate ? Math.max(0, Math.floor((new Date()-new Date(inv.dueDate))/86400000)) : 0;
                   return (
                     <tr key={inv.id} style={{ borderBottom:`1px solid ${t.border}` }}>
@@ -5018,7 +5167,7 @@ const J2CRM = () => {
       const fq = (forColSearch||'').trim().toLowerCase();
       if (fq) {
         rows = rows.filter(r => {
-          const name = (r.sub.firstName||'') + ' ' + (r.sub.middleName||'') + ' ' + (r.sub.lastName||'') + ' ' + (r.sub.companyName||'');
+          const name = subSearchName(r.sub);
           const hay = (name + ' ' + (r.sub.acct||'') + ' ' + (r.sub.phone||'') + ' ' + (r.sub.email||'') + ' ' + (r.sub.address||'')).toLowerCase();
           return hay.includes(fq);
         });
@@ -5122,7 +5271,7 @@ const J2CRM = () => {
               const headers = ['Account','Name','Company','Phone','Alt Phones','Email','Address','Barangay','Municipality','Invoices','Total Balance','Oldest Due','Max Days Overdue','Bucket'];
               const csvRows = rows.map(r => {
                 const s = r.sub;
-                const name = s.firstName ? (s.firstName + (s.middleName?' '+s.middleName:'') + ' ' + s.lastName) : '';
+                const name = (s.firstName||s.lastName) ? subDisplayName(s) : '';
                 const altPh = (s.altContacts||[]).map(c => (c.name?c.name+': ':'') + formatPhone(c.phone||'')).join(' | ');
                 const d = r.maxDaysOverdue;
                 const bucket = d <= 0 ? 'Current' : d <= 30 ? '1-30' : d <= 60 ? '31-60' : d <= 90 ? '61-90' : '90+';
@@ -5188,7 +5337,7 @@ const J2CRM = () => {
                 {fcPaged.length === 0 && <tr><td colSpan={8} style={{ padding:40, textAlign:"center", color:t.textMuted }}>No subscribers match these filters</td></tr>}
                 {fcPaged.map(r => {
                   const s = r.sub;
-                  const name = s.firstName ? (s.firstName + (s.middleName?' '+s.middleName+' ':' ') + s.lastName) : (s.companyName || '—');
+                  const name = subDisplayName(s);
                   const alts = s.altContacts || [];
                   return (
                     <tr key={s.id} style={{ borderBottom:`1px solid ${t.border}`, cursor:"pointer" }} onClick={() => { setSelectedSub(s); setShowSubModal(true); }}>
@@ -5260,9 +5409,9 @@ const J2CRM = () => {
           if (dailyColMethod !== "all" && p.method !== dailyColMethod) return;
           if (!dailyColIncludeCredit && p.method === 'credit') return;
           const sub = getSub(inv.subId);
-          const subName = sub.firstName ? (sub.firstName + (sub.middleName?' '+sub.middleName+' ':' ') + sub.lastName) : (inv.subName||'—');
+          const subName = (sub.firstName||sub.lastName) ? subDisplayName(sub) : (inv.subName||'—');
           if (searchQ) {
-            const hay = (inv.number + ' ' + (sub.acct||inv.subAcct||'') + ' ' + subName).toLowerCase();
+            const hay = (inv.number + ' ' + (sub.acct||inv.subAcct||'') + ' ' + subSearchName(sub) + ' ' + (inv.subName||'')).toLowerCase();
             if (!hay.includes(searchQ)) return;
           }
           allPays.push({
@@ -6108,10 +6257,10 @@ const J2CRM = () => {
   const saveCompanySettings = async () => {
     setCsSaving(true); setCsMsg("");
     try {
-      const keys = ["company_name","company_short_name","company_tagline","company_subtitle","company_tin","company_vat_label","company_brc","company_address1","company_address2","company_city","company_address","company_email","company_phone","company_website","support_email","business_hours","bank_name","bank_account_number","bank_account_name","default_tax_type","default_tax_rate","default_tax_label","referral_reward_amount","billing_grace_period_days","billing_restriction_mode","billing_auto_restrict_enabled","billing_restrict_hour","billing_auto_restrict_max_per_run"];
+      const keys = ["company_name","company_short_name","company_tagline","company_subtitle","company_tin","company_vat_label","company_brc","company_address1","company_address2","company_city","company_address","company_email","company_phone","company_website","support_email","business_hours","bank_name","bank_account_number","bank_account_name","default_tax_type","default_tax_rate","default_tax_label","referral_reward_amount","billing_due_day","billing_due_month","billing_auto_invoice_enabled","billing_grace_period_days","billing_restriction_mode","billing_auto_restrict_enabled","billing_restrict_hour","billing_auto_restrict_max_per_run"];
       // noCase = stored verbatim. Numeric and machine-read values must never be
       // title-cased — toTitleCase would happily mangle them.
-      const noCase = ["company_email","company_website","support_email","default_tax_rate","default_tax_type","bank_account_number","company_phone","company_tin","company_brc","company_vat_label","company_name","company_short_name","company_tagline","company_subtitle","bank_name","bank_account_name","referral_reward_amount","billing_grace_period_days","billing_restriction_mode","billing_auto_restrict_enabled","billing_restrict_hour","billing_auto_restrict_max_per_run"];
+      const noCase = ["company_email","company_website","support_email","default_tax_rate","default_tax_type","bank_account_number","company_phone","company_tin","company_brc","company_vat_label","company_name","company_short_name","company_tagline","company_subtitle","bank_name","bank_account_name","referral_reward_amount","billing_due_day","billing_due_month","billing_auto_invoice_enabled","billing_grace_period_days","billing_restriction_mode","billing_auto_restrict_enabled","billing_restrict_hour","billing_auto_restrict_max_per_run"];
       const settings = keys.map(k => ({
         key: k,
         value: noCase.includes(k) ? (cs[k]||"") : toTitleCase(cs[k]||""),
@@ -6730,7 +6879,7 @@ const J2CRM = () => {
                           <TableCell>
                             {d.subscriber ? (
                               <div>
-                                <div style={{ fontWeight:600, color:t.text, fontSize:12 }}>{d.subscriber.first_name}{d.subscriber.middle_name ? " " + d.subscriber.middle_name : ""} {d.subscriber.last_name}</div>
+                                <div style={{ fontWeight:600, color:t.text, fontSize:12 }}>{subDisplayName(d.subscriber)}</div>
                                 <div style={{ fontSize:11, color:t.textMuted, fontFamily:"monospace" }}>{d.subscriber.account_number}</div>
                               </div>
                             ) : <span style={{ color:t.textMuted }}>—</span>}
@@ -9680,7 +9829,29 @@ const J2CRM = () => {
     if (pageId === 'dashboard') return true;
     return (adminUser.allowedPages || []).includes(pageId);
   };
-  const ActivePage = canViewPage(activePage) ? (pages[activePage] || DashboardPage) : DashboardPage;
+  // Resolved as a key first, then a function, so the two can never disagree. They would
+  // otherwise drift at login: canViewPage() allows everything while adminUser is still
+  // null, then falls back to the dashboard once a restricted user loads — swapping the
+  // rendered function while the key stayed put, which breaks hook order inside StablePage.
+  const activePageKey = (canViewPage(activePage) && pages[activePage]) ? activePage : 'dashboard';
+  const ActivePage = pages[activePageKey] || DashboardPage;
+
+  // <ActivePage /> was remounting the entire page on EVERY keystroke anywhere in the CRM.
+  // The page components are defined inside J2CRM, so each render builds a new function
+  // object, and React treats a new function identity as a DIFFERENT component type:
+  // unmount, throw away the DOM, mount again. That is why typing in a search box stopped
+  // after a character — the <input> was destroyed and rebuilt mid-keystroke, taking focus
+  // and the caret with it. (The same trick was already applied to Card/Badge/StatCard
+  // above; the pages were missed.)
+  //
+  // StablePage keeps ONE identity for the life of the component and reaches the current
+  // page function through a ref, so React reconciles the existing DOM instead of replacing
+  // it. key={activePage} still forces a real remount when the page genuinely changes,
+  // which is also what keeps the hook order valid for the pages that declare their own
+  // state (Reports, ONU, RADIUS, Coverage, Vouchers, MAC devices, SmartOLT, DevTools).
+  const activePageFnRef = useRef(null);
+  activePageFnRef.current = ActivePage;
+  const StablePage = React.useMemo(() => function StablePage() { return activePageFnRef.current(); }, []);
 
   // ========== ADMIN LOGIN GATE ==========
   if(!crmLoggedIn) {
@@ -10051,12 +10222,8 @@ const J2CRM = () => {
               <span style={{ position:"absolute", left:12, top:"50%", transform:"translateY(-50%)", fontSize:14, color:t.textMuted }}></span>
               {showGlobalResults && globalSearch.trim() && (() => {
                 const q = globalSearch.toLowerCase();
-                const subResults = subscribers.filter(s =>
-                  (subDisplayName(s)).toLowerCase().includes(q) ||
-                  (s.acct||"").toLowerCase().includes(q) ||
-                  (s.email||"").toLowerCase().includes(q) ||
-                  (s.phone||"").includes(q)
-                ).slice(0,5);
+                const gTerms = searchTerms(globalSearch);
+                const subResults = subscribers.filter(s => matchesTerms(subscriberHayOf(s), gTerms)).slice(0,5);
                 const ticketResults = tickets.filter(tk =>
                   (tk.subject||"").toLowerCase().includes(q) ||
                   (tk.number||"").toLowerCase().includes(q) ||
@@ -10147,7 +10314,7 @@ const J2CRM = () => {
             {activePage === "subscribers" && <button onClick={()=>setShowAddSub(true)} style={{ padding:"7px 16px", borderRadius:10, background:`linear-gradient(135deg,${t.accent},${t.accentDk})`, color:"#fff", border:"none", fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit", display:"flex", alignItems:"center", gap:6, whiteSpace:"nowrap" }}><i className="fas fa-user-plus"></i> Add Subscriber</button>}
             {activePage === "tickets" && <button onClick={()=>setShowCreateTicket(true)} style={{ padding:"7px 16px", borderRadius:10, background:`linear-gradient(135deg,${t.accent},${t.accentDk})`, color:"#fff", border:"none", fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit", display:"flex", alignItems:"center", gap:6, whiteSpace:"nowrap" }}><i className="fas fa-plus"></i> Create Ticket</button>}
             {activePage === "invoices" && <><button onClick={openNewInvModal} style={{ padding:"7px 16px", borderRadius:10, background:t.bgCard, color:t.text, border:`1px solid ${t.border}`, fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit", display:"flex", alignItems:"center", gap:6, whiteSpace:"nowrap" }}><i className="fas fa-plus"></i> New Invoice</button><button onClick={()=>{setGenForm({billingPeriod:new Date().toLocaleString("en-US",{month:"long",year:"numeric"}),dueDate:new Date(new Date().getFullYear(),new Date().getMonth()+1,1).toISOString().split("T")[0]}); setShowGenInvoices(true);}} style={{ padding:"7px 16px", borderRadius:10, background:`linear-gradient(135deg,${t.accent},${t.accentDk})`, color:"#fff", border:"none", fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit", display:"flex", alignItems:"center", gap:6, whiteSpace:"nowrap" }}>Generate Monthly Invoices</button></>}
-            {activePage === "plans" && <><button onClick={()=>{setPlanShowInactive(!planShowInactive);setPlanPage(1);}} style={{ padding:"7px 16px", borderRadius:10, background:planShowInactive?t.accent:t.bgCard, color:planShowInactive?"#fff":t.text, border:planShowInactive?"none":`1px solid ${t.border}`, fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit", display:"flex", alignItems:"center", gap:6, whiteSpace:"nowrap" }}><i className={planShowInactive?"fas fa-eye-slash":"fas fa-eye"}></i> {planShowInactive?"Hide":"Show"} inactive ({plans.filter(p=>!p.isActive).length})</button><button onClick={()=>{setPlanShowAll(!planShowAll);setPlanPage(1);}} style={{ padding:"7px 16px", borderRadius:10, background:planShowAll?t.accent:t.bgCard, color:planShowAll?"#fff":t.text, border:planShowAll?"none":`1px solid ${t.border}`, fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit", display:"flex", alignItems:"center", gap:6, whiteSpace:"nowrap" }}>{planShowAll?"Paginated":"Show All"}</button><button onClick={()=>{setPlanForm({name:"",speedMbps:"",speedLabel:"",price:"",description:"",colorHex:"#3b82f6",isPopular:false,isActive:true,sortOrder:String(plans.length+1),routerType:"",features:[""],burstDownloadMbps:"",burstUploadMbps:"",burstThresholdPct:"80",burstTimeS:"16"}); setShowAddPlan(true);}} style={{ padding:"7px 16px", borderRadius:10, background:`linear-gradient(135deg,${t.accent},${t.accentDk})`, color:"#fff", border:"none", fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit", display:"flex", alignItems:"center", gap:6, whiteSpace:"nowrap" }}><i className="fas fa-plus"></i> Add Plan</button></>}
+            {activePage === "plans" && <><button onClick={()=>{setPlanShowInactive(!planShowInactive);setPlanPage(1);}} style={{ padding:"7px 16px", borderRadius:10, background:planShowInactive?t.accent:t.bgCard, color:planShowInactive?"#fff":t.text, border:planShowInactive?"none":`1px solid ${t.border}`, fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit", display:"flex", alignItems:"center", gap:6, whiteSpace:"nowrap" }}><i className={planShowInactive?"fas fa-eye-slash":"fas fa-eye"}></i> {planShowInactive?"Hide":"Show"} inactive ({plans.filter(p=>!p.isActive).length})</button><button onClick={()=>{setPlanShowAll(!planShowAll);setPlanPage(1);}} style={{ padding:"7px 16px", borderRadius:10, background:planShowAll?t.accent:t.bgCard, color:planShowAll?"#fff":t.text, border:planShowAll?"none":`1px solid ${t.border}`, fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit", display:"flex", alignItems:"center", gap:6, whiteSpace:"nowrap" }}>{planShowAll?"Paginated":"Show All"}</button><button onClick={()=>{setPlanForm({name:"",speedMbps:"",speedLabel:"",price:"",description:"",colorHex:"#3b82f6",isPopular:false,isActive:true,sortOrder:String(plans.length+1),routerType:"",features:[""],burstDownloadMbps:"",burstUploadMbps:"",burstThresholdPct:"80",burstTimeS:"16",billingType:"postpaid",validityPeriod:""}); setShowAddPlan(true);}} style={{ padding:"7px 16px", borderRadius:10, background:`linear-gradient(135deg,${t.accent},${t.accentDk})`, color:"#fff", border:"none", fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit", display:"flex", alignItems:"center", gap:6, whiteSpace:"nowrap" }}><i className="fas fa-plus"></i> Add Plan</button></>}
             {activePage === "packages" && <button onClick={()=>{setPkgForm({code:"",name:"",description:"",colorHex:"#3b82f6",isActive:true,sortOrder:String(installPackages.length+1),items:[""]}); setShowAddPkg(true);}} style={{ padding:"7px 16px", borderRadius:10, background:`linear-gradient(135deg,${t.accent},${t.accentDk})`, color:"#fff", border:"none", fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit", display:"flex", alignItems:"center", gap:6, whiteSpace:"nowrap" }}><i className="fas fa-plus"></i> Add Package</button>}
             {activePage === "staff" && <button onClick={()=>setShowStaffModal(true)} style={{ padding:"7px 16px", borderRadius:10, background:`linear-gradient(135deg,${t.accent},${t.accentDk})`, color:"#fff", border:"none", fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit", display:"flex", alignItems:"center", gap:6, whiteSpace:"nowrap" }}><i className="fas fa-plus"></i> Add Staff</button>}
             {activePage === "radius" && <><div style={{ display:"flex", alignItems:"center", gap:6, marginRight:4 }}><div style={{ width:8, height:8, borderRadius:"50%", background:radiusConnected ? "#22c55e" : radiusConnected === false ? "#ef4444" : t.textMuted }}></div><span style={{ fontSize:12, color:t.textMuted, whiteSpace:"nowrap" }}>{radiusConnected ? "Connected" : radiusConnected === false ? "Disconnected" : "..."}</span><span style={{ fontSize:12, color:t.textMuted, whiteSpace:"nowrap", marginLeft:4, fontFamily:"monospace" }}>· 10.0.98.4 (LAN) · 36.50.30.102 (public)</span></div><button onClick={()=>setRadiusRefreshTrigger(n=>n+1)} style={{ padding:"7px 16px", borderRadius:10, background:`linear-gradient(135deg,${t.accent},${t.accentDk})`, color:"#fff", border:"none", fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"inherit", display:"flex", alignItems:"center", gap:6, whiteSpace:"nowrap" }}><i className="fas fa-arrows-rotate"></i> Refresh</button></>}
@@ -10285,7 +10452,7 @@ const J2CRM = () => {
                             <span style={{fontSize:12, color:t.textMuted, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{c.last_direction==="out"?"You: ":""}{c.last_preview||""}</span>
                             {c.unread_count>0 && <span style={{fontSize:10, fontWeight:800, color:"#fff", background:t.accent, borderRadius:10, padding:"1px 7px", flexShrink:0}}>{c.unread_count}</span>}
                           </div>
-                          {c.subscriber && <div style={{fontSize:10, color:t.success, marginTop:2}}><i className="fas fa-user-check" style={{marginRight:3}}></i>{c.subscriber.first_name} {c.subscriber.last_name}</div>}
+                          {c.subscriber && <div style={{fontSize:10, color:t.success, marginTop:2}}><i className="fas fa-user-check" style={{marginRight:3}}></i>{subDisplayName(c.subscriber)}</div>}
                         </div>
                       </div>
                     );
@@ -10339,7 +10506,7 @@ const J2CRM = () => {
                   <div style={{fontSize:10, fontWeight:700, color:t.textMuted, textTransform:"uppercase", marginBottom:10}}>Subscriber</div>
                   {inboxThread.conversation.subscriber ? (
                     <div style={{background:t.bg, borderRadius:10, padding:12, marginBottom:16}}>
-                      <div style={{fontSize:14, fontWeight:700, color:t.text}}>{inboxThread.conversation.subscriber.first_name} {inboxThread.conversation.subscriber.last_name}</div>
+                      <div style={{fontSize:14, fontWeight:700, color:t.text}}>{subDisplayName(inboxThread.conversation.subscriber)}</div>
                       <div style={{fontSize:12, color:t.textMuted, fontFamily:"monospace", marginTop:2}}>{inboxThread.conversation.subscriber.account_number}</div>
                       {inboxThread.conversation.subscriber.email && <div style={{fontSize:11, color:t.textMuted, marginTop:4}}>{inboxThread.conversation.subscriber.email}</div>}
                       <button onClick={()=>updateInboxConvo(inboxThread.conversation.id,{subscriber_id:null})} style={{marginTop:8, fontSize:11, color:t.danger, background:"none", border:"none", cursor:"pointer", padding:0}}>Unlink</button>
@@ -10350,8 +10517,8 @@ const J2CRM = () => {
                       <input value={inboxLinkQuery} onChange={e=>setInboxLinkQuery(e.target.value)} placeholder="Search subscriber…" style={{width:"100%", padding:"7px 10px", borderRadius:8, border:`1px solid ${t.border}`, background:t.bg, color:t.text, fontSize:12, outline:"none", boxSizing:"border-box"}} />
                       {inboxLinkQuery.length>=2 && (
                         <div style={{marginTop:6, maxHeight:180, overflowY:"auto", border:`1px solid ${t.border}`, borderRadius:8}}>
-                          {(subscribers||[]).filter(s=>{ const n=((s.firstName||"")+" "+(s.lastName||"")+" "+(s.acct||"")+" "+(s.email||"")).toLowerCase(); return n.includes(inboxLinkQuery.toLowerCase()); }).slice(0,10).map(s=>(
-                            <div key={s.id} onClick={()=>{ updateInboxConvo(inboxThread.conversation.id,{subscriber_id:s.id}); setInboxLinkQuery(""); }} style={{padding:"7px 9px", cursor:"pointer", fontSize:12, borderBottom:`1px solid ${t.border}`, color:t.text}}>{s.firstName} {s.lastName} <span style={{color:t.textMuted, fontFamily:"monospace"}}>{s.acct}</span></div>
+                          {(subscribers||[]).filter(s=>{ const n=(subSearchName(s)+" "+(s.acct||"")+" "+(s.email||"")).toLowerCase(); return n.includes(inboxLinkQuery.toLowerCase()); }).slice(0,10).map(s=>(
+                            <div key={s.id} onClick={()=>{ updateInboxConvo(inboxThread.conversation.id,{subscriber_id:s.id}); setInboxLinkQuery(""); }} style={{padding:"7px 9px", cursor:"pointer", fontSize:12, borderBottom:`1px solid ${t.border}`, color:t.text}}>{subDisplayName(s)} <span style={{color:t.textMuted, fontFamily:"monospace"}}>{s.acct}</span></div>
                           ))}
                         </div>
                       )}
@@ -10457,6 +10624,38 @@ const J2CRM = () => {
                     <div><label style={{fontSize:11,fontWeight:600,color:t.textSec,marginBottom:4,display:"block",textTransform:"uppercase",letterSpacing:.4}}>Tax Type</label><input type="text" value={cs.default_tax_type||""} onChange={e=>updateCs("default_tax_type",e.target.value)} style={{width:"100%",padding:"9px 12px",border:`1px solid ${t.inputBorder}`,borderRadius:8,fontSize:13,background:t.input,color:t.text,fontFamily:"inherit",outline:"none",boxSizing:"border-box"}} /></div>
                     <div><label style={{fontSize:11,fontWeight:600,color:t.textSec,marginBottom:4,display:"block",textTransform:"uppercase",letterSpacing:.4}}>Tax Rate (decimal)</label><input type="text" value={cs.default_tax_rate||""} onChange={e=>updateCs("default_tax_rate",e.target.value)} style={{width:"100%",padding:"9px 12px",border:`1px solid ${t.inputBorder}`,borderRadius:8,fontSize:13,background:t.input,color:t.text,fontFamily:"inherit",outline:"none",boxSizing:"border-box"}} /></div>
                     <div><label style={{fontSize:11,fontWeight:600,color:t.textSec,marginBottom:4,display:"block",textTransform:"uppercase",letterSpacing:.4}}>Tax Label</label><input type="text" value={cs.default_tax_label||""} onChange={e=>updateCs("default_tax_label",e.target.value)} style={{width:"100%",padding:"9px 12px",border:`1px solid ${t.inputBorder}`,borderRadius:8,fontSize:13,background:t.input,color:t.text,fontFamily:"inherit",outline:"none",boxSizing:"border-box"}} /></div>
+                  </div>
+                </div>
+
+                <div style={{marginBottom:20}}>
+                  <div style={{fontSize:11,fontWeight:700,color:t.textMuted,textTransform:"uppercase",letterSpacing:.8,marginBottom:12,paddingBottom:8,borderBottom:`1px solid ${t.border}`}}>Invoicing</div>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12}}>
+                    <div>
+                      <label style={{fontSize:11,fontWeight:600,color:t.textSec,marginBottom:4,display:"block",textTransform:"uppercase",letterSpacing:.4}}>Due Day</label>
+                      <input type="number" min="1" max="31" step="1" placeholder="25" value={cs.billing_due_day||""} onChange={e=>updateCs("billing_due_day",e.target.value)} style={{width:"100%",padding:"9px 12px",border:`1px solid ${t.inputBorder}`,borderRadius:8,fontSize:13,background:t.input,color:t.text,fontFamily:"inherit",outline:"none",boxSizing:"border-box"}} />
+                      <div style={{fontSize:11,color:t.textMuted,marginTop:4,lineHeight:1.4}}>Day of the month every invoice falls due. Blank or invalid falls back to 25. A day past the end of a short month lands on its last day.</div>
+                    </div>
+                    <div>
+                      <label style={{fontSize:11,fontWeight:600,color:t.textSec,marginBottom:4,display:"block",textTransform:"uppercase",letterSpacing:.4}}>Due Month</label>
+                      <select value={cs.billing_due_month==="next"?"next":"same"} onChange={e=>updateCs("billing_due_month",e.target.value)} style={{width:"100%",padding:"9px 12px",border:`1px solid ${t.inputBorder}`,borderRadius:8,fontSize:13,background:t.input,color:t.text,fontFamily:"inherit",outline:"none",boxSizing:"border-box"}}>
+                        <option value="same">Same month as the billing period</option>
+                        <option value="next">Month after the billing period</option>
+                      </select>
+                      <div style={{fontSize:11,color:t.textMuted,marginTop:4,lineHeight:1.4}}>Every invoice raised so far is due in its own billing month, so leave this on "same" unless the billing cycle itself is changing.</div>
+                    </div>
+                    <div>
+                      <label style={{fontSize:11,fontWeight:600,color:t.textSec,marginBottom:4,display:"block",textTransform:"uppercase",letterSpacing:.4}}>Automatic Monthly Invoicing</label>
+                      <select value={cs.billing_auto_invoice_enabled==="false"?"false":"true"} onChange={e=>updateCs("billing_auto_invoice_enabled",e.target.value)} style={{width:"100%",padding:"9px 12px",border:`1px solid ${t.inputBorder}`,borderRadius:8,fontSize:13,background:t.input,color:t.text,fontFamily:"inherit",outline:"none",boxSizing:"border-box"}}>
+                        <option value="true">On — bill everyone on the 1st</option>
+                        <option value="false">Off — invoices typed in by hand</option>
+                      </select>
+                      <div style={{fontSize:11,color:t.textMuted,marginTop:4,lineHeight:1.4}}>Runs 1st of the month, 00:00 Asia/Manila, for every active and suspended postpaid subscriber. Prepaid plans are never billed this way. Anyone who already holds an invoice for the period is skipped, so a re-run only fills gaps.</div>
+                    </div>
+                    <div style={{gridColumn:"1 / -1",padding:"10px 12px",background:t.bg,border:`1px solid ${t.border}`,borderRadius:8}}>
+                      <div style={{fontSize:11,color:t.textMuted,lineHeight:1.5}}>
+                        Next run bills <strong style={{color:t.textSec}}>{new Date().toLocaleString("en-US",{month:"long",year:"numeric"})}</strong> due <strong style={{color:t.textSec}}>{(()=>{const d=parseInt(cs.billing_due_day,10),day=(d>=1&&d<=31)?d:25,n=new Date(),m=n.getMonth()+(cs.billing_due_month==="next"?1:0),last=new Date(n.getFullYear(),m+1,0).getDate();return new Date(n.getFullYear(),m,Math.min(day,last)).toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric"});})()}</strong>. Turning this off does not pause anything else — overdue restriction below still works off whatever due dates are already on file.
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -10854,7 +11053,7 @@ const J2CRM = () => {
               </div>
 
             </div>
-          ) : <ActivePage />}
+          ) : <StablePage key={activePageKey} />}
         </main>
       </div>
 
@@ -10868,7 +11067,7 @@ const J2CRM = () => {
               <h2 style={{fontSize:18, fontWeight:800, color:t.text, fontFamily:"'Space Grotesk'"}}>Adjust Credit</h2>
               <div style={{ cursor:"pointer", fontSize:18, color:t.textMuted }} onClick={() => setShowCreditAdjust(null)}>{String.fromCharCode(215)}</div>
             </div>
-            <div style={{fontSize:13, color:t.textMuted, marginBottom:16}}>{showCreditAdjust.firstName} {showCreditAdjust.lastName} — Current: <strong style={{color:t.success}}>{fmt(showCreditAdjust.creditBalance || 0)}</strong></div>
+            <div style={{fontSize:13, color:t.textMuted, marginBottom:16}}>{subDisplayName(showCreditAdjust)} — Current: <strong style={{color:t.success}}>{fmt(showCreditAdjust.creditBalance || 0)}</strong></div>
             <div style={{marginBottom:12}}>
               <label style={{fontSize:12, fontWeight:600, color:t.textSec, marginBottom:6, display:"block"}}>Type</label>
               <div style={{display:"flex", gap:8}}>
@@ -11284,6 +11483,51 @@ const J2CRM = () => {
               {/* ═══ 2-COL: Info + RADIUS ═══ */}
               <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:24, marginBottom:20}}>
               <div>
+              {/* Prepaid standing. Only rendered for subscribers on a prepaid plan —
+                  postpaid accounts have no expiry and the card would be meaningless. */}
+              {prepaidInfo && (() => {
+                const exp = prepaidInfo.expiresAt ? new Date(prepaidInfo.expiresAt) : null;
+                const d = prepaidInfo.daysRemaining;
+                const bad = prepaidInfo.expired;
+                const warn = !bad && d !== null && d <= 3;
+                const col = bad ? t.danger : warn ? "#f59e0b" : t.success;
+                return (
+                  <div style={{ marginBottom:20, padding:"16px 18px", borderRadius:14, background:`${col}0d`, border:`1px solid ${col}33` }}>
+                    <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:12 }}>
+                      <div>
+                        <div style={{ fontSize:11, fontWeight:700, color:col, textTransform:"uppercase", letterSpacing:.6, marginBottom:5 }}>
+                          <i className="fas fa-hourglass-half" style={{marginRight:6}}></i>Prepaid — {prepaidInfo.planName}
+                        </div>
+                        <div style={{ fontSize:18, fontWeight:800, color:t.text, fontFamily:"'Space Grotesk'" }}>
+                          {!exp ? "Never topped up"
+                            : bad ? `Expired ${fmtDate(exp)}`
+                            : `${d} day${d === 1 ? "" : "s"} left`}
+                        </div>
+                        {exp && !bad && <div style={{ fontSize:12, color:t.textSec, marginTop:3 }}>Expires {fmtDate(exp)}</div>}
+                        {!exp && <div style={{ fontSize:12, color:t.textSec, marginTop:3 }}>Service starts on the first top-up.</div>}
+                      </div>
+                      <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+                        {[1,2,3].map(n => (
+                          <button key={n} disabled={prepaidBusy} onClick={() => doTopUp(n)}
+                            style={{ padding:"9px 14px", borderRadius:10, border:`1px solid ${t.accent}40`,
+                                     background: n === 1 ? t.accent : `${t.accent}14`, color: n === 1 ? "#fff" : t.accent,
+                                     fontSize:12, fontWeight:700, cursor: prepaidBusy ? "wait" : "pointer",
+                                     opacity: prepaidBusy ? .6 : 1, fontFamily:"inherit", whiteSpace:"nowrap" }}>
+                            {prepaidBusy ? "…" : `+${n * (prepaidInfo.validityDays || 0)}d · ${fmt((prepaidInfo.price || 0) * n)}`}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    {prepaidInfo.topups && prepaidInfo.topups.length > 0 && (
+                      <div style={{ marginTop:13, paddingTop:11, borderTop:`1px solid ${col}22`, fontSize:11, color:t.textMuted }}>
+                        Last top-up {fmtDate(prepaidInfo.topups[0].createdAt)} — {prepaidInfo.topups[0].days} days, {fmt(prepaidInfo.topups[0].amount)}
+                        {prepaidInfo.topups[0].invoiceNumber ? ` (${prepaidInfo.topups[0].invoiceNumber})` : ""}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
               {/* Info Grid */}
               <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(200px, 1fr))", gap:16, marginBottom:24 }}>
                 {[
@@ -11292,7 +11536,7 @@ const J2CRM = () => {
                   { l:"Address", v:`${selectedSub.address}${selectedSub.subdivision ? ", " + selectedSub.subdivision : ""}, ${selectedSub.barangay}` },
                   { l:"Municipality/City", v:selectedSub.municipality },
                   { l:"Plan", v: getPlan(selectedSub.planId).name ? `${getPlan(selectedSub.planId).name} — ${getPlan(selectedSub.planId).speed}` : (selectedSub.planName || "—") },
-                  { l:"Monthly Rate", v: getPlan(selectedSub.planId).price ? fmt(getPlan(selectedSub.planId).price) : "—" },
+                  { l: prepaidInfo ? `Rate (per ${prepaidInfo.validityDays}d)` : "Monthly Rate", v: getPlan(selectedSub.planId).price ? fmt(getPlan(selectedSub.planId).price) : "—" },
                   { l:"Package", v: selectedSub.pkg ? `Package ${selectedSub.pkg.toUpperCase()}` : "—" },
                   { l:"MAC Address", v: selectedSub.mac ? React.createElement("span",{style:{fontFamily:"monospace",letterSpacing:0.5,color:t.accent}},selectedSub.mac.toUpperCase()) : "—" },
                   { l:"Balance", v: (selectedSub.status === "prospective" || selectedSub.status === "approved" || selectedSub.status === "declined") ? "—" : selectedSub.balance > 0 ? fmt(selectedSub.balance) : "₱0.00" },
@@ -12060,16 +12304,16 @@ const J2CRM = () => {
               {/* Name row - full width 3 columns */}
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:"0 14px", marginBottom:14 }}>
                 <div>
+                  <label style={{fontSize:12,fontWeight:600,color:t.textSec,marginBottom:6,display:"block"}}>Last Name {!editSubForm.companyName && <span>*</span>}</label>
+                  <input value={editSubForm.lastName||""} onChange={e => setEditSubForm(f=>({...f, lastName:e.target.value}))} style={{width:"100%",padding:"12px 14px",border:"1px solid "+t.inputBorder,borderRadius:10,fontSize:13,background:t.input,color:t.text,fontFamily:"inherit",outline:"none"}} />
+                </div>
+                <div>
                   <label style={{fontSize:12,fontWeight:600,color:t.textSec,marginBottom:6,display:"block"}}>First Name {!editSubForm.companyName && <span>*</span>}</label>
                   <input value={editSubForm.firstName||""} onChange={e => setEditSubForm(f=>({...f, firstName:e.target.value}))} style={{width:"100%",padding:"12px 14px",border:"1px solid "+t.inputBorder,borderRadius:10,fontSize:13,background:t.input,color:t.text,fontFamily:"inherit",outline:"none"}} />
                 </div>
                 <div>
                   <label style={{fontSize:12,fontWeight:600,color:t.textSec,marginBottom:6,display:"block"}}>Middle Name</label>
                   <input value={editSubForm.middleName||""} onChange={e => setEditSubForm(f=>({...f, middleName:e.target.value}))} style={{width:"100%",padding:"12px 14px",border:"1px solid "+t.inputBorder,borderRadius:10,fontSize:13,background:t.input,color:t.text,fontFamily:"inherit",outline:"none"}} />
-                </div>
-                <div>
-                  <label style={{fontSize:12,fontWeight:600,color:t.textSec,marginBottom:6,display:"block"}}>Last Name {!editSubForm.companyName && <span>*</span>}</label>
-                  <input value={editSubForm.lastName||""} onChange={e => setEditSubForm(f=>({...f, lastName:e.target.value}))} style={{width:"100%",padding:"12px 14px",border:"1px solid "+t.inputBorder,borderRadius:10,fontSize:13,background:t.input,color:t.text,fontFamily:"inherit",outline:"none"}} />
                 </div>
               </div>
               {/* Two-column layout: Left = personal info, Right = plan/technical */}
@@ -12481,16 +12725,16 @@ const J2CRM = () => {
               </div>
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:"0 14px" }}>
                 <div style={{marginBottom:14}}>
+                  <label style={{fontSize:12,fontWeight:600,color:t.textSec,marginBottom:6,display:"block"}}>Last Name {!addSubForm.companyName && <span>*</span>}</label>
+                  <input value={addSubForm.lastName} onChange={e => setAddSubForm(f=>({...f, lastName:e.target.value}))} placeholder="Dela Cruz" style={{width:"100%",padding:"12px 14px",border:"1px solid "+t.inputBorder,borderRadius:10,fontSize:13,background:t.input,color:t.text,fontFamily:"inherit",outline:"none"}} />
+                </div>
+                <div style={{marginBottom:14}}>
                   <label style={{fontSize:12,fontWeight:600,color:t.textSec,marginBottom:6,display:"block"}}>First Name {!addSubForm.companyName && <span>*</span>}</label>
                   <input value={addSubForm.firstName} onChange={e => setAddSubForm(f=>({...f, firstName:e.target.value}))} placeholder="Juan" style={{width:"100%",padding:"12px 14px",border:"1px solid "+t.inputBorder,borderRadius:10,fontSize:13,background:t.input,color:t.text,fontFamily:"inherit",outline:"none"}} />
                 </div>
                 <div style={{marginBottom:14}}>
                   <label style={{fontSize:12,fontWeight:600,color:t.textSec,marginBottom:6,display:"block"}}>Middle Name</label>
                   <input value={addSubForm.middleName||""} onChange={e => setAddSubForm(f=>({...f, middleName:e.target.value}))} placeholder="Santos" style={{width:"100%",padding:"12px 14px",border:"1px solid "+t.inputBorder,borderRadius:10,fontSize:13,background:t.input,color:t.text,fontFamily:"inherit",outline:"none"}} />
-                </div>
-                <div style={{marginBottom:14}}>
-                  <label style={{fontSize:12,fontWeight:600,color:t.textSec,marginBottom:6,display:"block"}}>Last Name {!addSubForm.companyName && <span>*</span>}</label>
-                  <input value={addSubForm.lastName} onChange={e => setAddSubForm(f=>({...f, lastName:e.target.value}))} placeholder="Dela Cruz" style={{width:"100%",padding:"12px 14px",border:"1px solid "+t.inputBorder,borderRadius:10,fontSize:13,background:t.input,color:t.text,fontFamily:"inherit",outline:"none"}} />
                 </div>
               </div>
               <div style={{marginBottom:14}}>
@@ -12566,8 +12810,8 @@ const J2CRM = () => {
                     <input value={addSubForm.referrerQuery||""} onChange={e=>setAddSubForm(f=>({...f,referrerQuery:e.target.value}))} placeholder="Search existing subscriber by name or account #..." style={{width:"100%",padding:"12px 14px",border:"1px solid "+t.inputBorder,borderRadius:10,fontSize:13,background:t.input,color:t.text,fontFamily:"inherit",outline:"none"}} />
                     {(addSubForm.referrerQuery||"").trim().length>=2 && (()=>{
                       const q=(addSubForm.referrerQuery||"").trim().toLowerCase();
-                      const nm=s=>((s.firstName||s.lastName)?`${s.firstName||""} ${s.lastName||""}`.trim():(s.companyName||s.acct));
-                      const matches=subscribers.filter(s=>nm(s).toLowerCase().includes(q)||(s.acct||"").toLowerCase().includes(q)).slice(0,6);
+                      const nm=subDisplayName;
+                      const matches=subscribers.filter(s=>subSearchName(s).includes(q)||(s.acct||"").toLowerCase().includes(q)).slice(0,6);
                       return matches.length?(
                         <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:10,marginTop:4,background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:10,boxShadow:"0 10px 30px rgba(0,0,0,.25)",overflow:"hidden"}}>
                           {matches.map(s=>(
@@ -12972,10 +13216,32 @@ const J2CRM = () => {
             <input value={planForm.name} onChange={e=>setPlanForm(f=>({...f,name:e.target.value}))} placeholder="e.g. STARTER" style={{width:"100%",padding:"12px 14px",border:`1px solid ${t.inputBorder}`,borderRadius:10,fontSize:13,background:t.input,color:t.text,fontFamily:"inherit",outline:"none"}} />
           </div>
           <div>
-            <label style={{fontSize:12,fontWeight:600,color:t.textSec,marginBottom:6,display:"block"}}>Price (₱/month)</label>
+            <label style={{fontSize:12,fontWeight:600,color:t.textSec,marginBottom:6,display:"block"}}>{planForm.billingType === "prepaid" ? `Price (₱ per ${planForm.validityPeriod || "…"} days)` : "Price (₱/month)"}</label>
             <input type="number" value={planForm.price} onChange={e=>setPlanForm(f=>({...f,price:e.target.value}))} placeholder="999" style={{width:"100%",padding:"12px 14px",textAlign:"right",border:`1px solid ${t.inputBorder}`,borderRadius:10,fontSize:13,background:t.input,color:t.text,fontFamily:"inherit",outline:"none"}} />
           </div>
         </div>
+
+        {/* Billing model. A prepaid plan without a validity period is refused by the API:
+            it would sell time with no end, and the expiry job would never pick it up. */}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
+          <div>
+            <label style={{fontSize:12,fontWeight:600,color:t.textSec,marginBottom:6,display:"block"}}>Billing</label>
+            <select value={planForm.billingType} onChange={e=>setPlanForm(f=>({...f,billingType:e.target.value}))} style={{width:"100%",padding:"12px 14px",border:`1px solid ${t.inputBorder}`,borderRadius:10,fontSize:13,background:t.input,color:t.text,fontFamily:"inherit",outline:"none"}}>
+              <option value="postpaid">Postpaid — billed monthly, cut off when overdue</option>
+              <option value="prepaid">Prepaid — pay first, cut off on expiry</option>
+            </select>
+          </div>
+          <div>
+            <label style={{fontSize:12,fontWeight:600,color:t.textSec,marginBottom:6,display:"block"}}>Validity (days){planForm.billingType === "prepaid" && <span style={{color:t.danger}}> *</span>}</label>
+            <input type="number" min="1" disabled={planForm.billingType !== "prepaid"} value={planForm.validityPeriod} onChange={e=>setPlanForm(f=>({...f,validityPeriod:e.target.value}))} placeholder={planForm.billingType === "prepaid" ? "30" : "n/a"} style={{width:"100%",padding:"12px 14px",textAlign:"right",border:`1px solid ${t.inputBorder}`,borderRadius:10,fontSize:13,background:planForm.billingType === "prepaid" ? t.input : t.bg,color:planForm.billingType === "prepaid" ? t.text : t.textSec,fontFamily:"inherit",outline:"none"}} />
+          </div>
+        </div>
+        {planForm.billingType === "prepaid" && (
+          <div style={{marginBottom:14,padding:"10px 13px",borderRadius:10,background:`${t.accent}10`,border:`1px solid ${t.accent}30`,fontSize:12,color:t.textSec,lineHeight:1.5}}>
+            <i className="fas fa-circle-info" style={{marginRight:6,color:t.accent}}></i>
+            Subscribers on this plan pay <b style={{color:t.text}}>₱{planForm.price || "—"}</b> for <b style={{color:t.text}}>{planForm.validityPeriod || "—"} days</b>. Service is cut off automatically when their expiry passes, and restored the moment they top up. No monthly invoice is generated.
+          </div>
+        )}
 
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
           <div>
@@ -13364,7 +13630,7 @@ const J2CRM = () => {
             <input value={newInvForm.subscriberName || newInvForm.subSearch} onChange={e=>{setNewInvForm(f=>({...f,subscriberId:'',subscriberName:'',subSearch:e.target.value})); handleNewInvChange('subSearch',e.target.value);}} placeholder="Type name or account number..." style={{width:"100%",padding:"10px 14px",border:`1px solid ${t.inputBorder}`,borderRadius:10,fontSize:13,background:t.input,color:t.text,fontFamily:"inherit",outline:"none",boxSizing:"border-box"}} />
             {newInvSubResults.length > 0 && <div style={{position:"absolute",top:"100%",left:0,right:0,background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:10,zIndex:10,maxHeight:200,overflowY:"auto",boxShadow:"0 8px 24px rgba(0,0,0,.3)",marginTop:2}}>
               {newInvSubResults.map(s=>{
-                const name=((s.firstName||'')+' '+(s.middleName||'')+' '+(s.lastName||'')).trim();
+                const name=subDisplayName(s);
                 return <div key={s.id} onClick={()=>{setNewInvForm(f=>({...f,subscriberId:s.id,subscriberName:name,subSearch:''})); setNewInvSubResults([]);}} style={{padding:"10px 14px",cursor:"pointer",borderBottom:`1px solid ${t.border}`,fontSize:13}} onMouseOver={e=>e.currentTarget.style.background="rgba(59,130,246,.1)"} onMouseOut={e=>e.currentTarget.style.background=""}>
                   <div style={{fontWeight:700,color:t.text}}>{name}</div>
                   <div style={{fontSize:11,color:t.textMuted}}>{s.acct}</div>
@@ -14069,7 +14335,7 @@ const J2CRM = () => {
                         onMouseLeave={e => { e.currentTarget.style.borderColor = t.border; e.currentTarget.style.background = t.bg; }}>
                         <div style={{ flex:1 }}>
                           <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:4 }}>
-                            <span style={{ fontWeight:700, color:t.text, fontSize:14 }}>{(s.firstName||s.first_name) ? `${s.firstName||s.first_name}${(s.middleName||s.middle_name) ? " "+(s.middleName||s.middle_name) : ""} ${s.lastName||s.last_name||""}`.trim() : (s.companyName||s.company_name||s.acct||"—")}</span>
+                            <span style={{ fontWeight:700, color:t.text, fontSize:14 }}>{subDisplayName(s)}</span>
                             <Badge color={statusColor(s.status)} label={s.status} />
                           </div>
                           <div style={{ fontSize:12, color:t.accent, fontFamily:"monospace", fontWeight:600 }}>{s.accountNumber || s.account_number || s.acct}</div>
@@ -14834,7 +15100,7 @@ const J2CRM = () => {
               {showTransferOnu.subscriber && (
                 <div style={{ marginTop:10, padding:"10px 14px", background:t.danger+'10', borderRadius:8, border:'1px solid '+t.danger+'30', fontSize:12 }}>
                   <span style={{ color:t.danger, fontWeight:600 }}>Currently assigned to: </span>
-                  <span style={{ color:t.text }}>{(showTransferOnu.subscriber.first_name||showTransferOnu.subscriber.firstName) ? `${showTransferOnu.subscriber.first_name||showTransferOnu.subscriber.firstName}${(showTransferOnu.subscriber.middle_name||showTransferOnu.subscriber.middleName) ? " "+(showTransferOnu.subscriber.middle_name||showTransferOnu.subscriber.middleName) : ""} ${showTransferOnu.subscriber.last_name||showTransferOnu.subscriber.lastName||""}`.trim() : (showTransferOnu.subscriber.company_name||showTransferOnu.subscriber.companyName||"—")}</span>
+                  <span style={{ color:t.text }}>{subDisplayName(showTransferOnu.subscriber)}</span>
                   <span style={{ color:t.textMuted }}> ({showTransferOnu.subscriber.account_number || showTransferOnu.subscriber.accountNumber})</span>
                 </div>
               )}
@@ -14865,7 +15131,7 @@ const J2CRM = () => {
                         onMouseLeave={e => { e.currentTarget.style.borderColor = t.border; e.currentTarget.style.background = t.bg; }}>
                         <div style={{ flex:1 }}>
                           <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:4 }}>
-                            <span style={{ fontWeight:700, color:t.text, fontSize:14 }}>{(s.firstName||s.first_name) ? `${s.firstName||s.first_name}${(s.middleName||s.middle_name) ? " "+(s.middleName||s.middle_name) : ""} ${s.lastName||s.last_name||""}`.trim() : (s.companyName||s.company_name||s.acct||"—")}</span>
+                            <span style={{ fontWeight:700, color:t.text, fontSize:14 }}>{subDisplayName(s)}</span>
                             <Badge color={statusColor(s.status)} label={s.status} />
                           </div>
                           <div style={{ fontSize:12, color:t.accent, fontFamily:"monospace", fontWeight:600 }}>{s.accountNumber || s.account_number || s.acct}</div>
@@ -15116,7 +15382,7 @@ mac_address,model,serial_number,vendor,purchase_price,purchase_date,warranty_unt
             </div>
           </div>
           <div style={{padding:"14px 18px"}}>
-            <div style={{fontSize:16,fontWeight:700,color:t.text,marginBottom:4}}>{incomingCall.subscriber ? `${incomingCall.subscriber.first_name} ${incomingCall.subscriber.last_name}` : "Unknown Caller"}</div>
+            <div style={{fontSize:16,fontWeight:700,color:t.text,marginBottom:4}}>{incomingCall.subscriber ? subDisplayName(incomingCall.subscriber) : "Unknown Caller"}</div>
             <div style={{fontSize:13,color:t.textMuted,fontFamily:"monospace",marginBottom:4}}>{incomingCall.callerNumber}</div>
             {incomingCall.subscriber && <div style={{fontSize:11,color:t.accent,fontWeight:600}}>{incomingCall.subscriber.account_number}</div>}
           </div>
