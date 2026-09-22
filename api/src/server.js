@@ -118,6 +118,9 @@ app.use('/api/portal', portalRoutes);
 // to. Sits beside /api/portal rather than inside it because portalRoutes is behind
 // portalAuth, and a cut-off customer is precisely the one who cannot log in.
 app.use('/api/restricted', require('./routes/restricted'));
+// Public pay-by-link: an emailed link opens one invoice and a Xendit checkout,
+// with no portal login. Token-scoped to that invoice; see routes/paylink.js.
+app.use('/api/paylink', require('./routes/paylink'));
 
 // GIS Map routes (must be before adminRoutes)
 const mapRoutes = require("./routes/map");
@@ -145,6 +148,7 @@ const creditsRoutes = require('./routes/credits');
 const radiusRoutes = require('./routes/radius');
 app.use('/api/bugs', bugRoutes);
 app.use('/api/admin/credits', creditsRoutes);
+app.use('/api/admin/prepaid', require('./routes/prepaid'));
 app.use('/api/ai', require('./routes/ai'));
 
 // RADIUS Management (Phase 3)

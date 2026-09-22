@@ -593,7 +593,16 @@ const Portal = () => {
         } else {
           if (popup && !popup.closed) popup.close();
           setPayStep(1);
-          setPayError(data.error || "Failed to create payment. Please try again.");
+          if (data.code === "ARREARS_FIRST" && data.oldest) {
+            // Name the bill and the amount. "An earlier invoice is unpaid" on its own
+            // sends the customer to support to ask which one.
+            setPayError(
+              `Your ${fmtDate(data.oldest.period)} bill of ${fmt(data.oldest.amount)} is still unpaid and has to be settled first. ` +
+              `Close this and use “Pay All” to clear everything in one go, or pay that bill on its own.`
+            );
+          } else {
+            setPayError(data.error || "Failed to create payment. Please try again.");
+          }
           setPayProcessing(false);
         }
       })
@@ -963,6 +972,24 @@ const Portal = () => {
   });
   const paidInvoices = myInvoices.filter(i => i.status === "paid");
 
+  // Arrears = unpaid AND past the due date. The API refuses to check out a newer
+  // invoice while one of these is open (409 ARREARS_FIRST), because paying this month
+  // while last month is overdue takes the money without lifting a restriction. The UI
+  // mirrors that rule so the customer is steered rather than stopped at the last step.
+  //
+  // Past due, not merely older: October and November invoices are raised in advance
+  // here, and blocking a customer from paying those early would be its own bug.
+  const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
+  const arrearsInvoices = unpaidInvoices
+    .filter(i => i.dueDate && new Date(i.dueDate) < startOfToday)
+    .sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
+  const oldestArrear = arrearsInvoices[0] || null;
+  const arrearsTotal = arrearsInvoices.reduce((s, i) => s + (i.balance > 0 ? i.balance : i.amount), 0);
+  // An invoice is blocked when some OTHER arrear falls due before it.
+  const blockedByArrears = (inv) =>
+    !!oldestArrear && inv.id !== oldestArrear.id &&
+    !!inv.dueDate && new Date(oldestArrear.dueDate) < new Date(inv.dueDate);
+
   const navItems = [
     { id:"dashboard", icon:"fas fa-chart-line", label:"Dashboard" },
     { id:"billing", icon:"fas fa-file-invoice-dollar", label:"Billing & Payments" },
@@ -1092,7 +1119,7 @@ const Portal = () => {
               {unpaidInvoices.length > 1 && (
                 <Btn primary onClick={() => { setPayAllMode(true); setPayInvoice({ id:"all", number:"ALL", amount:unpaidInvoices.reduce((s,i)=>s+(i.balance>0?i.balance:i.amount),0), invoiceIds:unpaidInvoices.map(i=>i.id) }); setShowPayModal(true); setPayStep(1); setPayError(""); setPayMethod("xendit"); }}><i className="fas fa-credit-card" style={{marginRight:6}}></i>Pay All ({fmt(unpaidInvoices.reduce((s,i)=>s+(i.balance>0?i.balance:i.amount),0))})</Btn>
               )}
-              <Btn primary onClick={() => { setPayAllMode(false); setPayInvoice(unpaidInvoices[0]); setShowPayModal(true); setPayStep(1); setPayError(""); setPayMethod("xendit"); }}><i className="fas fa-credit-card" style={{marginRight:6}}></i>Pay Now</Btn>
+              <Btn primary onClick={() => { setPayAllMode(false); setPayInvoice(oldestArrear || unpaidInvoices[0]); setShowPayModal(true); setPayStep(1); setPayError(""); setPayMethod("xendit"); }}><i className="fas fa-credit-card" style={{marginRight:6}}></i>{oldestArrear ? "Pay Oldest Bill First" : "Pay Now"}</Btn>
             </div>
           </div>
         </Card>
@@ -1102,6 +1129,21 @@ const Portal = () => {
       {unpaidInvoices.length > 0 && (
         <>
           <h3 style={{fontSize:16, fontWeight:700, color:c.text, marginBottom:14}}>Unpaid Invoices</h3>
+          {oldestArrear && unpaidInvoices.length > 1 && (
+            <Card style={{padding:14, marginBottom:14, border:`1px solid ${c.danger}40`, background:`${c.danger}0d`}}>
+              <div style={{display:"flex", gap:12, alignItems:"flex-start"}}>
+                <i className="fas fa-circle-exclamation" style={{color:c.danger, fontSize:18, marginTop:2}}></i>
+                <div style={{fontSize:13, color:c.textSec, lineHeight:1.6}}>
+                  <strong style={{color:c.text}}>Oldest bill first.</strong>{" "}
+                  Your {fmtDate(oldestArrear.period)} bill of {fmt(oldestArrear.balance > 0 ? oldestArrear.balance : oldestArrear.amount)} is past due, so newer
+                  bills cannot be paid on their own yet. Paying a later bill while this one is open
+                  would not restore a limited connection — the account is judged on the whole balance.
+                  {arrearsInvoices.length > 1 && <> You have {arrearsInvoices.length} overdue bills totalling {fmt(arrearsTotal)}.</>}
+                  {" "}Use <strong style={{color:c.text}}>Pay All</strong> to clear everything at once.
+                </div>
+              </div>
+            </Card>
+          )}
           <div style={{display:"grid", gap:12, marginBottom:28}}>
             {unpaidInvoices.map(inv => (
               <Card key={inv.id} style={{padding:18, border:`1px solid ${statusColor(inv.displayStatus)}25`}}>
@@ -1120,7 +1162,13 @@ const Portal = () => {
                       <Badge status={inv.displayStatus} />
                     </div>
                     <span onClick={() => setPdfModal({ invoiceId: inv.id, invoiceNumber: inv.number })} style={{cursor:"pointer", color:c.textMuted, fontSize:18, padding:4}} title="View PDF"><i className="fas fa-file-pdf"></i></span>
-                    <Btn primary small onClick={() => { setPayAllMode(false); setPayInvoice(inv); setShowPayModal(true); setPayStep(1); setPayError(""); setPayMethod("xendit"); }}>Pay</Btn>
+                    {blockedByArrears(inv) ? (
+                      <span title={`Settle ${fmtDate(oldestArrear.period)} (${fmt(oldestArrear.balance > 0 ? oldestArrear.balance : oldestArrear.amount)}) first, or use Pay All.`}>
+                        <Btn primary small disabled onClick={() => {}}>Pay</Btn>
+                      </span>
+                    ) : (
+                      <Btn primary small onClick={() => { setPayAllMode(false); setPayInvoice(inv); setShowPayModal(true); setPayStep(1); setPayError(""); setPayMethod("xendit"); }}>Pay</Btn>
+                    )}
                   </div>
                 </div>
               </Card>
@@ -2189,16 +2237,17 @@ const Portal = () => {
                     {[{l:"First Name", k:"firstName"}, {l:"Last Name", k:"lastName"}].map(f => (
                       <div key={f.k}>
                         <label style={{fontSize:12, fontWeight:600, color:c.textMuted, marginBottom:6, display:"block", textTransform:"uppercase", letterSpacing:.3}}>{f.l}</label>
-                        <input value={editProfileForm[f.k]} onChange={e => setEditProfileForm(prev => ({...prev, [f.k]:e.target.value}))}
-                          style={{width:"100%", padding:"12px 14px", border:`1px solid ${c.border}`, borderRadius:12, fontSize:14, background:c.bgAlt, color:c.text, fontFamily:font, outline:"none"}} />
+                        <input value={editProfileForm[f.k]} readOnly title="Your registered name is on your contract and invoices — contact support to correct it"
+                          style={{width:"100%", padding:"12px 14px", border:`1px solid ${c.border}`, borderRadius:12, fontSize:14, background:c.bg, color:c.textMuted, cursor:"not-allowed", fontFamily:font, outline:"none"}} />
                       </div>
                     ))}
                   </div>
                   <div style={{marginBottom:14}}>
                     <label style={{fontSize:12, fontWeight:600, color:c.textMuted, marginBottom:6, display:"block", textTransform:"uppercase", letterSpacing:.3}}>Middle Name <span style={{fontWeight:400, textTransform:"none"}}>(optional)</span></label>
-                    <input value={editProfileForm.middleName} onChange={e => setEditProfileForm(prev => ({...prev, middleName:e.target.value}))}
-                      placeholder="Leave blank if none"
-                      style={{width:"100%", padding:"12px 14px", border:`1px solid ${c.border}`, borderRadius:12, fontSize:14, background:c.bgAlt, color:c.text, fontFamily:font, outline:"none"}} />
+                    <input value={editProfileForm.middleName} readOnly title="Your registered name is on your contract and invoices — contact support to correct it"
+                      placeholder="—"
+                      style={{width:"100%", padding:"12px 14px", border:`1px solid ${c.border}`, borderRadius:12, fontSize:14, background:c.bg, color:c.textMuted, cursor:"not-allowed", fontFamily:font, outline:"none"}} />
+                    <div style={{fontSize:11, color:c.textMuted, marginTop:6, lineHeight:1.5}}>Your name and account number appear on your service contract and on every invoice, so they can only be corrected by our staff. Please contact support if anything here is wrong.</div>
                   </div>
                   {[{l:"Email Address", k:"email", type:"email"}, {l:"Street Address", k:"address", type:"text"}].map(f => (
                     <div key={f.k} style={{marginBottom:14}}>

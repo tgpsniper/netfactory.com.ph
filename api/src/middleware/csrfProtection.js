@@ -9,6 +9,12 @@ const EXEMPT_PATHS = [
   '/api/portal/login',
   '/api/health',
   '/api/bugs',
+  // Pay-by-link is authorised by a single-purpose token in the URL, not by ambient
+  // cookies, so CSRF is not the control that protects it. Anyone able to forge the
+  // request would need the token — and with the token they could simply open the link
+  // themselves. Without this, the page breaks for anyone who also holds a j2_csrf
+  // cookie from the CRM on the same domain, which is exactly who tests it first.
+  '/api/paylink',
 ];
 
 function generateToken() {

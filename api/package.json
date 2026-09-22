@@ -8,8 +8,10 @@
     "dev": "nodemon src/server.js",
     "prisma:generate": "npx prisma generate",
     "prisma:pull": "npx prisma db pull",
-    "prisma:push": "npx prisma db push",
-    "seed": "node src/utils/seed.js"
+    "seed": "node src/utils/seed.js",
+    "prisma:push": "echo \"REFUSED: prisma db push drops the 4 GENERATED columns and trg_subscriber_account_number, which schema.prisma does not describe. Restore with pg_restore from disaster_recovery_backups. If you genuinely need it, run the raw command deliberately.\" && exit 1",
+    "smoke": "node scripts/smoke.js",
+    "deploy": "bash scripts/deploy.sh"
   },
   "dependencies": {
     "@prisma/client": "^6.3.0",

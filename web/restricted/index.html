@@ -122,6 +122,19 @@
     }
     var d = new Date(); var mk = function (off) { var x = new Date(d); x.setMonth(x.getMonth() - off); return x; };
     var iso = function (x) { return x.toISOString().slice(0, 10); };
+    // ?demo=prepaid previews the expiry face. It is a genuinely different page — no
+    // balance, no invoice list, a renewal price instead of a total — so it needs its
+    // own preview or nobody sees it until a real customer does.
+    if (kind === 'prepaid') {
+      var exp = new Date(d); exp.setDate(exp.getDate() - 2);
+      return {
+        identified: true, restricted: true, account: '26XXXXXXXX', firstName: 'Juan',
+        plan: 'PREPAID Fiber 100', mode: 'walled-garden',
+        prepaid: true, expiresAt: exp.toISOString(), renewAmount: 299, renewDays: 30,
+        invoices: [], totalDue: 0, canPayOnline: true,
+        company: { name: 'NETFACTORY', phone: '09176837220', email: 'support@example.invalid' }
+      };
+    }
     return {
       identified: true, restricted: true, account: '26XXXXXXXX', firstName: 'Juan',
       plan: 'HOME Fiber 200', restrictedAt: iso(mk(0)),
@@ -204,24 +217,47 @@
              '</span><span>' + peso(i.amount) + '</span></div>';
     }).join('');
 
+    // Prepaid and postpaid are different conversations. A prepaid customer owes nothing
+    // — they have simply run out — so "unsettled balance" and "total due ₱0.00" would
+    // tell them they are up to date while their internet is off. Everything below that
+    // differs between the two is chosen here rather than sprinkled through the template.
+    var prepaid   = !!s.prepaid;
+    var renewCost = Number(s.renewAmount || 0);
+    var renewDays = Number(s.renewDays || 0);
+    var payTotal  = prepaid ? renewCost : Number(s.totalDue || 0);
+
+    var heading = prepaid
+      ? 'Your prepaid service has expired'
+      : 'Your internet service is on hold';
+    var lede = prepaid
+      ? 'Hi ' + esc(s.firstName || 'there') + ' — your prepaid service ran out. Renew below and you are back online in a few minutes.'
+      : 'Hi ' + esc(s.firstName || 'there') + ' — we limited your connection because your account has an unsettled balance.';
+    var payLabel = prepaid
+      ? 'Renew ' + peso(renewCost) + (renewDays ? ' for ' + renewDays + ' days' : '')
+      : 'Pay ' + peso(payTotal) + ' now';
+    var totalLabel = prepaid ? 'Renewal' : 'Total due';
+
     card.innerHTML =
       banner +
         '<div class="icon warn">' + ICON_WARN + '</div>' +
-      '<h1>Your internet service is on hold</h1>' +
-      '<p class="lede">Hi ' + esc(s.firstName || 'there') + ' — we limited your connection because your account has an unsettled balance.</p>' +
+      '<h1>' + heading + '</h1>' +
+      '<p class="lede">' + lede + '</p>' +
       (payFailed ? '<div class="note bad">That payment did not go through. Nothing was charged — you can try again below.</div>' : '') +
       (justPaid ? '<div class="note ok">Payment received. We are confirming it now — this page will update on its own within a minute or two.</div>' : '') +
-      (s.reason ? '<div class="note">' + esc(s.reason) + '</div>' : '') +
+      (s.reason && !prepaid ? '<div class="note">' + esc(s.reason) + '</div>' : '') +
       '<div class="rows">' +
         '<div class="row"><span class="k">Account</span><span class="v">' + esc(s.account) + '</span></div>' +
         (s.plan ? '<div class="row"><span class="k">Plan</span><span class="v">' + esc(s.plan) + '</span></div>' : '') +
-        '<div class="row"><span class="k">On hold since</span><span class="v">' + shortDate(s.restrictedAt) + '</span></div>' +
-        '<div class="row"><span class="k">Unpaid invoices</span><span class="v">' + (s.invoices || []).length + '</span></div>' +
+        (prepaid
+          ? '<div class="row"><span class="k">Expired on</span><span class="v">' + shortDate(s.expiresAt) + '</span></div>' +
+            (renewDays ? '<div class="row"><span class="k">Renews for</span><span class="v">' + renewDays + ' days</span></div>' : '')
+          : '<div class="row"><span class="k">On hold since</span><span class="v">' + shortDate(s.restrictedAt) + '</span></div>' +
+            '<div class="row"><span class="k">Unpaid invoices</span><span class="v">' + (s.invoices || []).length + '</span></div>') +
       '</div>' +
-      (invRows ? '<div class="inv">' + invRows + '</div>' : '') +
-      '<div class="total"><span class="k">Total due</span><span class="v">' + peso(s.totalDue) + '</span></div>' +
+      (!prepaid && invRows ? '<div class="inv">' + invRows + '</div>' : '') +
+      '<div class="total"><span class="k">' + totalLabel + '</span><span class="v">' + peso(payTotal) + '</span></div>' +
       (s.canPayOnline
-        ? '<button class="pay" id="payBtn">' + ICON_LOCK + ' Pay ' + peso(s.totalDue) + ' now</button>' +
+        ? '<button class="pay" id="payBtn">' + ICON_LOCK + ' ' + payLabel + '</button>' +
           '<div class="methods">Secure checkout powered by Xendit</div>'
         : '<div class="note">Online payment is unavailable right now. Please settle at our office or through your usual payment centre.</div>') +
       '<div class="after"><b>Your service resumes automatically</b> once payment is confirmed — usually within a few minutes. You do not need to call us.</div>';

@@ -3485,10 +3485,10 @@ const J2CRM = () => {
               </div>
               <div style={{fontSize:11,color:t.textMuted,marginTop:3,lineHeight:1.45}}>
                 {arOn
-                  ? `Runs daily at ${arHour}:00 · ${cs.billing_grace_period_days||"15"} day grace · max ${cs.billing_auto_restrict_max_per_run||"25"} per run · restores automatically on payment`
+                  ? `Runs on switch-on and daily at ${arHour}:00 · ${cs.billing_grace_period_days||"15"} day grace · max ${cs.billing_auto_restrict_max_per_run||"25"} per run · restores automatically on payment`
                   : `The run still happens daily at ${arHour}:00 and logs who it would have restricted.`}
               </div>
-              {arMsg && <div style={{fontSize:11,color:arMsg.indexOf("ON —")===0?t.danger:(arMsg.indexOf("OFF —")===0?t.success:t.warning),marginTop:6,fontWeight:600}}>{arMsg}</div>}
+              {arMsg && <div style={{fontSize:11,color:arMsg.indexOf("OFF —")===0?t.success:(arMsg.indexOf("ON —")===0?t.danger:t.warning),marginTop:6,fontWeight:600}}>{arMsg}</div>}
             </div>
             <button onClick={()=>confirmAutoRestrict(!arOn)} disabled={arSaving}
               title={arOn?"Stop cutting off overdue accounts":"Start cutting off overdue accounts automatically"}
@@ -6166,11 +6166,29 @@ const J2CRM = () => {
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + getToken() },
         body: JSON.stringify({ settings: [{ key: "billing_auto_restrict_enabled", value: on ? "true" : "false", category: "billing" }] }),
       });
-      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || "Save failed"); }
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.error || "Save failed");
       updateCs("billing_auto_restrict_enabled", on ? "true" : "false");
-      setArMsg(on ? "Automatic restriction is ON — the next run will cut off overdue accounts."
-                  : "Automatic restriction is OFF — the run still logs who it would have cut.");
-      setTimeout(() => setArMsg(""), 6000);
+      // The server now sweeps the moment this goes on, so the confirmation has to say
+      // what it actually did. "The next run will cut off overdue accounts" was true when
+      // the switch only armed a nightly job; saying it now would understate a cutoff
+      // that is already in progress.
+      const ar = d.autoRestrict;
+      if (!on) {
+        setArMsg("OFF — the daily run still logs who it would have cut, but nobody is restricted.");
+      } else if (ar && ar.triggered && ar.eligible > 0) {
+        setArMsg("ON — restricting " + ar.eligible + " account" + (ar.eligible === 1 ? "" : "s") +
+          " past " + ar.graceDays + " days grace now" +
+          (ar.capped ? " (capped at " + ar.cap + " this run)" : "") + "." +
+          (ar.skippedNoDevices ? " " + ar.skippedNoDevices + " more are overdue but have no registered device, so nothing can be enforced for them." : ""));
+      } else if (ar && ar.triggered) {
+        setArMsg("ON — nobody is past the " + ar.graceDays + " day grace right now, so nothing was restricted.");
+      } else if (ar && ar.error) {
+        setArMsg("ON — but the immediate run could not start (" + ar.error + "). The daily run will still fire.");
+      } else {
+        setArMsg("ON — overdue accounts are cut off automatically.");
+      }
+      setTimeout(() => setArMsg(""), 12000);
     } catch (e) {
       setArMsg(e.message || "Network error — setting unchanged.");
     }
@@ -6189,8 +6207,9 @@ const J2CRM = () => {
     showConfirm({
       icon: "fa-triangle-exclamation",
       title: "Turn on automatic restriction?",
-      message: "Every day at " + hour + ":00 Manila, accounts more than " + grace + " days past due will be "
-        + mode + " without further review — up to " + cap + " per run. Service is restored automatically when payment is recorded.",
+      message: "Accounts more than " + grace + " days past due will be " + mode
+        + " without further review — up to " + cap + " per run. This happens IMMEDIATELY when you confirm, "
+        + "and again every day at " + hour + ":00 Manila. Service is restored automatically when payment is recorded.",
       confirmText: "Turn it on",
       confirmColor: "danger",
       onConfirm: () => setAutoRestrict(true),
@@ -6271,8 +6290,18 @@ const J2CRM = () => {
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + getToken() },
         body: JSON.stringify({ settings })
       });
-      if (res.ok) { setCsMsg("Settings saved successfully!"); setTimeout(() => setCsMsg(""), 3000); }
-      else { const d = await res.json(); setCsMsg(d.error || "Save failed"); }
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) {
+        // The restriction dropdown lives on this form too, so this save can start a
+        // cutoff. Saying only "Settings saved" would hide that.
+        const ar = d.autoRestrict;
+        setCsMsg(ar && ar.triggered && ar.eligible > 0
+          ? "Settings saved — automatic restriction is now ON and " + ar.eligible + " overdue account" +
+            (ar.eligible === 1 ? " is" : "s are") + " being restricted."
+          : "Settings saved successfully!");
+        setTimeout(() => setCsMsg(""), ar && ar.triggered ? 10000 : 3000);
+      }
+      else { setCsMsg(d.error || "Save failed"); }
     } catch (e) { setCsMsg("Network error"); }
     setCsSaving(false);
   };

@@ -1,0 +1,66 @@
+# ============================================================
+# Walled garden on port 80 — captive portal for restricted customers
+# ============================================================
+# The garden was designed to answer on 8081 so port 80 could stay untouched.
+# That does not survive contact with the network: nothing forwards 8081 to this
+# host. Probed from an access router and from this box, 80 and 443 connect
+# while 3001 and 8081 time out. So the garden answers on 80, which is the port
+# captive probes use anyway.
+#
+# WHY A REGEX server_name: the access router dst-nats a restricted customer's
+# port-80 traffic here, but the Host header is whatever they asked for —
+# connectivitycheck.gstatic.com from an OS probe, example.com from the address
+# bar. Listing only the probe hostnames caught the "Sign in to network"
+# notification but left every typed http:// URL falling through to the catchall's
+# 444, so a customer who ignored the notification and just browsed saw a dead
+# browser instead of the bill they owe. The regex catches any hostname.
+#
+# This does NOT hijack port 80. nginx resolves server_name in a fixed order:
+# exact names, then wildcards, then regex, then default_server. The exact-name
+# vhosts — netfactory.com.ph, www.netfactory.com.ph, acs.netfactory.com.ph —
+# are matched BEFORE this block and are unaffected, ACME renewals included.
+# Only hostnames no vhost claims reach here, which is exactly what 00-catchall
+# used to receive.
+#
+# Source is what separates the two audiences that now arrive: a restricted
+# customer must get the portal, the open internet must keep getting 444.
+# $nf_garden_client (conf.d/nf-garden-clients.conf) holds the customer ranges.
+# A scanner aiming any hostname at this IP still gets 444, byte for byte what
+# it got before, and is still logged to the catchall log rather than polluting
+# the garden log.
+#
+# 302 not 301: a permanent redirect would be cached by the browser and would
+# keep firing after the customer has paid and been restored.
+server {
+    listen 80;
+    listen [::]:80;
+
+    # The known OS probe hostnames are listed explicitly ahead of the regex —
+    # not required for matching, but it documents what this block is for.
+    server_name
+        connectivitycheck.gstatic.com
+        connectivitycheck.android.com
+        android.clients.google.com
+        clients3.google.com
+        clients1.google.com
+        captive.apple.com
+        gsp1.apple.com
+        www.msftconnecttest.com
+        ipv6.msftconnecttest.com
+        www.msftncsi.com
+        dns.msftncsi.com
+        detectportal.firefox.com
+        nmcheck.gnome.org
+        network-test.debian.org
+        connectivity-check.ubuntu.com
+        ~^.*$;
+
+    access_log /var/log/nginx/walled-garden-access.log combined if=$nf_garden_client;
+    access_log /var/log/nginx/catchall-access.log      combined if=$nf_garden_scanner;
+
+    if ($nf_garden_client) {
+        return 302 https://netfactory.com.ph/restricted/;
+    }
+
+    return 444;
+}

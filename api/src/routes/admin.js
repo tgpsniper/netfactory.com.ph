@@ -683,6 +683,104 @@ router.get('/subscribers', adminAuth(), async (req, res) => {
 // GET /api/admin/subscribers/:id - Single subscriber detail
 // ============================================
 
+// ── POST /admin/invoices/:id/send-payment-link ──────────────
+// Emails the subscriber a link that opens this one invoice and a Xendit checkout,
+// with no portal login involved. This exists because pending applicants have no
+// portal account at all — credentials are only minted at activation — so a link is
+// the only way they can settle anything online.
+//
+// The email carries a link to OUR page, never a Xendit URL: Xendit checkouts expire
+// after 24h, and a link that dies in a day is worse than no link. The page mints a
+// fresh checkout when the customer actually clicks Pay.
+router.post('/invoices/:id/send-payment-link', adminAuth(), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const invoice = await req.prisma.invoices.findUnique({
+      where: { id },
+      include: { subscriber: true },
+    });
+    if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
+
+    const sub = invoice.subscriber;
+    if (!sub) return res.status(400).json({ error: 'Invoice has no subscriber' });
+    if (!sub.email && !(req.body && req.body.email)) return res.status(400).json({ error: 'This subscriber has no email address on file' });
+
+    const settled = ['paid', 'cancelled', 'void', 'voided'].includes(String(invoice.status || '').toLowerCase());
+    if (settled) return res.status(400).json({ error: 'Invoice is already ' + invoice.status });
+
+    // Optional recipient override, for sending a test copy to staff before any of this
+    // is aimed at customers. Superadmin only, and recorded in the audit trail with BOTH
+    // addresses: a link that can pay an invoice went somewhere other than the account
+    // holder, and that needs to be visible afterwards rather than inferred.
+    let recipient = sub.email;
+    const override = (req.body && req.body.email ? String(req.body.email) : '').trim();
+    if (override) {
+      if (req.admin.role !== 'superadmin') {
+        return res.status(403).json({ error: 'Only a superadmin may send a payment link to a different address' });
+      }
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(override)) {
+        return res.status(400).json({ error: 'That does not look like a valid email address' });
+      }
+      recipient = override;
+    }
+
+    const { signPayToken } = require('./paylink');
+    const token = signPayToken(invoice.id, sub.id);
+    const co = await getCompany(req.prisma).catch(() => null);
+    const coName = co?.name || 'Netfactory';
+    const base = process.env.APP_URL || 'https://netfactory.com.ph';
+    const payUrl = base + '/pay/?t=' + encodeURIComponent(token);
+
+    const amount = Number(invoice.amount).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const due = invoice.due_date
+      ? new Date(invoice.due_date).toLocaleDateString('en-PH', { month: 'long', day: 'numeric', year: 'numeric' })
+      : null;
+    const greeting = sub.first_name || sub.company_name || 'there';
+
+    await req.config.email.sendWithPrisma(req.prisma, {
+      to: recipient,
+      subject: coName + ' — Payment for ' + invoice.invoice_number,
+      html: '<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;">' +
+        '<div style="text-align:center;padding:20px 0;border-bottom:2px solid #3b82f6;">' +
+        '<h1 style="color:#0f172a;margin:0;">' + coName + '</h1>' +
+        '<p style="color:#3b82f6;margin:4px 0 0;">Payment Request</p></div>' +
+        '<div style="padding:24px 0;">' +
+        '<p>Hi <strong>' + greeting + '</strong>,</p>' +
+        '<p>Here are the details for your account. You can settle this online — no login needed.</p>' +
+        '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:16px;margin:20px 0;">' +
+        '<p style="margin:0;"><strong>Account:</strong> ' + sub.account_number + '</p>' +
+        '<p style="margin:8px 0 0;"><strong>Invoice:</strong> ' + invoice.invoice_number + '</p>' +
+        (invoice.billing_period ? '<p style="margin:8px 0 0;"><strong>Period:</strong> ' + invoice.billing_period + '</p>' : '') +
+        (due ? '<p style="margin:8px 0 0;"><strong>Due:</strong> ' + due + '</p>' : '') +
+        '<p style="margin:12px 0 0;font-size:20px;"><strong>Amount Due: PHP ' + amount + '</strong></p></div>' +
+        '<p style="text-align:center;margin:28px 0;">' +
+        '<a href="' + payUrl + '" style="background:#3b82f6;color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;">Pay Now</a></p>' +
+        '<p style="font-size:12px;color:#64748b;">If the button does not work, copy this link into your browser:<br>' +
+        '<span style="word-break:break-all;">' + payUrl + '</span></p>' +
+        '<p style="font-size:12px;color:#64748b;">Keep this email private — anyone with the link can pay this invoice.</p>' +
+        '</div>' +
+        '<div style="border-top:1px solid #e2e8f0;padding-top:16px;color:#94a3b8;font-size:12px;text-align:center;">' + coName +
+        (co?.email ? ' &middot; ' + co.email : '') + (co?.phone ? ' &middot; ' + co.phone : '') + '</div></div>',
+    });
+
+    req.auditLog('PAYMENT_LINK_SENT', {
+      invoice: invoice.invoice_number,
+      account: sub.account_number,
+      email: recipient,
+      accountEmail: sub.email,
+      redirected: recipient !== sub.email,
+      amount: Number(invoice.amount),
+    }).catch(() => {});
+
+    console.log('[paylink] link emailed for ' + invoice.invoice_number + ' to ' + recipient +
+      (recipient !== sub.email ? ' (override; account email is ' + sub.email + ')' : ''));
+    res.json({ sent: true, email: recipient, invoice: invoice.invoice_number, redirected: recipient !== sub.email });
+  } catch (err) {
+    console.error('[paylink] send failed:', err);
+    res.status(500).json({ error: err.message || 'Failed to send payment link' });
+  }
+});
+
 // ── POST /admin/subscribers/:id/reset-password ──────────────
 router.post('/subscribers/:id/reset-password', adminAuth(), async (req, res) => {
   try {
@@ -2889,6 +2987,8 @@ router.get('/plans', adminAuth(), async (req, res) => {
         burstUploadMbps:   p.burst_upload_mbps,
         burstThresholdPct: p.burst_threshold_pct,
         burstTimeS:        p.burst_time_s,
+        billingType: p.billing_type || 'postpaid',
+        validityPeriod: p.validity_period,
         subscriberCount: p.subscribers.length,
         features: p.features.map(f => ({
           id: f.id,
@@ -2949,6 +3049,40 @@ router.put('/plans/:id', adminAuth(), async (req, res) => {
     if (req.body.burstThresholdPct !== undefined) data.burst_threshold_pct = numOrNull(req.body.burstThresholdPct);
     if (req.body.burstTimeS        !== undefined) data.burst_time_s        = numOrNull(req.body.burstTimeS);
 
+    // Prepaid. billingType and validityPeriod are a pair — a prepaid plan with no
+    // validity period sells an unbounded amount of time for a fixed price, and the
+    // expiry job would never pick it up (isPrepaidPlan requires both), so the plan
+    // would look prepaid in the CRM and behave postpaid on the network.
+    if (req.body.billingType !== undefined) {
+      const bt = String(req.body.billingType).toLowerCase();
+      if (!['postpaid', 'prepaid'].includes(bt)) {
+        return res.status(400).json({ error: 'billingType must be "postpaid" or "prepaid"' });
+      }
+      data.billing_type = bt;
+      if (bt === 'prepaid') {
+        const vp = parseInt(req.body.validityPeriod, 10);
+        if (!(vp > 0)) {
+          return res.status(400).json({ error: 'A prepaid plan needs validityPeriod (days) greater than 0' });
+        }
+        data.validity_period = vp;
+      }
+    } else if (req.body.validityPeriod !== undefined) {
+      data.validity_period = numOrNull(req.body.validityPeriod);
+    }
+
+    // Switching a plan that has live subscribers changes how they are billed and cut
+    // off, so it is refused rather than applied quietly. Move the subscribers first.
+    if (data.billing_type && data.billing_type !== plan.billing_type) {
+      const inUse = await req.prisma.subscribers.count({
+        where: { plan_id: id, status: { in: ['active', 'suspended'] } } });
+      if (inUse > 0 && req.body.confirmBillingTypeChange !== true) {
+        return res.status(409).json({
+          error: `${inUse} active subscriber(s) are on this plan. Changing its billing type changes how they are billed and disconnected. Re-send with confirmBillingTypeChange:true to proceed.`,
+          subscriberCount: inUse,
+        });
+      }
+    }
+
     await req.prisma.plans.update({ where: { id }, data });
 
     // Update features if provided
@@ -2998,6 +3132,18 @@ router.post('/plans', adminAuth(), async (req, res) => {
       return res.status(400).json({ error: 'Required: name, speedMbps, speedLabel, price' });
     }
 
+    // Prepaid plans must carry a validity period. Without one the plan sells time
+    // with no end, isPrepaidPlan() rejects it, and the expiry job silently never
+    // touches its subscribers — prepaid in the CRM, postpaid on the network.
+    const billingType = String(req.body.billingType || 'postpaid').toLowerCase();
+    if (!['postpaid', 'prepaid'].includes(billingType)) {
+      return res.status(400).json({ error: 'billingType must be "postpaid" or "prepaid"' });
+    }
+    const validityPeriod = parseInt(req.body.validityPeriod, 10);
+    if (billingType === 'prepaid' && !(validityPeriod > 0)) {
+      return res.status(400).json({ error: 'A prepaid plan needs validityPeriod (days) greater than 0' });
+    }
+
     const plan = await req.prisma.plans.create({
       data: {
         name: name.toUpperCase(),
@@ -3019,7 +3165,9 @@ router.post('/plans', adminAuth(), async (req, res) => {
         burst_download_mbps: parseInt(req.body.burstDownloadMbps, 10) || null,
         burst_upload_mbps:   parseInt(req.body.burstUploadMbps, 10) || null,
         burst_threshold_pct: parseInt(req.body.burstThresholdPct, 10) || 80,
-        burst_time_s:        parseInt(req.body.burstTimeS, 10) || 16
+        burst_time_s:        parseInt(req.body.burstTimeS, 10) || 16,
+        billing_type: billingType,
+        validity_period: billingType === 'prepaid' ? validityPeriod : null
       }
     });
 
@@ -3539,12 +3687,24 @@ router.get('/settings', adminAuth(), async (req, res) => {
 // ============================================
 // PUT /api/admin/settings - Update settings
 // ============================================
+const AUTO_RESTRICT_KEY = 'billing_auto_restrict_enabled';
+
 router.put('/settings', adminAuth(), async (req, res) => {
   try {
     const { settings } = req.body; // Array of { key, value }
     if (!settings || !Array.isArray(settings)) {
       return res.status(400).json({ error: 'Settings array required' });
     }
+
+    // Read the CURRENT state of the cutoff switch before writing anything. The Settings
+    // page re-sends every key on save, so "the payload contains this key set to true" is
+    // not the same question as "someone just turned it on" — without the before-value,
+    // saving an unrelated field while the feature was already on would launch a fresh
+    // sweep every time.
+    const touchesAutoRestrict = settings.some(s => s.key === AUTO_RESTRICT_KEY);
+    const wasEnabled = touchesAutoRestrict && typeof restriction.isAutoRestrictEnabled === 'function'
+      ? await restriction.isAutoRestrictEnabled(req.prisma)
+      : false;
 
     for (const s of settings) {
       await req.prisma.system_settings.upsert({
@@ -3555,7 +3715,29 @@ router.put('/settings', adminAuth(), async (req, res) => {
     }
 
       req.auditLog('SETTINGS_CHANGE', { keys: settings.map(s => s.key) }).catch(() => {});
-    res.json({ message: 'Settings updated' });
+
+    // Off -> on means now, not at the next daily pass. Enforcement runs detached; what
+    // comes back is the preview, so the response can state how many accounts are being
+    // cut off rather than just "Settings updated".
+    let autoRestrict = null;
+    if (touchesAutoRestrict && !wasEnabled && radiusDb &&
+        typeof restriction.sweepOnEnable === 'function' &&
+        await restriction.isAutoRestrictEnabled(req.prisma)) {
+      try {
+        autoRestrict = await restriction.sweepOnEnable(req.prisma, radiusDb, {
+          // adminAuth attaches req.admin, not req.adminUser — the latter is undefined
+          // everywhere it appears in this file and silently degrades to 'admin', which
+          // would make the audit row unable to say who threw the switch.
+          by: req.admin?.username || req.admin?.email || 'admin',
+        });
+      } catch (err) {
+        // The setting is saved either way — say the sweep failed rather than the save.
+        console.error('[settings] auto-restrict sweep could not start: ' + err.message);
+        autoRestrict = { triggered: false, error: err.message };
+      }
+    }
+
+    res.json({ message: 'Settings updated', autoRestrict });
   } catch (err) {
     res.status(500).json({ error: 'Failed to update settings' });
   }

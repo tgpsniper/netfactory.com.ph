@@ -76,6 +76,107 @@ async function getRouterDeviceId(prisma) {
   return rows[0].id;
 }
 
+// ── router selection, per subscriber ────────────────────────
+// getRouterDeviceId above answers "which router is lowest-numbered and active", which
+// was the same question as "which router carries this customer" only while there was
+// one router. There are now 16, and not one registered subscriber device sits behind
+// the one it returns — so every address-list write landed on a router that could not
+// see the traffic it was supposed to restrict, and the walled garden never applied to
+// anybody. It is kept only for the DHCP-server callers (device-release, nf-paying).
+//
+// The mapping that does hold is the one RADIUS already records for us. An accounting
+// session carries both halves of the answer:
+//
+//   radacct.framedipaddress -> the address to put on nf-restricted
+//   radacct.nasipaddress    -> nas.nasname -> nas.shortname -> mikrotik_devices.label
+//
+// Joined on shortname/label rather than address because the NAS-IP-Address a router
+// sends is its internal MGMT address (192.168.9x.x) while mikrotik_devices.host is the
+// public address its API answers on; those differ on every device here. Falling back
+// to host covers a NAS row whose shortname was never lined up with a device label.
+async function routerMap(prisma, radiusDb) {
+  const [nasRows] = await radiusDb.query('SELECT nasname, shortname FROM nas');
+  const devices = await prisma.mikrotik_devices.findMany({
+    where: { is_active: true }, select: { id: true, label: true, host: true },
+  });
+  const norm = (v) => String(v || '').trim().toLowerCase();
+  const byLabel = new Map(devices.map(d => [norm(d.label), d.id]));
+  const byHost = new Map(devices.map(d => [String(d.host || '').trim(), d.id]));
+
+  const map = new Map();           // NAS address -> mikrotik device id
+  for (const n of nasRows) {
+    const nasname = String(n.nasname || '').trim();
+    if (!nasname) continue;
+    const id = byLabel.has(norm(n.shortname)) ? byLabel.get(norm(n.shortname)) : byHost.get(nasname);
+    if (id !== undefined) map.set(nasname, id);
+  }
+  // A router can also appear as its own NAS address with no matching nas row.
+  for (const d of devices) {
+    const h = String(d.host || '').trim();
+    if (h && !map.has(h)) map.set(h, d.id);
+  }
+  return map;
+}
+
+// Which router is carrying this address right now. Used by the payment window, which
+// has an address in hand and needs to punch a hole on the right box.
+async function routerDeviceIdForIp(prisma, radiusDb, ip) {
+  const [rows] = await radiusDb.query(
+    `SELECT host(nasipaddress) AS nasip FROM radacct
+      WHERE framedipaddress = ?::inet AND acctstoptime IS NULL
+      ORDER BY radacctid DESC LIMIT 1`, [ip]);
+  if (!rows.length) return null;
+  const map = await routerMap(prisma, radiusDb);
+  const id = map.get(rows[0].nasip);
+  return id === undefined ? null : id;
+}
+
+// Every restricted device, the address it currently holds, and the router that
+// authorised it. Driven off open accounting sessions because that is the same source
+// /api/restricted uses to identify a caller — so the firewall and the payment page can
+// never disagree about who is sitting on which address.
+//
+// LEFT JOIN, not JOIN: a restricted device with no open session cannot be placed on any
+// router, and that is worth reporting rather than silently dropping. It means the
+// cutoff does not bite until they reconnect.
+async function desiredRestrictedByRouter(prisma, radiusDb) {
+  const [rows] = await radiusDb.query(
+    `SELECT DISTINCT ON (d.mac)
+            d.mac,
+            r.subscriber_id,
+            host(a.framedipaddress) AS ip,
+            host(a.nasipaddress)    AS nasip
+       FROM subscriber_restrictions r
+       JOIN hotspot_mac_devices d ON d.subscriber_id = r.subscriber_id
+       LEFT JOIN radacct a ON a.username = d.mac
+                          AND a.acctstoptime IS NULL
+                          AND a.framedipaddress IS NOT NULL
+      WHERE r.lifted_at IS NULL
+      ORDER BY d.mac, a.radacctid DESC NULLS LAST`);
+
+  const map = await routerMap(prisma, radiusDb);
+  const byDevice = new Map();      // device id -> Set of addresses
+  const placed = [];
+  const unplaceable = [];
+
+  for (const row of rows) {
+    if (!row.ip) {
+      unplaceable.push({ mac: row.mac, subscriberId: Number(row.subscriber_id), reason: 'no open session' });
+      continue;
+    }
+    const deviceId = map.get(row.nasip);
+    if (deviceId === undefined) {
+      unplaceable.push({ mac: row.mac, subscriberId: Number(row.subscriber_id), ip: row.ip,
+        nasip: row.nasip, reason: 'NAS not mapped to an active router' });
+      continue;
+    }
+    if (!byDevice.has(deviceId)) byDevice.set(deviceId, new Set());
+    byDevice.get(deviceId).add(row.ip);
+    placed.push({ mac: row.mac, subscriberId: Number(row.subscriber_id), ip: row.ip, deviceId });
+  }
+  return { byDevice, placed, unplaceable };
+}
+
 // ── router helpers ──────────────────────────────────────────
 // Every router call is best-effort: the RADIUS side is the source of truth, and a
 // router that is unreachable must not roll back a restriction that is already
@@ -161,11 +262,50 @@ async function desiredRestrictedIps(prisma, radiusDb, deviceId) {
   return { macs, ips: Object.values(byMac) };
 }
 
-// Re-apply the address list from the database. Idempotent.
-async function syncAddressList(prisma, radiusDb) {
-  const deviceId = await getRouterDeviceId(prisma);
-  const { ips } = await desiredRestrictedIps(prisma, radiusDb, deviceId);
-  return reconcileAddressList(prisma, deviceId, ips, 'billing restriction (synced)');
+// Re-apply the address list from the database, on every router. Idempotent.
+//
+// Every active router is reconciled, not only the ones with somebody to restrict:
+// a device that moves between concentrators leaves its old entry behind, and an entry
+// nobody clears keeps whoever inherits that address inside the garden. A router with
+// nobody restricted on it therefore gets an empty want-set, which clears exactly that
+// drift.
+//
+// Per-router failures are collected rather than thrown. One unreachable router must not
+// stop the other fifteen from being brought into line.
+// Set whenever a router could not be reconciled, cleared by a clean sweep. The sync job
+// skips its work entirely when nobody is restricted, which is right for the normal case
+// but would otherwise strand an entry: if the last restriction is lifted while a router
+// is unreachable, that router keeps a paid-up customer inside the garden and no later
+// run ever looks at it again. This flag is what makes the job come back.
+let _needsSweep = false;
+function needsSweep() { return _needsSweep; }
+
+async function syncAddressList(prisma, radiusDb, opts = {}) {
+  const { byDevice, placed, unplaceable } = await desiredRestrictedByRouter(prisma, radiusDb);
+  const devices = await prisma.mikrotik_devices.findMany({
+    where: { is_active: true }, select: { id: true, label: true }, orderBy: { id: 'asc' },
+  });
+
+  const added = [], removed = [], failed = [];
+  // Bounded concurrency, not Promise.all over all sixteen. Opening every router at once
+  // makes them time each other out — the RouterOS API connect is slow enough that a
+  // burst of sixteen tripped the 10s connect timeout on a dozen boxes that are
+  // individually fine. Four at a time finishes well inside the 5-minute schedule.
+  const queue = devices.slice();
+  const worker = async () => {
+    for (let d = queue.shift(); d; d = queue.shift()) {
+      const want = [...(byDevice.get(d.id) || [])];
+      const r = await safely(`reconcile ${ADDRESS_LIST} on #${d.id} ${d.label}`, () =>
+        reconcileAddressList(prisma, d.id, want, opts.comment || 'billing restriction (synced)'));
+      if (!r.ok) { failed.push({ deviceId: d.id, label: d.label, error: r.error }); continue; }
+      for (const ip of r.result.added) added.push(`${ip}@${d.label}`);
+      for (const ip of r.result.removed) removed.push(`${ip}@${d.label}`);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(4, devices.length) }, worker));
+
+  _needsSweep = failed.length > 0;
+  return { added, removed, failed, placed, unplaceable };
 }
 
 // ── grace period ────────────────────────────────────────────
@@ -221,6 +361,11 @@ async function restrictionCandidates(prisma, radiusDb, graceDays) {
        FROM subscribers s
        JOIN invoices i ON i.subscriber_id = s.id
                       AND i.status IN ('pending','partial','overdue')
+                      -- A prepaid top-up is a purchase, never a debt. An abandoned
+                      -- checkout leaves a pending invoice dated today; counted here it
+                      -- would age past grace and cut off a prepaid customer for
+                      -- "non-payment" while they still hold weeks of paid service.
+                      AND i.prepaid_days IS NULL
        LEFT JOIN LATERAL (
               -- 'success' is what the rest of the app writes (webhooks.js, accounting.js,
               -- admin.js all filter on it). The others are accepted defensively: an
@@ -321,11 +466,20 @@ async function restrictSubscriber(prisma, radiusDb, subscriberId, opts = {}) {
 
   // Router side — immediate effect. Failure here leaves the restriction recorded and
   // durable; it just will not bite until the next renewal, and the caller is told.
+  //
+  // ok reflects THIS subscriber's routers only. Reconciling touches all sixteen, and a
+  // box that is unreachable for unrelated reasons must not report a cutoff as failed
+  // when the router actually carrying the customer took it cleanly.
   const router = await safely('apply address-list', async () => {
-    const deviceId = await getRouterDeviceId(prisma);
-    const { ips } = await desiredRestrictedIps(prisma, radiusDb, deviceId);
-    return reconcileAddressList(prisma, deviceId, ips, `restricted sub#${sid}`);
-  });
+    const out = await syncAddressList(prisma, radiusDb, { comment: `restricted sub#${sid}` });
+    const mine = new Set(out.placed.filter(p => p.subscriberId === sid).map(p => p.deviceId));
+    const myFailures = out.failed.filter(f => mine.has(f.deviceId));
+    if (myFailures.length) throw new Error(myFailures.map(f => `${f.label}: ${f.error}`).join('; '));
+    // Not an error, but the cutoff is not live either: nothing to pin the rules to
+    // until the device reconnects and RADIUS records an address for it.
+    out.notApplied = out.unplaceable.filter(u => u.subscriberId === sid);
+    return out;
+  }, 45000);
 
   return { alreadyRestricted: false, devices: snapshot, macs, mode, router };
 }
@@ -408,11 +562,17 @@ async function unrestrictSubscriber(prisma, radiusDb, subscriberId, opts = {}) {
       [by, open.id]);
   });
 
-  const router = await safely('clear address-list', async () => {
-    const deviceId = await getRouterDeviceId(prisma);
-    const { ips } = await desiredRestrictedIps(prisma, radiusDb, deviceId);
-    return reconcileAddressList(prisma, deviceId, ips, 'billing restriction');
-  });
+  // Clearing runs across every router for the same reason restricting does — and here
+  // a missed router is the worse failure of the two: it leaves a paid-up customer
+  // walled in. Any failure is surfaced, not just this subscriber's, so the reconcile
+  // job knows there is drift left to repair.
+  // Unlike restricting, a failure here is not thrown. The restriction is already lifted
+  // in the database and the customer's RADIUS group is back; refusing to report that
+  // because an unrelated router was unreachable helps nobody. What a failure does do is
+  // arm needsSweep, so the reconcile job keeps coming back until every router is clear —
+  // a stale entry left behind is a customer who paid and is still walled in.
+  const router = await safely('clear address-list', () =>
+    syncAddressList(prisma, radiusDb, { comment: 'billing restriction' }), 45000);
 
   return { wasRestricted: true, restored, router, restrictionId: open.id };
 }
@@ -496,6 +656,19 @@ async function restoreIfSettled(prisma, radiusDb, subscriberId, opts = {}) {
     if (!open) return { restored: false, reason: 'not restricted' };
     if (open.no_auto_restore) return { restored: false, reason: 'held for manual review' };
 
+    // Prepaid carries no debt, so "no overdue invoice" does not mean "paid up" — an
+    // expired prepaid account has simply run out. Without this guard, settling any
+    // unrelated invoice (an installation fee, an old postpaid balance from before the
+    // plan was switched) would hand back service nobody bought. Topping up goes
+    // through prepaid.grant(), which restores on its own.
+    const sub = await prisma.subscribers.findUnique({
+      where: { id: sid }, include: { plan: true },
+    });
+    if (sub && String(sub.plan && sub.plan.billing_type || '').toLowerCase() === 'prepaid') {
+      const exp = sub.expires_at ? new Date(sub.expires_at).getTime() : 0;
+      if (exp <= Date.now()) return { restored: false, reason: 'prepaid service expired' };
+    }
+
     // Reuse the eligibility query rather than re-deriving "settled" here — one
     // definition of who owes money, so payment and cutoff can never disagree.
     const { days } = await getGraceDays(prisma);
@@ -518,11 +691,30 @@ async function restoreIfSettled(prisma, radiusDb, subscriberId, opts = {}) {
   }
 }
 
+// Only one applying sweep at a time. There are now three ways to start one — the daily
+// job, POST /restrictions/run?apply=true, and switching the setting on — and each
+// restriction is a router write, so two overlapping sweeps would queue tens of API
+// calls against the same boxes and add the same address twice. The unique index on
+// subscriber_restrictions already stops a double cut-off in the database; this stops
+// the wasted router traffic in front of it. Dry runs are never blocked: they write
+// nothing, and a preview must always be able to answer.
+let _sweepRunning = false;
+
 // dryRun reports what it would do without touching anything — this is what runs while
 // the feature is switched off, so the behaviour can be watched in the logs for a few
 // days before it is trusted with real customers.
 async function runAutoRestrict(prisma, radiusDb, opts = {}) {
   const dryRun = opts.dryRun !== undefined ? opts.dryRun : !(await isAutoRestrictEnabled(prisma));
+
+  if (!dryRun && _sweepRunning) {
+    console.warn('[auto-restrict] a sweep is already running — this one is skipped');
+    // Same shape as a real result so every caller's .length checks stay valid.
+    return { dryRun: false, graceDays: null, mode: null, cap: null, capped: false,
+             eligible: [], restricted: [], skippedNoDevices: [],
+             skipped: 'a sweep is already running' };
+  }
+  if (!dryRun) _sweepRunning = true;
+  try {
   const { days } = await getGraceDays(prisma);
   const { mode } = await getRestrictionMode(prisma);
   const cap = await readNumberSetting(prisma, 'billing_auto_restrict_max_per_run', 25, 1, 10000);
@@ -567,13 +759,98 @@ async function runAutoRestrict(prisma, radiusDb, opts = {}) {
     // registered device is invisible to enforcement and someone should know.
     skippedNoDevices,
   };
+  } finally {
+    if (!dryRun) _sweepRunning = false;
+  }
+}
+
+// ── run the moment the switch is thrown ─────────────────────
+// Turning the feature on used to change nothing until the next daily pass, which is
+// up to 24 hours away — on 2026-09-22 the setting read true while the last pass had
+// already run as a dry run, so ten accounts that were 28 days past due were still
+// enjoying full service and the dashboard said restriction was ON. An operator who
+// throws this switch means "now".
+//
+// Split in two on purpose. The preview is one indexed query and is awaited, so the
+// caller can answer the HTTP request with the real number of accounts about to be
+// cut off. The enforcement is a router write per subscriber — up to the per-run cap,
+// several seconds each — and runs detached, because holding a settings save open for
+// a minute behind nginx would time out and leave the operator unsure whether the
+// setting even stuck.
+//
+// The outcome therefore has to be recorded where it can be found later: the log, and
+// an audit_log row written here rather than through req.auditLog, which belongs to a
+// request that has already been answered.
+async function sweepOnEnable(prisma, radiusDb, opts = {}) {
+  const by = opts.by || 'admin';
+  const preview = await runAutoRestrict(prisma, radiusDb, { dryRun: true });
+
+  console.log('[auto-restrict] switched on by ' + by + ' — ' + preview.eligible.length +
+    ' account(s) past ' + preview.graceDays + ' days grace, enforcing now (' + preview.mode + ')');
+
+  // Deliberately not awaited. dryRun is left unset so runAutoRestrict re-reads the
+  // setting: if the upsert that triggered this somehow did not land, this becomes a
+  // dry run instead of cutting anybody off on a setting that was never saved.
+  setImmediate(() => {
+    runAutoRestrict(prisma, radiusDb)
+      .then(async (out) => {
+        if (out.skipped) {
+          console.warn('[auto-restrict] on-enable sweep skipped: ' + out.skipped);
+          return;
+        }
+        if (out.dryRun) {
+          console.warn('[auto-restrict] on-enable sweep ran as a DRY RUN — the setting did not stick');
+          return;
+        }
+        console.log('[auto-restrict] on-enable sweep ' +
+          (out.mode === 'full' ? 'cut off ' : 'restricted ') + out.restricted.length + ' subscriber(s)' +
+          (out.capped ? ' (CAP HIT — ' + out.eligible.length + ' qualify, limit ' + out.cap + ')' : ''));
+        out.restricted.forEach(r => console.log('    #' + r.subscriberId + ' ' + r.account +
+          ' — ' + r.daysPastDue + 'd past due, balance ' + r.balance +
+          (r.routerApplied ? '' : ' (ROUTER NOT UPDATED)')));
+        if (out.skippedNoDevices.length) {
+          console.warn('[auto-restrict] ' + out.skippedNoDevices.length +
+            ' subscriber(s) past grace have no registered device, so nothing could be enforced: ' +
+            out.skippedNoDevices.join(', '));
+        }
+        try {
+          await prisma.audit_log.create({ data: {
+            user_type: 'system', user_id: 0,
+            action: 'BILLING_AUTO_RESTRICT_ON_ENABLE',
+            entity_type: 'subscriber_restrictions',
+            details: { by, graceDays: out.graceDays, mode: out.mode,
+                       restricted: out.restricted, capped: out.capped,
+                       skippedNoDevices: out.skippedNoDevices },
+            ip_address: '127.0.0.1',
+          }});
+        } catch (e) {
+          console.error('[auto-restrict] could not write audit row: ' + e.message);
+        }
+      })
+      // Detached work has no request to fail, so an unhandled rejection here would be
+      // an invisible crash. Catch it and say so.
+      .catch(err => console.error('[auto-restrict] on-enable sweep failed: ' + err.message));
+  });
+
+  return {
+    triggered: true,
+    graceDays: preview.graceDays,
+    mode: preview.mode,
+    eligible: preview.eligible.length,
+    cap: preview.cap,
+    capped: preview.capped,
+    skippedNoDevices: preview.skippedNoDevices.length,
+    accounts: preview.eligible.map(e => e.account),
+  };
 }
 
 module.exports = {
   RESTRICTED_GROUP,
   ADDRESS_LIST,
+  needsSweep,
   isAutoRestrictEnabled,
   runAutoRestrict,
+  sweepOnEnable,
   runAutoRestore,
   restoreIfSettled,
   GRACE_KEY,
@@ -585,6 +862,9 @@ module.exports = {
   getGraceDays,
   restrictionCandidates,
   getRouterDeviceId,
+  routerMap,
+  routerDeviceIdForIp,
+  desiredRestrictedByRouter,
   getRestriction,
   restrictSubscriber,
   unrestrictSubscriber,

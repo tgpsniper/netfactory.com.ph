@@ -10,6 +10,8 @@ const { getCompany } = require('../utils/company');
 const radiusDb = require('../config/radius-db');
 
 const router = express.Router();
+const prepaid = require('../utils/prepaid');
+const arrears = require('../utils/arrears');
 
 // Login rate limiter - set high, rely on DB lockout after 6 attempts
 const loginLimiter = rateLimit({
@@ -845,12 +847,46 @@ router.get('/account', portalAuth, async (req, res) => {
 // ============================================
 router.put('/account', portalAuth, async (req, res) => {
   try {
-    const { firstName, middleName, lastName, email, phone, address, barangay, municipality, province, postalCode } = req.body;
+    const { email, phone, address, barangay, municipality, province, postalCode } = req.body;
     const updateData = {};
 
-    if (firstName) updateData.first_name = firstName.trim();
-    if (middleName !== undefined) updateData.middle_name = middleName ? middleName.trim() : null;
-    if (lastName) updateData.last_name = lastName.trim();
+    // Identity fields are not editable from the portal.
+    //
+    // first_name, middle_name, last_name and account_number identify the person on
+    // the service contract, on every invoice already issued against it, and — via
+    // the account number — the RADIUS username the session authenticates with. A
+    // subscriber able to rewrite them could quietly re-point a billing history at a
+    // different name, and there is no second record to reconcile against afterwards.
+    // Changing them is a staff action in the CRM, where it is attributable to an
+    // operator.
+    //
+    // Ignored rather than refused with a 400: a cached copy of the portal still
+    // posts these on every save, and failing the whole request would stop
+    // subscribers updating the address and phone number they ARE allowed to change.
+    // The attempt is recorded instead, so a crafted request is visible rather than
+    // merely dropped.
+    // Map each rejected input name to the column it would have written, so an
+    // unchanged value echoed back by the form can be told apart from a real attempt
+    // to change one. Without that comparison every ordinary save would flag itself,
+    // the audit entry would mean nothing, and a genuine tamper would be buried in
+    // the noise it created.
+    const LOCKED = {
+      firstName: 'first_name',   first_name: 'first_name',
+      middleName: 'middle_name', middle_name: 'middle_name',
+      lastName: 'last_name',     last_name: 'last_name',
+      accountNumber: 'account_number', account_number: 'account_number',
+    };
+    const supplied = Object.keys(LOCKED).filter(k => req.body[k] !== undefined);
+    let attemptedLocked = [];
+    if (supplied.length) {
+      const current = await req.prisma.subscribers.findUnique({
+        where: { id: req.subscriberId },
+        select: { first_name: true, middle_name: true, last_name: true, account_number: true }
+      });
+      const norm = v => (v === null || v === undefined) ? '' : String(v).trim();
+      attemptedLocked = supplied.filter(
+        k => norm(req.body[k]) !== norm(current && current[LOCKED[k]]));
+    }
 
     if (email) {
       const existing = await req.prisma.subscribers.findFirst({
@@ -890,6 +926,15 @@ router.put('/account', portalAuth, async (req, res) => {
     }
 
     if (Object.keys(updateData).length === 0) {
+      // Someone who edited only their name would otherwise be told "No fields to
+      // update", which reads like a bug rather than a rule and invites a support
+      // call. Name the actual reason instead.
+      if (attemptedLocked.length) {
+        return res.status(403).json({
+          error: 'Your name and account number cannot be changed here. ' +
+                 'Please contact support to correct them.'
+        });
+      }
       return res.status(400).json({ error: 'No fields to update' });
     }
 
@@ -909,13 +954,19 @@ router.put('/account', portalAuth, async (req, res) => {
         action: 'profile_updated',
         entity_type: 'subscribers',
         entity_id: req.subscriberId,
-        details: { fields: Object.keys(updateData) },
+        details: {
+          fields: Object.keys(updateData),
+          ...(attemptedLocked.length ? { rejectedLockedFields: attemptedLocked } : {})
+        },
         ip_address: req.ip
       }
     });
 
       // ── New audit trail ──
-      req.auditLog('ACCOUNT_UPDATE', { fields: Object.keys(updateData) }).catch(() => {});
+      req.auditLog('ACCOUNT_UPDATE', {
+          fields: Object.keys(updateData),
+          ...(attemptedLocked.length ? { rejectedLockedFields: attemptedLocked } : {})
+        }).catch(() => {});
 
     res.json({ message: 'Profile updated successfully' });
   } catch (err) {
@@ -1260,6 +1311,12 @@ router.post('/invoices/:id/pay', portalAuth, async (req, res) => {
       return res.status(400).json({ error: 'Invoice is already paid' });
     }
 
+    // Arrears first: paying this month while last month is overdue takes the money
+    // and leaves the cutoff in place, because restoreIfSettled looks at the whole
+    // balance. See src/utils/arrears.js.
+    const owed = await arrears.blockingArrears(req.prisma, req.subscriber.id, invoice);
+    if (owed) return res.status(409).json(arrears.arrearsResponse(owed));
+
     // Only Xendit is supported for online payment right now
     if (method !== 'xendit') {
       return res.status(400).json({ error: 'Only Xendit payments are supported online. For other methods, please visit our office or contact support.' });
@@ -1275,7 +1332,7 @@ router.post('/invoices/:id/pay', portalAuth, async (req, res) => {
 
     const sub = invoice.subscriber;
     const plan = sub.plan;
-    const externalId = `J2-PAY-${invoice.invoice_number}-${Date.now()}`;
+    const externalId = `NF-PAY-${invoice.invoice_number}-${Date.now()}`;
     const portalUrl = (process.env.APP_URL || 'https://netfactory.com.ph') + '/portal';
 
     // Format phone to E.164 (+63...)
@@ -1448,6 +1505,96 @@ router.get('/invoices/:id/payment-status', portalAuth, async (req, res) => {
 // ============================================
 // GET /api/portal/credits — Subscriber credit history
 // ============================================
+// ============================================================
+// PREPAID — self-service renewal
+// ============================================================
+// Deliberately two calls rather than one: this mints the invoice, and the client then
+// sends it through the existing POST /invoices/:id/pay checkout. There is exactly one
+// place in this file that talks to Xendit and it stays that way — a second copy would
+// drift, and the copy that drifts is always the one handling money.
+
+// GET /api/portal/prepaid — standing + what renewal costs
+router.get('/prepaid', portalAuth, async (req, res) => {
+  try {
+    const status = await prepaid.getStatus(req.prisma, req.subscriber.id);
+    if (!status) return res.status(404).json({ error: 'Account not found' });
+    if (!status.prepaid) return res.json({ prepaid: false });
+
+    const pending = await req.prisma.invoices.findFirst({
+      where: { subscriber_id: req.subscriber.id, status: { in: ['pending', 'partial'] },
+               prepaid_days: { not: null } },
+      orderBy: { id: 'desc' },
+    });
+    const recent = await req.prisma.prepaid_topups.findMany({
+      where: { subscriber_id: req.subscriber.id },
+      orderBy: { created_at: 'desc' }, take: 6,
+    });
+
+    res.json({
+      prepaid: true,
+      planName: status.planName,
+      expiresAt: status.expiresAt,
+      expired: status.expired,
+      daysRemaining: status.daysRemaining,
+      renewAmount: status.price,
+      renewDays: status.validityDays,
+      // Offered as whole multiples of the plan period — the same rule the counter and
+      // the walled garden use, so a customer cannot construct an amount that buys
+      // nothing and then wonder where their money went.
+      options: [1, 2, 3, 6].map(n => ({
+        periods: n,
+        days: n * status.validityDays,
+        amount: Number((status.price * n).toFixed(2)),
+      })),
+      pendingInvoice: pending ? {
+        id: pending.id, number: pending.invoice_number,
+        amount: Number(pending.amount), days: pending.prepaid_days,
+      } : null,
+      history: recent.map(t => ({
+        amount: Number(t.amount), days: t.days,
+        expiresAfter: t.expires_after, source: t.source, createdAt: t.created_at,
+      })),
+    });
+  } catch (err) {
+    console.error('[portal] prepaid status:', err);
+    res.status(500).json({ error: 'Could not load your prepaid status' });
+  }
+});
+
+// POST /api/portal/prepaid/topup — mint the renewal invoice
+router.post('/prepaid/topup', portalAuth, async (req, res) => {
+  try {
+    const status = await prepaid.getStatus(req.prisma, req.subscriber.id);
+    if (!status) return res.status(404).json({ error: 'Account not found' });
+    if (!status.prepaid) return res.status(400).json({ error: 'This account is not on a prepaid plan' });
+
+    // Reuse an unpaid renewal rather than stacking up abandoned invoices.
+    const existing = await req.prisma.invoices.findFirst({
+      where: { subscriber_id: req.subscriber.id, status: { in: ['pending', 'partial'] },
+               prepaid_days: { not: null } },
+      orderBy: { id: 'desc' },
+    });
+    if (existing) {
+      return res.json({ success: true, reused: true, invoiceId: existing.id,
+        invoiceNumber: existing.invoice_number, amount: Number(existing.amount),
+        days: existing.prepaid_days });
+    }
+
+    const periods = Math.min(Math.max(parseInt(req.body.periods) || 1, 1), 12);
+    const invoice = await prepaid.createTopUpInvoice(req.prisma, {
+      subscriberId: req.subscriber.id,
+      days: periods * status.validityDays,
+      by: 'portal',
+    });
+    res.status(201).json({ success: true, reused: false, invoiceId: invoice.id,
+      invoiceNumber: invoice.invoice_number, amount: Number(invoice.amount),
+      days: invoice.prepaid_days });
+  } catch (err) {
+    console.error('[portal] prepaid topup:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/credits', portalAuth, async (req, res) => {
   try {
     const sub = req.subscriber;
@@ -1691,7 +1838,7 @@ router.post('/invoices/pay-all', portalAuth, async (req, res) => {
     const sub = invoices[0].subscriber;
     const plan = sub.plan;
     const invoiceNumbers = invoices.map(inv => inv.invoice_number).join(', ');
-    const externalId = `J2-PAYALL-${Date.now()}`;
+    const externalId = `NF-PAYALL-${Date.now()}`;
     const portalUrl = (process.env.APP_URL || 'https://netfactory.com.ph') + '/portal';
 
     // Format phone to E.164 (+63...)

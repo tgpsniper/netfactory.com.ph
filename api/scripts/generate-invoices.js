@@ -112,11 +112,26 @@ async function generateMonthlyInvoices() {
     console.log('Found ' + subscribers.length + ' eligible subscribers (active + suspended)' +
       (prepaidSkipped ? ', skipped ' + prepaidSkipped + ' prepaid' : ''));
 
+    // "Already billed for this month" is not the same as "holds an invoice labelled
+    // exactly 'September 2026'". A subscriber who joined mid-month is billed under
+    // 'Prorated — September 2026', and against an exact match that invoice is invisible
+    // — so this would raise a second, full-month invoice for the same weeks. On
+    // 2026-09-21 that was 34 customers out of 98 the script wanted to create, and since
+    // being overdue is what selects people for the walled garden, a duplicate does not
+    // just overcharge: it eventually cuts off someone who paid.
+    //
+    // Match on the period appearing anywhere in the label instead. That covers the
+    // prorated form and any other prefix without needing to enumerate them.
     const existing = await prisma.invoices.findMany({
-      where: { billing_period: billingPeriod },
-      select: { subscriber_id: true }
+      where: { billing_period: { contains: billingPeriod } },
+      select: { subscriber_id: true, billing_period: true }
     });
     const existingIds = new Set(existing.map(e => e.subscriber_id));
+    const variants = [...new Set(existing.map(e => e.billing_period))]
+      .filter(p => p !== billingPeriod);
+    if (variants.length) {
+      console.log('  Also counting as already billed: ' + variants.join(', '));
+    }
 
     let created = 0;
     let skipped = 0;

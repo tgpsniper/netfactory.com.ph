@@ -93,7 +93,21 @@ function readParam(device, path) {
     if (cur == null) return null;
     cur = cur[p];
   }
-  if (cur && typeof cur === 'object' && '_value' in cur) return cur._value;
+  if (cur && typeof cur === 'object') {
+    // GenieACS records a parameter's EXISTENCE separately from its value. After a
+    // GetParameterNames, a node it has discovered but not yet read back looks like
+    // {"_object":false,"_writable":false} — no _value at all. Returning that node
+    // hands every caller an object where it expects a string or a number: the
+    // TR-069 manager rendered "[object Object]" in the Manufacturer column and then
+    // died on (d.manufacturer || "").toLowerCase(), because an object is truthy so
+    // the || "" guard never fired. Metrics would have parsed it to NaN just as
+    // quietly.
+    //
+    // A discovered-but-unread parameter is "we do not know this value yet", which is
+    // null, not an object. All 20 call sites want a scalar, so unwrap here rather
+    // than defending against the node shape twenty times over.
+    return ('_value' in cur) ? cur._value : null;
+  }
   return cur;
 }
 

@@ -25,7 +25,9 @@ const rateLimit = require('express-rate-limit');
 const router = express.Router();
 const { getCompany } = require('../utils/company');
 const mikrotik = require('../utils/mikrotik');
-const { getRouterDeviceId } = require('../utils/restriction');
+const { routerDeviceIdForIp } = require('../utils/restriction');
+const radiusDb = require('../config/radius-db');
+const prepaid = require('../utils/prepaid');
 
 // ── timed payment window ────────────────────────────────────
 // A checkout cannot be completed inside a domain allow-list. Card payments redirect to
@@ -43,8 +45,12 @@ const { getRouterDeviceId } = require('../utils/restriction');
 // cutting people off mid-checkout, which is worse than not offering it at all.
 const PAYMENT_WINDOW_MIN = Number(process.env.PAYMENT_WINDOW_MIN || 20);
 
-async function openPaymentWindow(prisma, ip) {
-  const deviceId = await getRouterDeviceId(prisma);
+async function openPaymentWindow(prisma, radiusDb, ip) {
+  // The hole has to be punched on the router carrying this address, not on whichever
+  // router happens to sort first. Opening it on the wrong box does nothing at all, and
+  // the customer hits a dead 443 halfway through a card payment.
+  const deviceId = await routerDeviceIdForIp(prisma, radiusDb, ip);
+  if (deviceId === null) throw new Error(`no open session for ${ip}; cannot place payment window`);
   const lists = await mikrotik.getAddressLists(prisma, deviceId);
   // Drop any entry this address already holds. RouterOS keeps duplicates happily, and a
   // stale one's shorter timeout should not be what decides when the window shuts.
@@ -174,12 +180,25 @@ router.get('/status', statusLimiter, async (req, res) => {
       .then(r => (r && r.value) || process.env.XENDIT_SECRET_KEY)
       .catch(() => null);
 
+    // A prepaid line that has run out owes nothing at all — there is no unpaid invoice
+    // and totalDue is 0. Described only as a balance, this page would tell the customer
+    // they are up to date while their internet is off. The renewal price is what they
+    // actually need to see.
+    const isPrepaid = prepaid.isPrepaidPlan(subscriber.plan);
+    const prepaidBlock = isPrepaid ? {
+      prepaid: true,
+      expiresAt: subscriber.expires_at,
+      renewAmount: Number(subscriber.plan.price),
+      renewDays: Number(subscriber.plan.validity_period),
+    } : { prepaid: false };
+
     res.json({
       identified: true,
       restricted: true,
       account: subscriber.account_number,
       firstName: subscriber.first_name,
       plan: subscriber.plan ? subscriber.plan.name : null,
+      ...prepaidBlock,
       restrictedAt: restriction.restricted_at,
       reason: restriction.reason || null,
       mode: restriction.mode,
@@ -193,7 +212,9 @@ router.get('/status', statusLimiter, async (req, res) => {
       totalDue,
       // A pay button that 503s on click is worse than no pay button, so the page is
       // told up front whether online payment is actually wired up.
-      canPayOnline: !!xenditKey && totalDue > 0,
+      // Prepaid has nothing "due", so gating the button on totalDue would hide it from
+      // every expired prepaid customer — the exact people this page is for.
+      canPayOnline: !!xenditKey && (totalDue > 0 || isPrepaid),
       company,
     });
   } catch (err) {
@@ -206,7 +227,7 @@ router.get('/status', statusLimiter, async (req, res) => {
 // One checkout for everything the caller owes. No request body is read: the amount and
 // the invoices come from the database, keyed to the address that called.
 //
-// external_id keeps the J2-PAYALL- prefix so the existing batch branch of the Xendit
+// external_id keeps the PAYALL- prefix so the existing batch branch of the Xendit
 // webhook settles it. Reusing that path rather than adding a second one means walled-
 // garden payments post, sync to AR and lift the restriction through exactly the code
 // that is already proven in the portal.
@@ -230,7 +251,30 @@ router.post('/pay', payLimiter, async (req, res) => {
       return res.status(400).json({ error: 'This connection is not restricted.' });
     }
 
-    const invoices = await unpaidInvoices(req.prisma, subscriber.id);
+    let invoices = await unpaidInvoices(req.prisma, subscriber.id);
+
+    // Prepaid renewal. No invoice id is accepted here, in keeping with the rule at the
+    // top of this file — the most a caller can influence is how many whole periods to
+    // buy, bounded, and only ever for the line they are sitting on. An existing pending
+    // top-up is reused rather than minting a fresh invoice on every click, so a customer
+    // who abandons checkout and comes back does not leave a trail of dead invoices.
+    if (prepaid.isPrepaidPlan(subscriber.plan)) {
+      const existing = invoices.find(i => i.prepaid_days);
+      if (!existing) {
+        const periods = Math.min(Math.max(parseInt(req.body && req.body.periods) || 1, 1), 12);
+        const days = periods * Number(subscriber.plan.validity_period);
+        try {
+          const inv = await prepaid.createTopUpInvoice(req.prisma, {
+            subscriberId: subscriber.id, days, by: 'walled garden',
+          });
+          invoices = invoices.concat([inv]);
+        } catch (err) {
+          console.error('[restricted] could not create renewal invoice for ' + subscriber.id + ': ' + err.message);
+          return res.status(500).json({ error: 'Could not prepare your renewal. Please contact support.' });
+        }
+      }
+    }
+
     if (!invoices.length) {
       return res.status(400).json({ error: 'There is nothing outstanding on this account.' });
     }
@@ -245,7 +289,7 @@ router.post('/pay', payLimiter, async (req, res) => {
     const sub = subscriber;
     const plan = sub.plan;
     const totalAmount = invoices.reduce((s, i) => s + Number(i.amount), 0);
-    const externalId = `J2-PAYALL-WG-${sub.id}-${Date.now()}`;
+    const externalId = `NF-PAYALL-WG-${sub.id}-${Date.now()}`;
     const baseUrl = process.env.APP_URL || 'https://netfactory.com.ph';
 
     const formatPhone = (phone) => {
@@ -365,7 +409,7 @@ router.post('/pay', payLimiter, async (req, res) => {
     // make. The log line below is the signal that the window did not open.
     let windowMin = null;
     try {
-      windowMin = await openPaymentWindow(req.prisma, ip);
+      windowMin = await openPaymentWindow(req.prisma, radiusDb, ip);
     } catch (e) {
       console.error(`[restricted] payment window NOT opened for ${ip}: ${e.message}`);
     }

@@ -22,3 +22,6 @@ Thumbs.db
 
 # Database backups
 # Note: repo is private — full dumps included for disaster recovery
+
+# Timestamped hand-backups (.bak-<tag>-<date>). Git is the rollback mechanism now.
+*.bak-*

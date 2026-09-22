@@ -1,5 +1,28 @@
-node_modules/
+# ── Never commit ────────────────────────────────────────────
+# Live credentials. The DR backup (disaster_recovery_backups/*.tar.gz, member
+# ./app/env) is what restores these, not this repository. If this repo ever
+# gains a remote, this line is the only thing between the Xendit, Mailgun,
+# RADIUS and database credentials and whoever can read it.
 .env
-*.log
+
+*.pem
+*.key
+
+# Customer personal data — subscriber documents, covered by RA 10173. These
+# belong to people who are not party to any decision to publish this tree.
+uploads/
+
+# ── Reinstallable or runtime ────────────────────────────────
+node_modules/
 dist/
+logs/
+*.log
 .DS_Store
+
+# Throwaway probes. Committing this turns every debugging session into
+# repository history nobody can interpret six months later.
+scratchpad/
+
+# Timestamped hand-backups (.bak-<tag>-<date>). Git is the rollback mechanism now;
+# committing these would duplicate every file that has ever been edited.
+*.bak-*

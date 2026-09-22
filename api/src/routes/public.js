@@ -198,6 +198,27 @@ router.get('/packages', async (req, res) => {
 // Website form → status 'prospective' + CRM notification + email/SMS
 // ============================================
 router.post('/apply', applyLimiter, applyUploadFields, async (req, res) => {
+  // multer has already written every attachment to disk by the time this runs, so each
+  // early return below leaves orphans behind — 37 of them had accumulated. That was
+  // bounded while nginx capped the whole request at 1MB; now that the cap matches the
+  // 4 x 10MB the form actually advertises, an unauthenticated endpoint that keeps the
+  // files of every REJECTED submission is a disk-fill vector (5/hour/IP x 40MB).
+  //
+  // Hooked on 'finish' rather than added to each return: it covers the paths that exist,
+  // the catch block, and any return added later without anyone remembering this.
+  res.on('finish', () => {
+    if (res.statusCode < 400) return;
+    for (const arr of Object.values(req.files || {})) {
+      for (const f of (arr || [])) {
+        fsLib.unlink(f.path, (err) => {
+          if (err && err.code !== 'ENOENT') {
+            console.warn('[apply] could not remove rejected upload ' + f.path + ': ' + err.message);
+          }
+        });
+      }
+    }
+  });
+
   try {
     const { firstName, middleName, lastName, email, phone, address, subdivision, barangay, municipality, planId, packageId, idType, notes, altContacts } = req.body;
 

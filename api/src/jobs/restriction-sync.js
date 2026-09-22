@@ -21,11 +21,25 @@ const SCHEDULE = '*/5 * * * *';
 async function run(prisma) {
   const [open] = await radiusDb.query(
     'SELECT count(*)::int AS n FROM subscriber_restrictions WHERE lifted_at IS NULL');
-  if (!open[0] || open[0].n === 0) return;   // nothing restricted, nothing to sync
+  // needsSweep overrides the cheap exit: a router that could not be reached while the
+  // last restriction was lifted still holds that address, and skipping here would leave
+  // a customer who has paid locked inside the walled garden indefinitely.
+  const nobodyRestricted = !open[0] || open[0].n === 0;
+  if (nobodyRestricted && !restriction.needsSweep()) return;
 
   const changes = await restriction.syncAddressList(prisma, radiusDb);
   if (changes.added.length || changes.removed.length) {
     console.log(`[restriction-sync] drift corrected — added ${JSON.stringify(changes.added)}, removed ${JSON.stringify(changes.removed)}`);
+  }
+  if (changes.failed.length) {
+    console.warn('[restriction-sync] could not reach ' +
+      changes.failed.map(f => `#${f.deviceId} ${f.label}`).join(', ') + ' — will retry');
+  }
+  // A restricted device with no open session cannot be pinned to any router, so the
+  // cutoff is recorded but not yet in force. Say so rather than looking successful.
+  if (changes.unplaceable.length) {
+    console.warn('[restriction-sync] not enforced (no address to bind to): ' +
+      changes.unplaceable.map(u => `${u.mac} (${u.reason})`).join(', '));
   }
 }
 

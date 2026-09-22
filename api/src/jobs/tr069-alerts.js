@@ -43,6 +43,7 @@ async function readCfg(prisma) {
     offlineMinFleet: parseInt(m.tr069_alerts_offline_min_fleet || '10', 10),
     faultThreshold: parseInt(m.tr069_alerts_fault_threshold || '25', 10),
     opticalRxDbm: parseFloat(m.tr069_alerts_optical_rx_dbm || '-27'),
+    ssidCoveragePct: parseFloat(m.tr069_alerts_ssid_coverage_pct || '60'),
     cooldownMin: parseInt(m.tr069_alerts_cooldown_min || '60', 10),
   };
 }
@@ -110,7 +111,34 @@ async function checkOffline(prisma, cfg) {
   });
   if (linked.length < cfg.offlineMinFleet) return;
   const cutoff = Date.now() - 15 * 60 * 1000;
-  const offline = linked.filter(r => !r.last_inform || r.last_inform.getTime() < cutoff);
+
+  // last_inform on this table is NOT kept current. It is written only by
+  // syncLocal(), which runs when someone opens a single device's page in the
+  // CRM — there is no background sync. Measured 2026-09-19: 82 of 83 linked
+  // rows were more than a day stale while the ACS had 157 devices informing
+  // within ten minutes. Trusting the column here would have made this alert
+  // report 97.6% of the fleet offline, permanently, from the moment it was
+  // switched on — and an alert that cries wolf once gets muted forever.
+  //
+  // So ask the ACS, which is the only thing that actually knows, and fall back
+  // to the stored column only if the NBI cannot be reached. The device list and
+  // the subscriber portal already read live for the same reason.
+  let liveInform = null;
+  try {
+    const docs = await acs.nbiRequest('GET',
+      '/devices/?query=' + encodeURIComponent('{}') + '&projection=_id,_lastInform');
+    if (Array.isArray(docs)) {
+      liveInform = new Map(docs.map(d => [d._id, d._lastInform ? new Date(d._lastInform).getTime() : 0]));
+    }
+  } catch (e) {
+    // checkFaults raises nbi_unreachable; do not double-alert here.
+  }
+
+  const lastSeen = (r) => {
+    if (liveInform && liveInform.has(r.device_id)) return liveInform.get(r.device_id);
+    return r.last_inform ? r.last_inform.getTime() : 0;
+  };
+  const offline = linked.filter(r => lastSeen(r) < cutoff);
   const pct = (offline.length / linked.length) * 100;
   if (pct >= cfg.offlinePct) {
     await fire(
@@ -172,6 +200,76 @@ async function checkOptical(prisma, cfg) {
   }
 }
 
+// The failure this was added for, 2026-09-17.
+//
+// 205 of 206 CPEs showed "SSID: not reported yet" in the CRM for weeks and none
+// of the checks above noticed, because by every measure they use the fleet was
+// perfectly healthy: every device was informing on schedule, there were zero
+// GenieACS faults, and optical power was fine. The ACS was receiving 190,000
+// informs and learning nothing from any of them — the provision declared
+// parameter VALUES without declaring their PATHS, so GenieACS never ran
+// GetParameterNames, never discovered the data model, and closed every session
+// with 204 No Content. Correct behaviour, no error anywhere, invisible.
+//
+// So this checks the one thing the others cannot: whether devices that are
+// talking to us are actually telling us anything. A CPE that informs on time but
+// whose SSID we still do not know is a CPE we cannot manage, however green it
+// looks on the dashboard.
+async function checkDiscovery(prisma, cfg) {
+  let devices;
+  try {
+    // Only the two SSID paths and the inform time — the full device documents are
+    // megabytes across a fleet this size and this runs every five minutes.
+    const projection = [
+      '_id', '_lastInform',
+      'InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID',
+      'Device.WiFi.SSID.1.SSID',
+    ].join(',');
+    devices = await acs.nbiRequest('GET',
+      '/devices/?query=' + encodeURIComponent('{}') + '&projection=' + encodeURIComponent(projection));
+  } catch (e) {
+    return; // checkFaults already raises nbi_unreachable; do not double-alert
+  }
+  if (!Array.isArray(devices)) return;
+
+  const read = (obj, path) => {
+    let cur = obj;
+    for (const key of path.split('.')) {
+      if (!cur || typeof cur !== 'object') return undefined;
+      cur = cur[key];
+    }
+    return cur && cur._value;
+  };
+
+  // Judge only devices we have heard from recently. A CPE that is switched off
+  // cannot report an SSID, and counting it here would turn every power cut into a
+  // discovery alert.
+  const cutoff = Date.now() - 2 * 60 * 60 * 1000;
+  const live = devices.filter(d => d._lastInform && new Date(d._lastInform).getTime() > cutoff);
+  if (live.length < cfg.offlineMinFleet) return;
+
+  const known = live.filter(d =>
+    read(d, 'InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID') ||
+    read(d, 'Device.WiFi.SSID.1.SSID'));
+  const pct = (known.length / live.length) * 100;
+
+  if (pct < cfg.ssidCoveragePct) {
+    await fire(
+      prisma,
+      cfg,
+      'discovery_stale',
+      pct < cfg.ssidCoveragePct / 2 ? 'critical' : 'warning',
+      `Only ${known.length}/${live.length} informing CPEs have a known SSID (${pct.toFixed(1)}%)`,
+      'Devices are informing but GenieACS is not learning their parameters.\n' +
+      `Threshold: ${cfg.ssidCoveragePct}%\n\n` +
+      'Most likely the "default" provision has lost its path-discovery declares.\n' +
+      'A declare of {value: now} only refreshes parameters GenieACS already knows;\n' +
+      '{path: now, value: now} is what makes it run GetParameterNames and find them.\n' +
+      'Check: curl http://127.0.0.1:7557/provisions/ and look for "path: now".'
+    );
+  }
+}
+
 async function run(prisma) {
   const cfg = await readCfg(prisma);
   if (!cfg.enabled) return;
@@ -179,6 +277,7 @@ async function run(prisma) {
   await checkOffline(prisma, cfg);
   await checkFaults(prisma, cfg);
   await checkOptical(prisma, cfg);
+  await checkDiscovery(prisma, cfg);
 }
 
 module.exports = {

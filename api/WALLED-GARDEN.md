@@ -176,3 +176,162 @@ Against the live database and a real subscriber session:
 
 Note the webhooks backup also reverts the pay-all restore fix, which you probably want to
 keep regardless of what happens to the walled garden.
+
+---
+
+# 2026-09-15 — why no customer ever saw this page, and what was fixed
+
+Staff restricted a live subscriber from the CRM on 2026-09-15 00:28 and the customer
+noticed nothing. Investigation found **four** independent faults, any one of which alone
+was enough to stop the walled garden working for anybody.
+
+Subscriber 190, account 2608000649, MAC `70:22:96:2A:A4:24`, address `100.66.48.10`,
+session on NAS `192.168.97.21` = CLGNT-AC1.
+
+### 1. Enforcement always targeted the wrong router — the fault that mattered
+
+`getRouterDeviceId()` picked the lowest active device id, with a comment reading "One
+active router today." There are now 16, and it always returned **device 9, CRM-DHCP**.
+
+    devices on device 9 (the only router with garden rules):   0
+    total registered subscriber devices:                      88
+
+Every subscriber is behind one of the 13 access concentrators. So every address-list
+write landed on a router that could not see the traffic it was meant to restrict, and
+`nf-restricted` was empty on all 15 reachable routers. This was never specific to one
+customer: **the walled garden could not work for anyone, and neither could `full` mode.**
+Only `billing_auto_restrict_enabled=false` kept it from surfacing sooner.
+
+**Fixed** in `src/utils/restriction.js`. Enforcement now resolves the router per
+subscriber from the session RADIUS already records:
+
+    radacct.framedipaddress -> the address to restrict
+    radacct.nasipaddress    -> nas.nasname -> nas.shortname -> mikrotik_devices.label
+
+Joined on shortname/label, not address: the NAS-IP-Address a router sends is its internal
+MGMT address (192.168.9x.x) while `mikrotik_devices.host` is the public address its API
+answers on. Those differ on every device here. Verified to resolve all 13 NAS addresses
+covering all 88 devices. `getRouterDeviceId()` is kept only for the DHCP-server callers
+(`device-release.js`, and previously `nf-paying`).
+
+`syncAddressList` now reconciles **every** active router, not just those with someone
+restricted — a device that moves between concentrators leaves its entry behind, and an
+entry nobody clears keeps whoever inherits that address inside the garden. Four routers
+at a time: a burst of sixteen RouterOS API connects times each other out.
+
+### 2. Device 9's API port is closed
+
+`36.50.30.110` pings but refuses 8728, so even the wrong-router write failed:
+
+    [restriction] apply address-list failed: MikroTik connect failed for device 9
+    [jobs] restriction-sync failed: MikroTik connect failed for device 9
+
+Still unfixed — needs someone on the router. It is harmless now that enforcement no
+longer depends on it, but while it is `is_active` every sync logs a failure against it.
+Either re-enable the API service or clear `is_active`.
+
+### 3. The access routers have no walled-garden rules
+
+CLGNT-AC1 live: 15 filter rules, 3 NAT rules, **zero** referencing `nf-garden` or
+`nf-restricted`. Same on CLGNT-AC2 and MCB-AC1. `walled-garden-apply.rsc` was only ever
+applied to device 9, and cannot be pasted into these routers anyway — it depends on two
+cutoff rules that exist only there.
+
+**Still outstanding.** See `walled-garden-access-routers.rsc` (paste-able) or
+`scripts/apply-walled-garden.js --devices <id|all>` (idempotent, verifies ordering,
+`--dry-run` and `--rollback` supported).
+
+Ordering is the whole feature on these routers. They release customer traffic with
+
+    accept src-address-list=NAT out-interface=sfp-sfpplus2   ("Forward NAT pool, new conn")
+
+so every rule must be placed ABOVE it or a restricted customer keeps full internet; and
+every accept must sit above both drops, or the customer loses their connection AND the
+payment page. The script refuses to run if it cannot find that anchor rule rather than
+guessing placement.
+
+### 4. src-NAT hid the customer's identity from the payment page
+
+`identify()` matches the caller's source address against `radacct.framedipaddress`. But
+CLGNT src-NATs customers to `36.50.30.192/29`, so every restricted customer would have
+arrived as `36.50.30.197` and the page could not have told any of them what they owed.
+Confirmed in nginx logs: not one `100.6x` source address has ever appeared.
+
+Handled by a `srcnat action=accept` for `nf-restricted -> nf-portal` in the new rule set,
+scoped so it changes nothing for anyone who is not cut off.
+
+### Also fixed
+
+- `openPaymentWindow()` in `routes/restricted.js` had the same wrong-router bug. It would
+  have punched the `nf-paying` hole in device 9 while the customer sat on CLGNT-AC1, so a
+  card payment would have died at 3-D Secure. Now resolves the router from the address.
+- A restriction lifted while a router was unreachable left that address stranded forever:
+  `restriction-sync` skips its work entirely when nobody is restricted, so no later run
+  would ever look. A `needsSweep` flag now keeps the job returning until every router is
+  clear — a stale entry is a customer who has paid and is still walled in.
+
+### Verified after the fix
+
+    [restriction-sync] drift corrected — added ["100.66.48.10@CLGNT-AC1"]
+    /ip/firewall/address-list on CLGNT-AC1 -> nf-restricted 100.66.48.10   (was device 9)
+    GET /api/restricted/status as 100.66.48.10
+      -> identified, account 2608000649, PHP 999, 16 days overdue, canPayOnline
+    GET /api/restricted/status as an unknown address -> identified:false, nothing leaked
+
+Everything except the router rules is now live. Until those are applied the customer
+still sees no change — the address is on the right list, but no rule acts on that list.
+
+## Rollout completed 2026-09-15
+
+Rules applied and verified on **all 15 reachable routers** — every one reporting
+8 accepts, 2 drops, all accepts above both drops, both drops above the NAT-pool accept:
+
+    11 SMN-AC3    12 MCB-AC1    13 MCB-AC2    14 MCB-AC3    15 MCB-AC4
+    16 MCB-AC5    17 MCB-AC6    18 MCB-AC7    19 MCB-AC8    20 CLGNT-AC1
+    21 CLGNT-AC2  22 SMN-AC1    23 SMN-AC2    24 STMS-AC1   26 SFP-AC1
+
+Only five of these label the anchor rule `Forward NAT pool, new conn`; the rest leave it
+uncommented. `apply-walled-garden.js` therefore matches the anchor structurally — the
+first forward `accept` scoped to `src-address-list=NAT` — and still refuses to run rather
+than guess if it finds none.
+
+Confirmed live on CLGNT-AC1 with the restricted subscriber's own traffic:
+
+    nf-garden allow portal   pkts=4
+    nf-garden allow DNS      pkts=2
+    nf-garden cutoff (out)   pkts=0   (she is idle: 4.8 MB in 19 hours)
+
+### Still outstanding
+
+**1. The captive redirect is applied DISABLED on every router, and must stay that way
+until the edge forwards port 8081.**
+
+`127.0.0.1:8081` answers 302 correctly, but `36.50.30.102:8081` refuses the connection,
+and `walled-garden-access.log` has never recorded one external hit. The edge (10.0.98.1)
+is not in `mikrotik_devices`, has no API port open, and was not touched. Redirecting
+customers to a port nothing forwards would turn every blocked HTTP request into
+connection-refused. Once the edge forwards 8081 to 10.0.98.4:
+
+    /ip/firewall/nat enable [find comment="nf-garden captive redirect"]
+
+Until then the garden still works — the customer reaches the portal by typing the
+address. They just do not get the automatic "Sign in to network" prompt.
+
+**2. Source preservation is applied but unproven.** The `srcnat accept` is in place on
+all 15 routers, but no restricted customer has yet loaded the portal, so no `100.6x`
+address has appeared in the nginx logs. If it turns out not to survive the edge, the page
+will load and say it cannot identify the connection rather than showing the balance.
+Check with:
+
+    grep -hE "^100\.6[0-9]\." /var/log/nginx/*access*.log
+
+Two paths were tested and ruled out on the way:
+- ICMP to 36.50.30.102 is answered by the edge, not this server, so it cannot be used to
+  test source preservation at all.
+- The internal route (10.0.98.0/24 via VLAN97-MGMT) does NOT carry customer-sourced
+  traffic — a ping from CLGNT-AC1 sourced as 100.66.48.1 reached the server zero times
+  (tcpdump, 0 packets). So the redirect cannot be pointed at 10.0.98.4.
+
+**3. Device 9 (CRM-DHCP) is still unreachable** — pings, refuses 8728. It carries no
+subscribers, so nothing depends on it, but every sync logs a failure against it while it
+is `is_active`.

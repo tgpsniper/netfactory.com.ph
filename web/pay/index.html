@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Pay Your Bill</title>
+<style>
+  :root{--bg:#0f172a;--card:#1e293b;--line:#334155;--text:#f1f5f9;--muted:#94a3b8;
+        --accent:#3b82f6;--ok:#22c55e;--warn:#f59e0b;--bad:#ef4444}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font-family:'Segoe UI',system-ui,-apple-system,sans-serif;
+       min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+  .card{width:100%;max-width:440px;background:var(--card);border:1px solid var(--line);
+        border-radius:16px;padding:28px;box-shadow:0 20px 50px rgba(0,0,0,.4)}
+  .brand{text-align:center;padding-bottom:18px;border-bottom:2px solid var(--accent);margin-bottom:22px}
+  .brand h1{margin:0;font-size:22px;letter-spacing:.5px}
+  .brand p{margin:4px 0 0;color:var(--accent);font-size:13px}
+  .rows{background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:10px;
+        padding:14px;margin-bottom:18px}
+  .row{display:flex;justify-content:space-between;gap:12px;padding:6px 0;font-size:13px}
+  .row span:first-child{color:var(--muted)}
+  .row span:last-child{font-weight:600;text-align:right;word-break:break-word}
+  .total{font-size:26px;font-weight:700;text-align:center;margin:18px 0 4px}
+  .due{text-align:center;color:var(--muted);font-size:12px;margin-bottom:20px}
+  button{width:100%;padding:15px;border:0;border-radius:10px;background:var(--accent);
+         color:#fff;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit}
+  button:hover:not(:disabled){filter:brightness(1.1)}
+  button:disabled{opacity:.55;cursor:not-allowed}
+  .note{text-align:center;color:var(--muted);font-size:11px;margin-top:14px;line-height:1.5}
+  .msg{padding:12px 14px;border-radius:10px;font-size:13px;margin-bottom:16px;line-height:1.5}
+  .msg.bad{background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.4);color:#fecaca}
+  .msg.ok{background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.4);color:#bbf7d0}
+  .msg.warn{background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.4);color:#fde68a}
+  .center{text-align:center;color:var(--muted);padding:26px 0;font-size:14px}
+  .foot{text-align:center;color:var(--muted);font-size:11px;margin-top:18px;
+        border-top:1px solid var(--line);padding-top:14px}
+</style>
+</head>
+<body>
+<div class="card" id="app"><div class="center">Loading your invoice…</div></div>
+<script>
+(function () {
+  var app = document.getElementById('app');
+  var params = new URLSearchParams(location.search);
+  var token = params.get('t');
+  var payment = params.get('payment');
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+    });
+  }
+  function peso(n) {
+    return 'PHP ' + Number(n || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  function date(d) {
+    if (!d) return '—';
+    try { return new Date(d).toLocaleDateString('en-PH', { month: 'long', day: 'numeric', year: 'numeric' }); }
+    catch (e) { return '—'; }
+  }
+  function shell(inner, co) {
+    return '<div class="brand"><h1>' + esc(co && co.name ? co.name : 'Netfactory') + '</h1>'
+         + '<p>Online Payment</p></div>' + inner
+         + '<div class="foot">' + esc(co && co.name ? co.name : 'Netfactory')
+         + (co && co.email ? ' &middot; ' + esc(co.email) : '')
+         + (co && co.phone ? ' &middot; ' + esc(co.phone) : '') + '</div>';
+  }
+  function fail(text, co) {
+    app.innerHTML = shell('<div class="msg bad">' + esc(text) + '</div>'
+      + '<div class="note">If you believe this is a mistake, please contact support and quote your account number.</div>', co);
+  }
+
+  if (!token) { fail('This link is incomplete. Please open the link from your email exactly as it was sent.'); return; }
+
+  fetch('/api/paylink/' + encodeURIComponent(token))
+    .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+    .then(function (res) {
+      if (!res.ok) { fail(res.d && res.d.error ? res.d.error : 'This payment link is not valid.'); return; }
+      var d = res.d, inv = d.invoice, sub = d.subscriber, co = d.company;
+
+      // Returning from Xendit. The webhook is what actually marks an invoice paid, so
+      // this only ever reports what the redirect claimed — never "your invoice is paid".
+      var banner = '';
+      if (payment === 'success') {
+        banner = '<div class="msg ok">Thank you. Your payment is being processed — '
+               + 'your account will update once the bank confirms it. You may close this page.</div>';
+      } else if (payment === 'failed') {
+        banner = '<div class="msg warn">That payment did not go through. Nothing was charged — you can try again below.</div>';
+      }
+
+      if (d.settled) {
+        app.innerHTML = shell(banner + '<div class="msg ok">Invoice ' + esc(inv.number)
+          + ' is already settled. Nothing further is due.</div>'
+          + '<div class="rows"><div class="row"><span>Account</span><span>' + esc(sub.account) + '</span></div>'
+          + '<div class="row"><span>Name</span><span>' + esc(sub.name) + '</span></div></div>', co);
+        return;
+      }
+
+      var rows = ''
+        + '<div class="row"><span>Account</span><span>' + esc(sub.account) + '</span></div>'
+        + '<div class="row"><span>Name</span><span>' + esc(sub.name) + '</span></div>'
+        + (sub.plan ? '<div class="row"><span>Plan</span><span>' + esc(sub.plan) + '</span></div>' : '')
+        + '<div class="row"><span>Invoice</span><span>' + esc(inv.number) + '</span></div>'
+        + (inv.period ? '<div class="row"><span>Period</span><span>' + esc(inv.period) + '</span></div>' : '');
+
+      app.innerHTML = shell(banner
+        + '<div class="rows">' + rows + '</div>'
+        + '<div class="total">' + peso(inv.amount) + '</div>'
+        + '<div class="due">Due ' + esc(date(inv.dueDate)) + '</div>'
+        + '<button id="pay">Pay Now</button>'
+        + '<div class="note">Secure checkout powered by Xendit.<br>'
+        + 'GCash, Maya, cards, online banking and over-the-counter.</div>', co);
+
+      document.getElementById('pay').addEventListener('click', function () {
+        var btn = this;
+        btn.disabled = true;
+        btn.textContent = 'Opening secure checkout…';
+        fetch('/api/paylink/' + encodeURIComponent(token) + '/checkout', { method: 'POST' })
+          .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+          .then(function (out) {
+            if (out.ok && out.j.url) { location.href = out.j.url; return; }
+            btn.disabled = false;
+            btn.textContent = 'Pay Now';
+            var m = document.createElement('div');
+            m.className = 'msg bad';
+            m.textContent = out.j && out.j.error ? out.j.error : 'Could not start the payment. Please try again.';
+            btn.parentNode.insertBefore(m, btn);
+          })
+          .catch(function () {
+            btn.disabled = false;
+            btn.textContent = 'Pay Now';
+          });
+      });
+    })
+    .catch(function () { fail('Could not reach the payment service. Please check your connection and try again.'); });
+})();
+</script>
+</body>
+</html>

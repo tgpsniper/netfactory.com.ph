@@ -36,7 +36,10 @@ async function run(prisma) {
                       WHERE p.invoice_id = i.id AND p.status = 'success'), 0))
              FROM invoices i
              WHERE i.subscriber_id = s.id
-               AND i.status NOT IN ('paid', 'cancelled')), 0), 2)::float8 AS new_balance
+               AND i.status NOT IN ('paid', 'cancelled')
+               -- Prepaid top-ups are purchases, not debts. An abandoned checkout would
+               -- otherwise show the customer a balance they do not owe.
+               AND i.prepaid_days IS NULL), 0), 2)::float8 AS new_balance
     FROM subscribers s
     WHERE s.is_system = false
   `);

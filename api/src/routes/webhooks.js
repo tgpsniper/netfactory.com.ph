@@ -7,6 +7,9 @@ let radiusDb, restriction;
 try { radiusDb = require('../config/radius-db'); } catch (e) { radiusDb = null; }
 try { restriction = require('../utils/restriction'); }
 catch (e) { restriction = { restoreIfSettled: async () => ({ restored: false, reason: 'restriction module unavailable' }) }; }
+let prepaid;
+try { prepaid = require('../utils/prepaid'); }
+catch (e) { prepaid = null; }
 const { getCompany } = require('../utils/company');
 const { getPrefs } = require('../utils/notifPrefs');
 
@@ -216,7 +219,7 @@ router.get("/xendit", (req, res) => {
 // ============================================
 // NOTE: the real Xendit handler is defined further down and is registered for
 // BOTH /xendit and /xendit/payment. The version that used to live here treated
-// Xendit's external_id ("J2-PAY-INV-26080010-1786774312996") as an invoice
+// Xendit's external_id ("NF-PAY-INV-26080010-1786774312996") as an invoice
 // number, never matched an invoice, and still answered 200 — so Xendit marked
 // the callback delivered and never retried. Paid invoices stayed "unpaid" with
 // nothing but a log line to show for it.
@@ -315,7 +318,13 @@ const xenditWebhookHandler = async (req, res) => {
     }
 
     // ── PAY-ALL: batch payment handler ──
-    if (event.external_id && event.external_id.startsWith("J2-PAYALL-")) {
+    // The pay-all prefix was renamed J2- -> NF- so it does not read as another
+    // company on the customer's payment confirmation, where Xendit prints
+    // external_id as "Reference ID". The old prefix is still accepted: a checkout
+    // opened before the rename can be paid days later, and it must still settle.
+    const isBatch = !!event.external_id &&
+      (event.external_id.startsWith("NF-PAYALL-") || event.external_id.startsWith("J2-PAYALL-"));
+    if (isBatch) {
       const batchInvoices = await req.prisma.invoices.findMany({ where: { xendit_external_id: event.external_id }, include: { subscriber: true } });
       if (batchInvoices.length > 0) {
         const sub = batchInvoices[0].subscriber;
@@ -324,11 +333,28 @@ const xenditWebhookHandler = async (req, res) => {
         const chMap2 = { GCASH:"gcash", PH_GCASH:"gcash", PAYMAYA:"maya", PH_PAYMAYA:"maya", MAYA:"maya", GRABPAY:"gcash", SHOPEEPAY:"gcash" };
         const tMap2 = { EWALLET:"gcash", QR_CODE:"gcash", DIRECT_DEBIT:"bank_transfer", CREDIT_CARD:"xendit", BANK_TRANSFER:"bank_transfer", RETAIL_OUTLET:"7-eleven", PAYLATER:"xendit" };
         const batchMethod = chMap2[ch2] || tMap2[event.payment_method] || "xendit";
+        const batchGrants = [];
         for (const inv of batchInvoices) {
           if (inv.status === "paid") continue;
-          await req.prisma.payments.create({ data: { invoice_id: inv.id, subscriber_id: inv.subscriber_id, amount: Number(inv.amount), method: batchMethod, reference_number: event.payment_id || event.id || event.external_id, status: "success", paid_at: event.paid_at ? new Date(event.paid_at) : new Date() } });
+          const bPay = await req.prisma.payments.create({ data: { invoice_id: inv.id, subscriber_id: inv.subscriber_id, amount: Number(inv.amount), method: batchMethod, reference_number: event.payment_id || event.id || event.external_id, status: "success", paid_at: event.paid_at ? new Date(event.paid_at) : new Date() } });
           await req.prisma.invoices.update({ where: { id: inv.id }, data: { status: "paid" } });
           await syncToAR(req.prisma, { ...inv, subscriber: sub }, Number(inv.amount), batchMethod, event.payment_id || event.id || event.external_id, 'xendit-batch');
+          // A pay-all can carry top-ups too — the walled garden offers "pay everything"
+          // and a prepaid customer may have an installation fee sitting alongside their
+          // renewal. Each prepaid invoice in the batch grants its own days.
+          if (prepaid && inv.prepaid_days) {
+            try {
+              const g = await prepaid.grant(req.prisma, radiusDb, {
+                subscriberId: sub.id, days: Number(inv.prepaid_days), amount: Number(inv.amount),
+                invoiceId: inv.id, paymentId: bPay.id, source: 'webhook', by: 'online payment',
+              });
+              batchGrants.push({ invoice: inv.invoice_number, days: Number(inv.prepaid_days),
+                granted: g.granted, expiresAt: g.expiresAfter });
+            } catch (err) {
+              console.error('[prepaid] GRANT FAILED in pay-all for ' + inv.invoice_number +
+                ' (subscriber ' + sub.id + '): ' + err.message);
+            }
+          }
           console.log('  done: ' + inv.invoice_number + ' paid');
         }
         const remaining = await req.prisma.invoices.findMany({ where: { subscriber_id: sub.id, status: { in: ["pending", "overdue"] } } });
@@ -361,14 +387,20 @@ const xenditWebhookHandler = async (req, res) => {
         // returns before reaching that code, so without this a customer who settles by
         // pay-all — which is what the walled garden and the portal's "pay all" button
         // both use — has every invoice marked paid and stays cut off regardless.
-        const bRestore = await restriction.restoreIfSettled(req.prisma, radiusDb, sub.id,
-          { by: 'auto (online payment ' + (event.payment_id || event.id || event.external_id) + ')' });
+        // grant() already lifted the cutoff for any top-up in this batch. Only fall back
+        // to the postpaid restore when nothing in the batch bought service time.
+        const bRestore = batchGrants.length
+          ? { restored: batchGrants.some(g => g.granted) }
+          : await restriction.restoreIfSettled(req.prisma, radiusDb, sub.id,
+              { by: 'auto (online payment ' + (event.payment_id || event.id || event.external_id) + ')' });
         if (bRestore.restored) {
           console.log('Access restored for subscriber ' + sub.id + ' after pay-all ' + event.external_id);
         }
 
         console.log('Pay-all done: ' + batchInvoices.length + ' invoices, P' + totalPaid + ' via ' + batchMethod);
-        return res.json({ status: "paid", invoiceCount: batchInvoices.length, total: totalPaid, accessRestored: !!bRestore.restored });
+        return res.json({ status: "paid", invoiceCount: batchInvoices.length, total: totalPaid,
+          accessRestored: !!bRestore.restored,
+          prepaid: batchGrants.length ? batchGrants : undefined });
       }
     }
 
@@ -438,15 +470,43 @@ const xenditWebhookHandler = async (req, res) => {
     // so an online payment at midnight does not wait for anyone to notice. Best effort —
     // the webhook must still return 200 or the gateway will keep retrying a payment that
     // is already recorded.
-    const xRestore = await restriction.restoreIfSettled(req.prisma, radiusDb, sub.id,
-      { by: 'auto (online payment ' + (event.payment_id || event.id || invoice.invoice_number) + ')' });
+    // A prepaid top-up buys days, not a settled debt, so it takes a different path:
+    // grant() extends the expiry and lifts the cutoff itself. Running restoreIfSettled
+    // as well would be harmless but misleading in the logs, and it would restore before
+    // the expiry had actually moved. grant() is idempotent on invoice_id, which matters
+    // here because Xendit re-delivers callbacks.
+    let xRestore = { restored: false, reason: 'not restricted' };
+    let xGrant = null;
+    if (prepaid && invoice.prepaid_days && invoiceStatus === 'paid') {
+      try {
+        xGrant = await prepaid.grant(req.prisma, radiusDb, {
+          subscriberId: sub.id, days: Number(invoice.prepaid_days), amount: payAmt,
+          invoiceId: invoice.id, paymentId: payment.id,
+          source: 'webhook', by: 'online payment',
+        });
+        if (xGrant.restored) xRestore = xGrant.restored;
+        console.log('Prepaid top-up: subscriber ' + sub.id + ' +' + invoice.prepaid_days +
+          'd, expires ' + (xGrant.expiresAfter ? new Date(xGrant.expiresAfter).toISOString() : 'unchanged') +
+          (xGrant.granted ? '' : ' (already granted — duplicate callback)'));
+      } catch (err) {
+        // Money is recorded; the grant is not. Loud, because this is the one failure
+        // that leaves a paying customer switched off.
+        console.error('[prepaid] GRANT FAILED after payment on ' + invoice.invoice_number +
+          ' (subscriber ' + sub.id + '): ' + err.message);
+      }
+    } else {
+      xRestore = await restriction.restoreIfSettled(req.prisma, radiusDb, sub.id,
+        { by: 'auto (online payment ' + (event.payment_id || event.id || invoice.invoice_number) + ')' });
+    }
     if (xRestore.restored) {
       console.log('Access restored for subscriber ' + sub.id + ' after payment on ' + invoice.invoice_number);
     }
 
     console.log('Payment recorded: ' + invoice.invoice_number + ' - P' + invoice.amount + ' via ' + paymentMethod);
     res.json({ status: "paid", invoiceNumber: invoice.invoice_number, paymentId: payment.id,
-      accessRestored: !!xRestore.restored });
+      accessRestored: !!xRestore.restored,
+      prepaid: xGrant ? { granted: xGrant.granted, days: xGrant.days || Number(invoice.prepaid_days),
+        expiresAt: xGrant.expiresAfter } : undefined });
 
   } catch (err) {
     console.error("Xendit webhook error:", err);

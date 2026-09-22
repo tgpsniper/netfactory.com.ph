@@ -37,7 +37,50 @@ server {
         proxy_send_timeout 7d;
     }
 
+    # Firmware images, before the general /api/ rule — ^~ so neither of these can be
+    # taken by a regex location, and so they are not capped by the 50m below.
+    # Nothing has ever been uploaded through either path; without these the first
+    # attempt would have failed exactly the way the application form did.
+    location ^~ /api/upload-firmware {
+        client_max_body_size 256m;      # matches multer in firmware-upload.js
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $nf_connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_request_buffering off;
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+    }
+
+    location ^~ /api/admin/tr069/ {
+        client_max_body_size 80m;       # matches firmwareUpload in tr069.js
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $nf_connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+    }
+
     location /api/ {
+        # Without this nginx applies its 1m default, and every upload larger than that
+        # is refused BEFORE it reaches the API — which then never gets to enforce its
+        # own limits or return a JSON error. The public application form advertises
+        # "max 10MB each" across four attachments and multer is configured to match, so
+        # a 1.16MB ID photo was rejected by the web server with an HTML 413 page that
+        # the form then tried to JSON.parse ("Unexpected token '<'"). 21 failed
+        # submissions on 15 Sep from one applicant, plus 6 on /api/admin/surveys.
+        #
+        # 50m = the 4 x 10MB the form promises, plus multipart overhead and headroom.
+        # The API stays the authority on what is actually accepted; this only stops
+        # nginx from cutting the request off before the API can answer.
+        client_max_body_size 50m;
         proxy_pass http://127.0.0.1:3001;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;

@@ -1242,8 +1242,26 @@ async function submitApply() {
       if (applyAttachments[field]) form.append(field, applyAttachments[field]);
     });
     const r = await fetch(`${API}/apply`, { method: 'POST', body: form });
-    const d = await r.json();
-    if (!r.ok) throw new Error(d.error);
+    // Read as text first. r.json() on an error page from the web server — a 413 when an
+    // attachment is oversized, a 502 while the API restarts — throws
+    // "Unexpected token '<'" and that raw parser message is what the applicant saw,
+    // with nothing telling them which file to shrink. Status is checked before parsing
+    // so the page can say something a person can act on.
+    const raw = await r.text();
+    let d = {};
+    try { d = raw ? JSON.parse(raw) : {}; } catch (_) { d = {}; }
+    if (!r.ok) {
+      if (r.status === 413) {
+        throw new Error('Those files are too large to upload. Please use photos under 10MB each, or take the picture at a lower resolution.');
+      }
+      if (r.status === 429) {
+        throw new Error(d.error || 'Too many attempts. Please try again in an hour.');
+      }
+      if (!d.error) {
+        throw new Error('We could not submit your application right now (error ' + r.status + '). Please try again in a few minutes, or message us on Facebook.');
+      }
+      throw new Error(d.error);
+    }
     closeApplyModal();
     toast('Application submitted! We\'ll contact you shortly.', 'success');
   } catch(e) { toast(e.message || 'Submission failed', 'error'); }
