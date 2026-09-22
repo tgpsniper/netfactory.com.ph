@@ -209,6 +209,7 @@ model subscribers {
   barangay                barangays?                     @relation(fields: [barangay_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   municipality            municipalities?                @relation(fields: [municipality_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   plan                    plans?                         @relation(fields: [plan_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  subscriber_notes                 subscriber_notes[]
   surveys                 surveys[]
   tickets                 tickets[]
   conversations           conversations[]
@@ -270,6 +271,11 @@ model invoices {
   status              String               @default("pending") @db.VarChar(20)
   overdue_fee         Decimal?             @default(0) @db.Decimal(10, 2)
   prepaid_days        Int?
+  // Advance payment / downpayment. Paying this invoice moves the money into
+  // subscriber credit rather than settling service already rendered — used for
+  // pre-installation collections, where an emailed pay link is the normal channel
+  // but the money has no service period to consume.
+  is_advance          Boolean              @default(false)
   notes               String?
   generated_at        DateTime?            @default(now()) @db.Timestamptz(6)
   created_at          DateTime?            @default(now()) @db.Timestamptz(6)
@@ -1012,6 +1018,22 @@ model subscriber_radius {
 
   @@index([radius_group], map: "idx_subscriber_radius_group")
   @@index([subscriber_id], map: "idx_subscriber_radius_sub")
+}
+
+/// Free-text staff remarks recorded at each lifecycle stage (application, survey,
+/// approval, scheduling, installation, activation). subscribers.notes still receives a
+/// one-line summary of each, because the CRM parses that blob for the installation date
+/// and the decline reason — this table is additive, not a replacement.
+model subscriber_notes {
+  id            Int         @id @default(autoincrement())
+  subscriber_id Int
+  stage         String      @db.VarChar(40)
+  remark        String
+  author        String      @db.VarChar(100)
+  created_at    DateTime    @default(now()) @db.Timestamptz(6)
+  subscribers   subscribers @relation(fields: [subscriber_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([subscriber_id, created_at(sort: Desc)], map: "idx_subnotes_subscriber")
 }
 
 model surveys {

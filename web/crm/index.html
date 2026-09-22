@@ -640,6 +640,72 @@ const J2CRM = () => {
   const [editSubForm, setEditSubForm] = useState({});
   const [addSubForm, setAddSubForm] = useState({ firstName:"", middleName:"", lastName:"", companyName:"", email:"", phone:"", address:"", subdivision:"", barangay:"", barangayId:null, municipality:"", planId:3, installationPackage:"", status:"pending" });
   const [addSubAttachments, setAddSubAttachments] = useState({ proof_of_billing:null, valid_id1:null, valid_id2:null, other_attachment:null });
+
+  // ── Stage remarks ──
+  // Every lifecycle step can carry a remark. The row in subscriber_notes is the record;
+  // subscribers.notes still gets a one-line summary because this page parses that blob
+  // for the installation date and the decline reason.
+  const [subNotes, setSubNotes] = useState([]);
+  const [subNotesLoading, setSubNotesLoading] = useState(false);
+  const [noteDraft, setNoteDraft] = useState("");
+  const [noteStage, setNoteStage] = useState("general");
+  const [noteSaving, setNoteSaving] = useState(false);
+  const [addSubRemark, setAddSubRemark] = useState("");
+
+  const NOTE_STAGE_LABEL = {
+    application:"Application", survey:"Survey", approval:"Approved", decline:"Declined",
+    schedule:"Installation Scheduled", reschedule:"Rescheduled", installer:"Installer Assigned",
+    activation:"Activated", general:"Note",
+  };
+
+  const loadSubNotes = async (subId) => {
+    if (!subId) return;
+    setSubNotesLoading(true);
+    try {
+      const r = await fetch(API + "/admin/subscribers/" + subId + "/notes", { headers: authHeaders() });
+      const d = await r.json();
+      setSubNotes(Array.isArray(d.notes) ? d.notes : []);
+    } catch (e) { setSubNotes([]); }
+    setSubNotesLoading(false);
+  };
+
+  // summarise=false for the stages that already append their own line to
+  // subscribers.notes, so the same sentence does not land in the blob twice.
+  const recordRemark = async (subId, stage, remark, summarise) => {
+    const text = String(remark || "").trim();
+    if (!subId || !text) return null;
+    try {
+      const r = await fetch(API + "/admin/subscribers/" + subId + "/notes", {
+        method: "POST", headers: authHeaders(),
+        body: JSON.stringify({ stage, remark: text, summarise: summarise !== false }),
+      });
+      if (!r.ok) return null;
+      return await r.json();
+    } catch (e) {
+      // A remark that fails to save must not fail the stage transition it describes.
+      console.error("Remark not saved:", e);
+      return null;
+    }
+  };
+
+  const submitRemark = async () => {
+    if (!selectedSub || !noteDraft.trim() || noteSaving) return;
+    setNoteSaving(true);
+    const saved = await recordRemark(selectedSub.id, noteStage, noteDraft, true);
+    setNoteSaving(false);
+    if (!saved) { showToast("Could not save the remark", "error"); return; }
+    setNoteDraft("");
+    loadSubNotes(selectedSub.id);
+    fetchCrmData();
+  };
+
+  // One effect rather than adding loadSubNotes() to each of the five places that open
+  // the panel — a new opener would otherwise silently show a stale timeline.
+  useEffect(() => {
+    if (showSubModal && selectedSub?.id) { setNoteDraft(""); setNoteStage("general"); loadSubNotes(selectedSub.id); }
+    else setSubNotes([]);
+  }, [showSubModal, selectedSub?.id]);
+
   const [mobileNav, setMobileNav] = useState(false);
 
   // ── ONU Inventory State ───────────────────────────────────
@@ -789,7 +855,7 @@ const J2CRM = () => {
   const [genSubInvForm, setGenSubInvForm] = useState({ periodFrom:"", periodTo:"", dueDate:"", amount:"" });
   const [genSubInvSaving, setGenSubInvSaving] = useState(false);
   const [showNewInvModal, setShowNewInvModal] = useState(false);
-  const [newInvForm, setNewInvForm] = useState({ subscriberId:'', subscriberName:'', subSearch:'', category:'subscription', invoiceDate:'', dueDate:'', taxType:'inclusive', amount:'', tax:'0.00', total:'0.00', description:'' });
+  const [newInvForm, setNewInvForm] = useState({ subscriberId:'', subscriberName:'', subSearch:'', category:'subscription', invoiceDate:'', dueDate:'', taxType:'inclusive', amount:'', tax:'0.00', total:'0.00', description:'', isAdvance:false });
   const [newInvSaving, setNewInvSaving] = useState(false);
   const [newInvSubResults, setNewInvSubResults] = useState([]);
   const [invoiceDetail, setInvoiceDetail] = useState(null);
@@ -1778,6 +1844,9 @@ const J2CRM = () => {
       });
       const subData = await subResp.json();
       if (subData.error) { setActivationLoading(false); return; }
+      // The activation remark went onto the invoice and nowhere else. summarise:false —
+      // activateNote above already appended the fee breakdown line to the blob.
+      recordRemark(activationModal.id, "activation", activationForm.notes, false);
       setActivationLoading(false);
       setActivationModal(null);
       setShowSubModal(false);
@@ -1806,6 +1875,8 @@ const J2CRM = () => {
     }).then(r => r.json()).then(data => {
       console.log("Schedule response:", data);
       if (data.error) { console.error("Schedule error:", data.error); return; }
+      // summarise:false — installNote above already put this remark in the blob.
+      recordRemark(scheduleModal.id, "schedule", scheduleNotes, false);
       // Immediately update local state so date shows without waiting for refetch
       setSubscribers(prev => prev.map(s => s.id === scheduleModal.id ? { ...s, status: "pending", notes: updatedNotes } : s));
       fetchCrmData();
@@ -1862,6 +1933,8 @@ const J2CRM = () => {
     }).then(r => r.json()).then(data => {
       console.log("Reschedule/SetDate response:", data);
       if (data.error) { console.error("Reschedule error:", data.error); return; }
+      // summarise:false — the note above already carries the reason.
+      recordRemark(rescheduleModal.id, isFirstTime ? "schedule" : "reschedule", rescheduleReason, false);
       // Immediately update local state so date shows without waiting for refetch
       setSubscribers(prev => prev.map(s => s.id === rescheduleModal.id ? { ...s, notes: updatedNotes } : s));
       fetchCrmData();
@@ -2019,6 +2092,8 @@ const J2CRM = () => {
       body: JSON.stringify({ status: "declined", notes: (showDeclineModal.notes ? showDeclineModal.notes + "\n" : "") + declineNote })
     }).then(r => r.json()).then(data => {
       if (data.error) return;
+      // summarise:false — declineNote above already carries these reasons.
+      recordRemark(showDeclineModal.id, "decline", allReasons.join("; "), false);
       fetchCrmData();
       setShowDeclineModal(null);
       setShowSubModal(false);
@@ -2109,7 +2184,7 @@ const J2CRM = () => {
   const openNewInvModal = () => {
     const today = new Date().toISOString().split('T')[0];
     const pre = selectedSub ? { subscriberId: selectedSub.id, subscriberName: subDisplayName(selectedSub), subSearch: '' } : { subscriberId:'', subscriberName:'', subSearch:'' };
-    setNewInvForm({ ...pre, category:'subscription', invoiceDate:today, dueDate:today, taxType:'inclusive', amount:'', tax:'0.00', total:'0.00', description:'' });
+    setNewInvForm({ ...pre, category:'subscription', invoiceDate:today, dueDate:today, taxType:'inclusive', amount:'', tax:'0.00', total:'0.00', description:'', isAdvance:false });
     setNewInvSubResults([]);
     setShowNewInvModal(true);
   };
@@ -2149,7 +2224,7 @@ const J2CRM = () => {
     setNewInvSaving(true);
     const res = await fetch(`${API}/admin/invoices/create`, {
       method:'POST', headers: authHeaders(),
-      body: JSON.stringify({ subscriberId: newInvForm.subscriberId, amount, billingPeriod: newInvForm.category, dueDate: newInvForm.dueDate, description: newInvForm.description, type:'manual' })
+      body: JSON.stringify({ subscriberId: newInvForm.subscriberId, amount, billingPeriod: newInvForm.category, dueDate: newInvForm.dueDate, description: newInvForm.description, type:'manual', isAdvance: !!newInvForm.isAdvance })
     }).then(r=>r.json()).catch(()=>({ error:'Network error' }));
     setNewInvSaving(false);
     if (res.error) return showToast(res.error, 'error');
@@ -2666,7 +2741,25 @@ const J2CRM = () => {
     const matchesSearch = !q || (tk.number||"").toLowerCase().includes(q) || (tk.subject||"").toLowerCase().includes(q) || (tk.subName||"").toLowerCase().includes(q) || (tk.subAcct||"").toLowerCase().includes(q);
     return matchesFilter && matchesCategory && matchesSearch;
   }).sort((a,b) => (b.number||"").localeCompare(a.number||""));
-  const filteredInvoices = invoices.filter(inv => invoiceFilter === "all" || inv.status === invoiceFilter);
+  // An invoice is overdue by its due date, not by a status anyone stores. Nothing in the
+  // system ever writes status='overdue' — the only writer is the "Mark as Overdue" button
+  // on this page — so the Overdue tile counted a value that is almost never present and
+  // sat on 0 while 18 invoices were weeks past due. The rows beside it already flagged
+  // them correctly (isOverdue, below), by date; this is that same rule, shared.
+  const isInvoiceOverdue = (inv) =>
+    (inv.status === "pending" || inv.status === "partial" || inv.status === "overdue") &&
+    inv.dueDate && new Date(inv.dueDate) < new Date();
+  // Takes the bucket explicitly so the tiles can count any bucket, not only the
+  // selected one.
+  const invoiceInBucket = (inv, bucket) => {
+    if (bucket === "all") return true;
+    if (bucket === "overdue") return isInvoiceOverdue(inv);
+    // Pending means still owed and not yet late, so Pending and Overdue never count
+    // the same invoice twice.
+    if (bucket === "pending") return inv.status === "pending" && !isInvoiceOverdue(inv);
+    return inv.status === bucket;
+  };
+  const filteredInvoices = invoices.filter(inv => invoiceInBucket(inv, invoiceFilter));
 
   // ========== DASHBOARD STATS ==========
   // The /admin/dashboard API returns the kpi object — read from there
@@ -3918,7 +4011,7 @@ const J2CRM = () => {
           { label:"Overdue", status:"overdue", icon:"fa-triangle-exclamation", color:t.danger },
           { label:"Cancelled", status:"cancelled", icon:"fa-circle-xmark", color:t.textMuted },
         ].map(st => {
-          const count = st.status === "all" ? invoices.length : invoices.filter(i => i.status === st.status).length;
+          const count = st.status === "all" ? invoices.length : invoices.filter(i => invoiceInBucket(i, st.status)).length;
           const isActive = invoiceFilter === st.status;
           return (
             <div key={st.status} onClick={() => { setInvoiceFilter(st.status); setInvoicePage(1); setInvoiceSearch(""); }} style={{
@@ -3973,6 +4066,8 @@ const J2CRM = () => {
                   <tr key={inv.id} style={{borderBottom:`1px solid ${t.border}`}}>
                     <TableCell>
                       <span onClick={()=>openInvoiceDetail(inv.id)} style={{fontWeight:600,fontFamily:"monospace",fontSize:12,color:t.accent,cursor:"pointer",textDecoration:"underline"}}>{inv.number}</span>
+                      {/* Advance invoices pay into credit, not into service — worth seeing at a glance */}
+                      {inv.isAdvance && <div style={{display:"inline-block",marginLeft:6,padding:"1px 6px",borderRadius:6,background:t.success+"22",color:t.success,fontSize:9,fontWeight:700,letterSpacing:.3,verticalAlign:"middle"}}>ADVANCE</div>}
                     </TableCell>
                     <TableCell>
                       <div style={{ fontWeight:600, color:t.text, fontSize:13 }}>{subName}</div>
@@ -11607,6 +11702,50 @@ const J2CRM = () => {
               </div>
               </div>
 
+              {/* Remarks — one row per lifecycle stage, newest first */}
+              <div style={{background:t.bgCard,borderRadius:14,border:`1px solid ${t.border}`,padding:"16px 18px",marginTop:16}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
+                  <_Icon name="fa-comment-dots" />
+                  <span style={{fontSize:13,fontWeight:700,color:t.text,fontFamily:"'Space Grotesk'"}}>Remarks</span>
+                  <span style={{fontSize:11,color:t.textMuted}}>{subNotes.length ? subNotes.length + " entr" + (subNotes.length===1?"y":"ies") : ""}</span>
+                </div>
+
+                <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>
+                  <select value={noteStage} onChange={e=>setNoteStage(e.target.value)}
+                    style={{padding:"8px 10px",border:`1px solid ${t.inputBorder}`,borderRadius:8,fontSize:12,background:t.input,color:t.text,fontFamily:"inherit",outline:"none",flexShrink:0}}>
+                    {Object.keys(NOTE_STAGE_LABEL).map(k => <option key={k} value={k}>{NOTE_STAGE_LABEL[k]}</option>)}
+                  </select>
+                  <textarea value={noteDraft} onChange={e=>setNoteDraft(e.target.value)} rows={2}
+                    placeholder="What happened at this stage? e.g. NAP 4 has 2 free ports, customer asked for a morning slot"
+                    style={{flex:"1 1 240px",minWidth:0,padding:"8px 10px",border:`1px solid ${t.inputBorder}`,borderRadius:8,fontSize:12,background:t.input,color:t.text,fontFamily:"inherit",outline:"none",resize:"vertical",boxSizing:"border-box"}} />
+                  <button onClick={submitRemark} disabled={noteSaving || !noteDraft.trim()}
+                    style={{padding:"8px 18px",borderRadius:8,border:"none",background:(noteSaving||!noteDraft.trim())?t.textMuted:t.accent,color:"#fff",fontSize:12,fontWeight:700,cursor:(noteSaving||!noteDraft.trim())?"not-allowed":"pointer",fontFamily:"inherit",flexShrink:0,alignSelf:"flex-start"}}>
+                    {noteSaving ? "Saving…" : "Add"}
+                  </button>
+                </div>
+
+                {subNotesLoading
+                  ? <div style={{fontSize:12,color:t.textMuted}}>Loading…</div>
+                  : subNotes.length === 0
+                    ? <div style={{fontSize:12,color:t.textMuted}}>No remarks recorded yet.</div>
+                    : <div style={{display:"flex",flexDirection:"column",gap:10,maxHeight:260,overflowY:"auto"}}>
+                        {subNotes.map(nt => (
+                          <div key={nt.id} style={{borderLeft:`2px solid ${t.accent}`,paddingLeft:10}}>
+                            <div style={{display:"flex",gap:8,alignItems:"baseline",flexWrap:"wrap"}}>
+                              <span style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:".4px",color:t.accent}}>
+                                {NOTE_STAGE_LABEL[nt.stage] || nt.stage}
+                              </span>
+                              <span style={{fontSize:11,color:t.textSec,fontWeight:600}}>{nt.author}</span>
+                              <span style={{fontSize:11,color:t.textMuted}}>
+                                {new Date(nt.created_at).toLocaleString('en-PH',{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}
+                              </span>
+                            </div>
+                            <div style={{fontSize:12,color:t.text,marginTop:2,whiteSpace:"pre-wrap"}}>{nt.remark}</div>
+                          </div>
+                        ))}
+                      </div>}
+              </div>
+
               {/* Network Equipment — MikroTik & OLT Quick View (full width, outside 2-col grid) */}
               {selectedSub.status === "active" && React.createElement(NetworkEquipPanel, { subId: selectedSub.id })}
 
@@ -12823,6 +12962,14 @@ const J2CRM = () => {
                   <option value="active">Active</option>
                 </select>
               </div>
+              <div style={{marginBottom:14}}>
+                <label style={{fontSize:12,fontWeight:600,color:t.textSec,marginBottom:6,display:"block"}}>
+                  Remarks <span style={{fontWeight:400,color:t.textMuted}}>(optional)</span>
+                </label>
+                <textarea value={addSubRemark} onChange={e => setAddSubRemark(e.target.value)} rows={2}
+                  placeholder="Anything worth recording about this application — who referred them, access notes, what they asked for"
+                  style={{width:"100%",padding:"12px 14px",border:"1px solid "+t.inputBorder,borderRadius:10,fontSize:13,background:t.input,color:t.text,fontFamily:"inherit",outline:"none",resize:"vertical",boxSizing:"border-box"}} />
+              </div>
               {/* Referred By — links this subscriber to an existing one for referral credit */}
               <div style={{marginBottom:14}}>
                 <label style={{fontSize:12,fontWeight:600,color:t.textSec,marginBottom:6,display:"block"}}>Referred By <span style={{fontWeight:400,color:t.textMuted,fontSize:11}}>(optional — referral credit)</span></label>
@@ -12889,7 +13036,7 @@ const J2CRM = () => {
                 </div>
               </div>
               <div style={{ display:"flex", gap:12, marginTop:8 }}>
-                <Btn onClick={() => { setShowAddSub(false); setAddSubAttachments({proof_of_billing:null,valid_id1:null,valid_id2:null,other_attachment:null}); }} style={{ flex:1, justifyContent:"center" }}>Cancel</Btn>
+                <Btn onClick={() => { setShowAddSub(false); setAddSubRemark(""); setAddSubAttachments({proof_of_billing:null,valid_id1:null,valid_id2:null,other_attachment:null}); }} style={{ flex:1, justifyContent:"center" }}>Cancel</Btn>
                 <Btn primary onClick={() => {
                   const _em = (addSubForm.email||"").trim();
                   if (_em && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(_em)) { showToast("Invalid email format", "error"); return; }
@@ -12908,6 +13055,9 @@ const J2CRM = () => {
                   .then(r=>r.json()).then(async data=>{
                     if(data.subscriber||data.accountNumber||data.id){
                       const subId = data.subscriber?.id || data.id;
+                      // The application remark can only be attached once the row exists,
+                      // so it is recorded here rather than sent with the create.
+                      if (subId && addSubRemark.trim()) await recordRemark(subId, "application", addSubRemark, true);
                       // Upload any selected attachments
                       if (subId) {
                         const fields = ['proof_of_billing','valid_id1','valid_id2','other_attachment'];
@@ -12925,6 +13075,7 @@ const J2CRM = () => {
                       fetchCrmData();
                       setShowAddSub(false);
                       setAddSubForm({firstName:"",lastName:"",companyName:"",email:"",phone:"",address:"",barangay:"",barangayId:null,municipality:"",planId:3,status:"pending"});
+                      setAddSubRemark("");
                       setAddSubAttachments({proof_of_billing:null,valid_id1:null,valid_id2:null,other_attachment:null});
                     } else { showConfirm({ icon:"fa-circle-xmark", title:"Save Failed", message:data.error||"Failed to save subscriber", confirmText:"OK", confirmColor:"primary", onConfirm:()=>setShowConfirmModal(null) }); }
                   }).catch(()=>showConfirm({ icon:"fa-circle-xmark", title:"Error", message:"Network error", confirmText:"OK", confirmColor:"primary", onConfirm:()=>setShowConfirmModal(null) }));
@@ -13732,6 +13883,23 @@ const J2CRM = () => {
           <label style={{fontSize:11,fontWeight:600,color:t.textSec,marginBottom:6,display:"block",textTransform:"uppercase",letterSpacing:.4}}>Description</label>
           <textarea value={newInvForm.description} onChange={e=>handleNewInvChange('description',e.target.value)} rows={2} style={{width:"100%",padding:"10px 14px",border:`1px solid ${t.inputBorder}`,borderRadius:10,fontSize:13,background:t.input,color:t.text,fontFamily:"inherit",outline:"none",resize:"vertical",boxSizing:"border-box"}} />
         </div>
+
+        {/* Advance payment — the money becomes credit instead of paying for service */}
+        <label style={{display:"flex",alignItems:"flex-start",gap:10,marginTop:14,padding:"12px 14px",borderRadius:10,
+                       border:`1px solid ${newInvForm.isAdvance?t.accent:t.border}`,
+                       background:newInvForm.isAdvance?t.accent+"14":t.bgCard,cursor:"pointer"}}>
+          <input type="checkbox" checked={!!newInvForm.isAdvance}
+                 onChange={e=>handleNewInvChange('isAdvance', e.target.checked)}
+                 style={{marginTop:2,width:16,height:16,accentColor:t.accent,cursor:"pointer"}} />
+          <span>
+            <span style={{fontSize:13,fontWeight:700,color:t.text,display:"block"}}>Advance payment / downpayment</span>
+            <span style={{fontSize:11,color:t.textMuted,lineHeight:1.5}}>
+              Paying this invoice adds the amount to the subscriber's <b>credit balance</b> instead of
+              settling a service charge. Use it to collect before installation — the emailed pay link
+              works exactly the same, the money is just held as credit for the first real bill.
+            </span>
+          </span>
+        </label>
 
         <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:20}}>
           <Btn onClick={()=>setShowNewInvModal(false)}>Cancel</Btn>

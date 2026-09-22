@@ -1,42 +1,38 @@
 # ============================================================
-# Walled garden on port 80 — captive portal for restricted customers
+# walled-garden-80 — the captive portal, served on the intercepted connection
 # ============================================================
-# The garden was designed to answer on 8081 so port 80 could stay untouched.
-# That does not survive contact with the network: nothing forwards 8081 to this
-# host. Probed from an access router and from this box, 80 and 443 connect
-# while 3001 and 8081 time out. So the garden answers on 80, which is the port
-# captive probes use anyway.
+# The access routers dst-nat port 80 from nf-restricted to this host, so an
+# intercepted request arrives here already on a path that demonstrably works.
 #
-# WHY A REGEX server_name: the access router dst-nats a restricted customer's
-# port-80 traffic here, but the Host header is whatever they asked for —
-# connectivitycheck.gstatic.com from an OS probe, example.com from the address
-# bar. Listing only the probe hostnames caught the "Sign in to network"
-# notification but left every typed http:// URL falling through to the catchall's
-# 444, so a customer who ignored the notification and just browsed saw a dead
-# browser instead of the bill they owe. The regex catches any hostname.
+# This used to answer every such request with:
+#     return 302 https://netfactory.com.ph/restricted/;
+# which threw that working connection away and told the phone to open a new one to
+# the PUBLIC address over HTTPS. The 302 itself was always delivered — it travels
+# back down the port-80 path the router had already rewritten to 10.0.98.4 — but the
+# second connection only succeeded from some subnets. Measured over one day:
 #
-# This does NOT hijack port 80. nginx resolves server_name in a fixed order:
-# exact names, then wildcards, then regex, then default_server. The exact-name
-# vhosts — netfactory.com.ph, www.netfactory.com.ph, acs.netfactory.com.ph —
-# are matched BEFORE this block and are unaffected, ACME renewals included.
-# Only hostnames no vhost claims reach here, which is exactly what 00-catchall
-# used to receive.
+#   100.67.0.x    1901 redirects -> 363 portal loads
+#   100.65.32.x   3082 redirects -> 216 portal loads
+#   100.64.104.x  1989 redirects ->  39 portal loads
+#   100.64.96.x    482 redirects ->   0      <- never once
+#   100.64.120.x    95 redirects ->   0      <- never once
+#   100.66.48.x      5 redirects ->   0      <- never once
 #
-# Source is what separates the two audiences that now arrive: a restricted
-# customer must get the portal, the open internet must keep getting 444.
-# $nf_garden_client (conf.d/nf-garden-clients.conf) holds the customer ranges.
-# A scanner aiming any hostname at this IP still gets 444, byte for byte what
-# it got before, and is still logged to the catchall log rather than polluting
-# the garden log.
+# 100.64.96.x sends dozens of Android generate_204 probes, which do follow redirects,
+# so those zeros are failures to arrive, not absence of attempts. Customers on three
+# subnets were redirected correctly and then sent somewhere they cannot reach.
 #
-# 302 not 301: a permanent redirect would be cached by the browser and would
-# keep firing after the customer has paid and been restored.
+# So the portal is served HERE now. The redirect below is relative — same host, same
+# scheme, same port — so the browser stays on the connection the router already
+# guarantees, and nothing depends on the client reaching 36.50.30.102:443.
+#
+# Scanners still get 444 on every path: the source-address split in
+# conf.d/nf-garden-clients.conf decides which audience a request belongs to, because
+# a captive probe can carry whatever Host header it likes.
+# ============================================================
 server {
     listen 80;
     listen [::]:80;
-
-    # The known OS probe hostnames are listed explicitly ahead of the regex —
-    # not required for matching, but it documents what this block is for.
     server_name
         connectivitycheck.gstatic.com
         connectivitycheck.android.com
@@ -58,9 +54,35 @@ server {
     access_log /var/log/nginx/walled-garden-access.log combined if=$nf_garden_client;
     access_log /var/log/nginx/catchall-access.log      combined if=$nf_garden_scanner;
 
-    if ($nf_garden_client) {
-        return 302 https://netfactory.com.ph/restricted/;
+    # Anything that is not a customer pool gets nothing, on every path.
+    if ($nf_garden_scanner) { return 444; }
+
+    root /var/www/netfactory.com.ph/html;
+    client_max_body_size 2m;
+
+    # The portal itself.
+    location ^~ /restricted/ {
+        try_files $uri $uri/ /restricted/index.html;
     }
 
-    return 444;
+    # Its logo. The page renders without it, but a broken image on a payment page
+    # reads as a broken page.
+    location ^~ /uploads/ {
+        try_files $uri =404;
+    }
+
+    # Status and the pay button. Same upstream the main vhost uses.
+    location ^~ /api/restricted/ {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Everything else a restricted customer asks for. Relative on purpose — see above.
+    location / {
+        return 302 /restricted/;
+    }
 }

@@ -12,6 +12,7 @@ try { prepaid = require('../utils/prepaid'); }
 catch (e) { prepaid = null; }
 const { getCompany } = require('../utils/company');
 const { getPrefs } = require('../utils/notifPrefs');
+const { addCredit } = require('../utils/credit');
 
 const METHOD_LABELS = {
   cash: 'Cash', gcash: 'GCash', maya: 'Maya', paymaya: 'Maya',
@@ -328,14 +329,37 @@ const xenditWebhookHandler = async (req, res) => {
       const batchInvoices = await req.prisma.invoices.findMany({ where: { xendit_external_id: event.external_id }, include: { subscriber: true } });
       if (batchInvoices.length > 0) {
         const sub = batchInvoices[0].subscriber;
+        // Same replay guard as the single-invoice path below: one gateway reference
+        // settles one batch, however many times the webhook is delivered.
+        const bRef = event.payment_id || event.id || event.external_id;
+        const bDup = bRef ? await req.prisma.payments.findFirst({
+          where: { invoice_id: { in: batchInvoices.map(i => i.id) },
+                   reference_number: String(bRef), status: 'success' },
+        }) : null;
+        if (bDup) {
+          console.log('  pay-all: ' + bRef + ' already settled this batch (payment ' + bDup.id + ') — ignoring replay');
+          return res.json({ status: 'duplicate', invoiceCount: batchInvoices.length, paymentId: bDup.id });
+        }
         console.log('  pay-all: ' + batchInvoices.length + ' invoices for ' + sub.account_number);
         const ch2 = (event.payment_channel || event.ewallet_type || "").toUpperCase();
         const chMap2 = { GCASH:"gcash", PH_GCASH:"gcash", PAYMAYA:"maya", PH_PAYMAYA:"maya", MAYA:"maya", GRABPAY:"gcash", SHOPEEPAY:"gcash" };
         const tMap2 = { EWALLET:"gcash", QR_CODE:"gcash", DIRECT_DEBIT:"bank_transfer", CREDIT_CARD:"xendit", BANK_TRANSFER:"bank_transfer", RETAIL_OUTLET:"7-eleven", PAYLATER:"xendit" };
         const batchMethod = chMap2[ch2] || tMap2[event.payment_method] || "xendit";
         const batchGrants = [];
+        // A pay-all checkout is minted for the invoices owed at the moment the customer
+        // pressed Pay. By the time they actually pay, one of those may have been settled
+        // at the counter — and the loop below skips anything already marked paid, so that
+        // portion of the money used to land nowhere at all. Collect it and credit it.
+        const batchSettled = [];
+        const batchAdvance = [];
+        let batchExcess = 0;
+        let batchFirstPaymentId = null;
         for (const inv of batchInvoices) {
-          if (inv.status === "paid") continue;
+          if (inv.status === "paid") {
+            batchExcess += Number(inv.amount);
+            batchSettled.push(inv.invoice_number);
+            continue;
+          }
           const bPay = await req.prisma.payments.create({ data: { invoice_id: inv.id, subscriber_id: inv.subscriber_id, amount: Number(inv.amount), method: batchMethod, reference_number: event.payment_id || event.id || event.external_id, status: "success", paid_at: event.paid_at ? new Date(event.paid_at) : new Date() } });
           await req.prisma.invoices.update({ where: { id: inv.id }, data: { status: "paid" } });
           await syncToAR(req.prisma, { ...inv, subscriber: sub }, Number(inv.amount), batchMethod, event.payment_id || event.id || event.external_id, 'xendit-batch');
@@ -355,7 +379,25 @@ const xenditWebhookHandler = async (req, res) => {
                 ' (subscriber ' + sub.id + '): ' + err.message);
             }
           }
+          if (batchFirstPaymentId === null) batchFirstPaymentId = bPay.id;
+          // Advance invoices inside a pay-all credit their full amount, same as above.
+          if (inv.is_advance) { batchExcess += Number(inv.amount); batchAdvance.push(inv.invoice_number); }
           console.log('  done: ' + inv.invoice_number + ' paid');
+        }
+
+        // Advance payment: money received for invoices that no longer needed it.
+        let batchCredit = null;
+        if (batchExcess > 0) {
+          batchCredit = await addCredit(req.prisma, {
+            subscriberId: sub.id,
+            amount: batchExcess,
+            paymentId: batchFirstPaymentId,
+            note: [
+              batchAdvance.length ? 'Advance payment ' + batchAdvance.join(', ') : null,
+              batchSettled.length ? batchSettled.join(', ') + ' already settled when the online payment arrived' : null,
+            ].filter(Boolean).join('; ') + ' (' + (event.payment_id || event.id || event.external_id) + ')',
+            by: 'auto (online payment)',
+          });
         }
         const remaining = await req.prisma.invoices.findMany({ where: { subscriber_id: sub.id, status: { in: ["pending", "overdue"] } } });
         const newBal = remaining.reduce((s, i) => s + Number(i.amount), 0);
@@ -400,6 +442,7 @@ const xenditWebhookHandler = async (req, res) => {
         console.log('Pay-all done: ' + batchInvoices.length + ' invoices, P' + totalPaid + ' via ' + batchMethod);
         return res.json({ status: "paid", invoiceCount: batchInvoices.length, total: totalPaid,
           accessRestored: !!bRestore.restored,
+          credited: batchCredit ? batchCredit.credited : undefined,
           prepaid: batchGrants.length ? batchGrants : undefined });
       }
     }
@@ -424,6 +467,32 @@ const xenditWebhookHandler = async (req, res) => {
 
     const sub = invoice.subscriber;
     const payAmt = Number(event.paid_amount || invoice.amount);
+
+    // Xendit retries any delivery it does not get a 2xx for, and a customer can reload
+    // the success redirect. Settling twice was merely untidy while the money just landed
+    // on an invoice; now that the surplus becomes credit, a replay would invent it. The
+    // gateway's own reference is the identity of the payment, so one reference settles once.
+    const payRef = event.payment_id || event.id || event.external_id;
+    const already = payRef ? await req.prisma.payments.findFirst({
+      where: { invoice_id: invoice.id, reference_number: String(payRef), status: 'success' },
+    }) : null;
+    if (already) {
+      console.log('Xendit webhook: ' + payRef + ' already settled ' + invoice.invoice_number +
+                  ' (payment ' + already.id + ') — ignoring replay');
+      return res.json({ status: 'duplicate', invoiceNumber: invoice.invoice_number, paymentId: already.id });
+    }
+
+    // How much of this payment the invoice actually needs. A pay link sits in an inbox
+    // for weeks: by the time it is opened the invoice may have been settled at the
+    // counter, or part-settled. Anything the invoice does not need is an advance
+    // payment and belongs in the credit ledger, not silently attached to a settled bill.
+    const priorPaid = Number((await req.prisma.payments.aggregate({
+      where: { invoice_id: invoice.id, status: 'success' }, _sum: { amount: true },
+    }))._sum.amount || 0);
+    const owedOnInvoice = Math.max(0, Math.round((Number(invoice.amount) - priorPaid) * 100) / 100);
+    const appliedAmt = Math.min(payAmt, owedOnInvoice);
+    const excessAmt = Math.round((payAmt - appliedAmt) * 100) / 100;
+
     const payment = await req.prisma.payments.create({ data: { invoice_id: invoice.id, subscriber_id: invoice.subscriber_id, amount: payAmt, method: paymentMethod, reference_number: event.payment_id || event.id || event.external_id, status: "success", paid_at: event.paid_at ? new Date(event.paid_at) : new Date() } });
 
     // Check total paid for partial support
@@ -432,8 +501,34 @@ const xenditWebhookHandler = async (req, res) => {
     const invoiceStatus = totalPaidAmt >= Number(invoice.amount) ? 'paid' : 'partial';
     await req.prisma.invoices.update({ where: { id: invoice.id }, data: { status: invoiceStatus } });
 
-    // Sync to AR
-    await syncToAR(req.prisma, invoice, payAmt, paymentMethod, event.payment_id || event.id || event.external_id, 'xendit-webhook');
+    // An advance invoice is not a service charge — it is money collected before there
+    // is anything to bill for. Settling it moves the whole amount into credit, so the
+    // first real invoice can draw on it. Any surplus on top is credited the same way.
+    // Both go in ONE call: addCredit refuses a second credit for the same payment id,
+    // which is what stops a retried webhook inventing money.
+    const advanceAmt = invoice.is_advance ? appliedAmt : 0;
+    const creditAmt = Math.round((advanceAmt + excessAmt) * 100) / 100;
+    let xCredit = null;
+    if (creditAmt > 0) {
+      const why = invoice.is_advance
+        ? 'Advance payment ' + invoice.invoice_number + ' (P' + advanceAmt + ' credited' +
+          (excessAmt > 0 ? ', plus P' + excessAmt + ' overpaid' : '') + ')'
+        : 'Advance payment on ' + invoice.invoice_number + ' (received P' + payAmt +
+          ', invoice needed P' + owedOnInvoice + ')';
+      xCredit = await addCredit(req.prisma, {
+        subscriberId: invoice.subscriber_id,
+        amount: creditAmt,
+        paymentId: payment.id,
+        note: why + ' — ' + (event.payment_id || event.id || event.external_id),
+        by: 'auto (online payment)',
+      });
+    }
+
+    // Sync to AR — only the part the invoice consumed. The excess is not a receivable
+    // against this invoice; it is sitting in the credit ledger waiting to be applied.
+    if (appliedAmt > 0) {
+      await syncToAR(req.prisma, invoice, appliedAmt, paymentMethod, event.payment_id || event.id || event.external_id, 'xendit-webhook');
+    }
 
     const remaining = await req.prisma.invoices.findMany({ where: { subscriber_id: sub.id, status: { in: ["pending", "overdue"] } } });
     const newBal = remaining.reduce((s, i) => s + Number(i.amount), 0);
@@ -505,6 +600,7 @@ const xenditWebhookHandler = async (req, res) => {
     console.log('Payment recorded: ' + invoice.invoice_number + ' - P' + invoice.amount + ' via ' + paymentMethod);
     res.json({ status: "paid", invoiceNumber: invoice.invoice_number, paymentId: payment.id,
       accessRestored: !!xRestore.restored,
+      credited: xCredit ? xCredit.credited : undefined,
       prepaid: xGrant ? { granted: xGrant.granted, days: xGrant.days || Number(invoice.prepaid_days),
         expiresAt: xGrant.expiresAfter } : undefined });
 

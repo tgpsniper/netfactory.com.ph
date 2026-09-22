@@ -39,6 +39,16 @@ router.post('/login', loginLimiter, async (req, res) => {
     });
 
     if (!subscriber || !subscriber.auth) {
+      // The customer-facing answer stays identical for both cases — telling a stranger
+      // which account numbers exist is worse than a vague error. But the two are very
+      // different operationally: a missing credential is OUR bug, not a forgotten
+      // password, and staff spent a long afternoon on a customer typing the right
+      // password into an account that had no subscriber_auth row at all. Say so here.
+      if (subscriber && !subscriber.auth) {
+        console.warn('[portal] ' + subscriber.account_number + ' (subscriber ' + subscriber.id +
+          ', status ' + subscriber.status + ') has NO portal credential — login cannot ' +
+          'succeed for any password. Provision one; see the activation path in admin.js.');
+      }
       return res.status(401).json({ error: 'Invalid account number or password' });
     }
 

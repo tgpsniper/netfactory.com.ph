@@ -103,6 +103,7 @@ const { getToggle, setToggle, TOGGLE_KEYS, refreshCache } = require('../middlewa
 const { getPrefs } = require('../utils/notifPrefs');
 // Same verification the account-number reassign modal runs, reused on create.
 const acctNum = require('./account-number');
+const subNotes = require('../utils/subscriber-notes');
 const { getCompanyInfo, getEmailTemplate, getSmsTemplate } = require('./notifications');
 
 const router = express.Router();
@@ -1663,9 +1664,22 @@ router.put('/subscribers/:id', adminAuth(), async (req, res) => {
       }
     }
 
-    // If activating a pending subscriber, create portal auth + RADIUS
+    // If activating a subscriber, create portal auth + RADIUS.
+    //
+    // This used to require the PREVIOUS status to be 'pending'. An account approved
+    // first and activated from there — approved -> active, which is how the CRM's own
+    // approval flow moves a subscriber — matched neither this nor the create path
+    // (which only makes a login when the subscriber is created as 'active' outright).
+    // The result was a live, billed customer with no subscriber_auth row, and because
+    // /portal/login answers "Invalid account number or password" for a missing
+    // credential exactly as it does for a wrong one, it read as a password problem.
+    // Found on one account — the only one of 194 active subscribers without a login.
+    //
+    // Any transition INTO active now provisions it. The existing-auth check below
+    // already makes this idempotent, so accounts that arrived another way are
+    // untouched and a re-activation never overwrites a password the customer changed.
     let activationPassword = null;
-    if (data.status === 'active' && sub.status === 'pending') {
+    if (data.status === 'active' && sub.status !== 'active') {
       data.installed_at = data.installed_at || new Date();
       activationPassword = defaultPortalPassword(sub.account_number);
 
@@ -2236,6 +2250,7 @@ router.get('/invoices', adminAuth(), async (req, res) => {
         dueDate: inv.due_date,
         invoiceDate: inv.generated_at || inv.created_at,
         status: inv.status,
+        isAdvance: inv.is_advance === true,
         referralDiscount: referralByInvoice[inv.id] || 0,
         payments: inv.payments.map(p => ({ amount: Number(p.amount), method: p.method, paidAt: p.paid_at }))
       })),
@@ -2325,7 +2340,7 @@ router.get('/invoices/:id/pdf', async (req, res) => {
 // ============================================
 router.post('/invoices/create', adminAuth(), async (req, res) => {
   try {
-    const { subscriberId, amount, billingPeriod, dueDate, description, notes, type } = req.body;
+    const { subscriberId, amount, billingPeriod, dueDate, description, notes, type, isAdvance } = req.body;
 
     if (!subscriberId || !amount || !dueDate) {
       return res.status(400).json({ error: 'subscriberId, amount, and dueDate are required' });
@@ -2360,6 +2375,13 @@ router.post('/invoices/create', adminAuth(), async (req, res) => {
         billing_period: billingPeriod || "Activation",
         due_date: new Date(dueDate),
         status: "pending",
+        // An advance invoice collects money before there is service to bill for — a
+        // downpayment taken while the customer is still 'approved', with no plan, no
+        // ONU and no period to consume. Paying it credits the subscriber instead of
+        // settling a service charge, so the money is still there when the first real
+        // invoice is raised. The emailed pay link works exactly as it does for any
+        // other invoice; only what happens on payment differs.
+        is_advance: isAdvance === true || isAdvance === 'true',
         notes: [
           // For manual category invoices, only store what the user typed — no plan info
           !isManualCat && subscriber.plan ? `${subscriber.plan.name} (${subscriber.plan.speed_mbps} Mbps) — Service for ${billingPeriod || 'Activation'}` : null,
@@ -2388,7 +2410,7 @@ router.post('/invoices/create', adminAuth(), async (req, res) => {
         ip_address: req.ip,
       }
     }).catch(() => {});
-      req.auditLog('INVOICE_CREATE', { invoice: invoiceNumber, amount, subscriberId: parseInt(subscriberId) }).catch(() => {});
+      req.auditLog('INVOICE_CREATE', { invoice: invoiceNumber, amount, subscriberId: parseInt(subscriberId), advance: invoice.is_advance || undefined }).catch(() => {});
 
     res.status(201).json({
       message: 'Invoice created successfully',
@@ -4895,10 +4917,17 @@ router.post('/invoices/:id/pay', adminAuth(), async (req, res) => {
       req.auditLog('PAYMENT_ACCEPT', { invoice: invoice.invoice_number, amount: payAmount, method, reference: referenceNumber, newStatus }).catch(() => {});
 
     // 6. Handle overpayment → subscriber credit
+    //
+    // An advance invoice credits its whole settled amount as well: it was never a
+    // service charge, only a way to collect a downpayment through the ordinary invoice
+    // and pay-link machinery. Counter payments have to do this too, not just the
+    // webhook — staff take downpayments in cash at least as often as by link.
+    const advanceCredit = invoice.is_advance ? effectivePayment : 0;
+    const creditAmount = Math.round((overpayment + advanceCredit) * 100) / 100;
     let creditBalance = 0;
-    if (overpayment > 0) {
+    if (creditAmount > 0) {
       const opUpd = await req.prisma.$queryRaw`
-        UPDATE subscribers SET credit_balance = ROUND(COALESCE(credit_balance, 0) + ${overpayment}::numeric, 2) WHERE id = ${invoice.subscriber_id} RETURNING credit_balance
+        UPDATE subscribers SET credit_balance = ROUND(COALESCE(credit_balance, 0) + ${creditAmount}::numeric, 2) WHERE id = ${invoice.subscriber_id} RETURNING credit_balance
       `;
       creditBalance = Number(opUpd[0].credit_balance);
 
@@ -4909,8 +4938,11 @@ router.post('/invoices/:id/pay', adminAuth(), async (req, res) => {
 
       await req.prisma.$queryRaw`
         INSERT INTO subscriber_credits (subscriber_id, type, amount, running_balance, source_payment_id, notes, created_by)
-        VALUES (${invoice.subscriber_id}, 'overpayment', ${overpayment}, ${creditBalance}, ${lastPayment?.id || null},
-                ${'Overpayment on invoice ' + invoice.invoice_number + ' (paid ' + payAmount + ' on balance ' + remainingBalance + ')'},
+        VALUES (${invoice.subscriber_id}, 'overpayment', ${creditAmount}, ${creditBalance}, ${lastPayment?.id || null},
+                ${invoice.is_advance
+                    ? 'Advance payment ' + invoice.invoice_number + ' (P' + advanceCredit + ' credited' +
+                      (overpayment > 0 ? ', plus P' + overpayment + ' overpaid' : '') + ')'
+                    : 'Overpayment on invoice ' + invoice.invoice_number + ' (paid ' + payAmount + ' on balance ' + remainingBalance + ')'},
                 ${'admin-' + req.adminId})
       `;
     }
@@ -6205,7 +6237,9 @@ router.post('/surveys', adminAuth(), async (req, res) => {
     if (!subscriber_id || !result) return res.status(400).json({ error: 'subscriber_id and result required' });
     if (!['approved', 'declined'].includes(result)) return res.status(400).json({ error: 'result must be approved or declined' });
 
-    const who = req.adminUser?.full_name || req.adminUser?.username || 'Admin';
+    // adminAuth attaches req.admin, not req.adminUser — the latter is undefined, so
+    // every survey note ever written was attributed to a generic 'Admin'.
+    const who = subNotes.adminName(req);
     let photoPath = null;
 
     // Save photo if provided (base64)
@@ -6240,6 +6274,11 @@ router.post('/surveys', adminAuth(), async (req, res) => {
         notes: sub.notes ? sub.notes + '\n' + surveyNote : surveyNote
       }
     });
+
+    // The remark also becomes a timeline row. No summary is appended here: surveyNote
+    // above already put this sentence into subscribers.notes.
+    await subNotes.add(req.prisma, parseInt(subscriber_id),
+      result === 'approved' ? 'approval' : 'decline', notes, who);
 
     await req.prisma.audit_log.create({
       data: {
@@ -6281,6 +6320,68 @@ router.post('/surveys', adminAuth(), async (req, res) => {
   } catch (err) {
     console.error('Survey error:', err);
     res.status(500).json({ error: 'Failed to submit survey' });
+  }
+});
+
+// ── Stage remarks ───────────────────────────────────────────
+// A remark can be attached at any lifecycle step. The row in subscriber_notes is the
+// record; the one-line summary appended to subscribers.notes is there because the CRM
+// still parses that blob for the installation date and the decline reason.
+// See src/utils/subscriber-notes.js.
+
+// GET /api/admin/subscribers/:id/notes - the remark timeline, newest first
+router.get('/subscribers/:id/notes', adminAuth(), async (req, res) => {
+  try {
+    const sid = parseInt(req.params.id);
+    if (!Number.isInteger(sid)) return res.status(400).json({ error: 'Invalid subscriber id' });
+    const notes = await subNotes.list(req.prisma, sid);
+    res.json({ notes, stages: subNotes.STAGES });
+  } catch (err) {
+    console.error('Subscriber notes list error:', err);
+    res.status(500).json({ error: 'Failed to load remarks' });
+  }
+});
+
+// POST /api/admin/subscribers/:id/notes - record a remark
+// { stage, remark, summarise?: boolean }
+// summarise defaults to true. The stage handlers that already write their own line into
+// subscribers.notes pass false, so the blob does not get the same sentence twice.
+router.post('/subscribers/:id/notes', adminAuth(), async (req, res) => {
+  try {
+    const sid = parseInt(req.params.id);
+    if (!Number.isInteger(sid)) return res.status(400).json({ error: 'Invalid subscriber id' });
+
+    const remark = String(req.body.remark == null ? '' : req.body.remark).trim();
+    if (!remark) return res.status(400).json({ error: 'Remark is required' });
+    const stage = subNotes.isStage(req.body.stage) ? req.body.stage : 'general';
+    const author = subNotes.adminName(req);
+
+    const sub = await req.prisma.subscribers.findUnique({
+      where: { id: sid }, select: { id: true, notes: true },
+    });
+    if (!sub) return res.status(404).json({ error: 'Subscriber not found' });
+
+    const saved = await subNotes.add(req.prisma, sid, stage, remark, author);
+    if (!saved) return res.status(500).json({ error: 'Could not save the remark' });
+
+    // The blob update is best-effort: the remark is already recorded, and failing the
+    // request here would tell the user it was lost when it was not.
+    if (req.body.summarise !== false) {
+      try {
+        await req.prisma.subscribers.update({
+          where: { id: sid },
+          data: { notes: subNotes.appendSummary(sub.notes, stage, remark, author, saved.created_at) },
+        });
+      } catch (e) {
+        console.error('[subscriber-notes] summary line not appended for ' + sid + ': ' + e.message);
+      }
+    }
+
+    req.auditLog('SUBSCRIBER_NOTE_ADD', { subscriberId: sid, stage }).catch(() => {});
+    res.status(201).json({ note: saved });
+  } catch (err) {
+    console.error('Subscriber note add error:', err);
+    res.status(500).json({ error: 'Failed to save the remark' });
   }
 });
 
