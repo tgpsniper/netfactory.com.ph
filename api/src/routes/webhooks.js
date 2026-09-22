@@ -13,6 +13,7 @@ catch (e) { prepaid = null; }
 const { getCompany } = require('../utils/company');
 const { getPrefs } = require('../utils/notifPrefs');
 const { addCredit } = require('../utils/credit');
+const { recordArPayment } = require('../utils/receipts');
 
 const METHOD_LABELS = {
   cash: 'Cash', gcash: 'GCash', maya: 'Maya', paymaya: 'Maya',
@@ -53,14 +54,14 @@ async function syncToAR(prisma, invoice, payAmount, method, referenceNumber, adm
       arId = arRecord[0].id;
     }
 
-    const countResult = await prisma.$queryRaw`SELECT COUNT(*)::int AS count FROM ar_payments`;
-    const payNum = 'RCV-' + String((countResult[0].count || 0) + 1).padStart(6, '0');
-
-    await prisma.$queryRaw`
-      INSERT INTO ar_payments (payment_number, ar_id, payment_date, amount, payment_method, reference_number, notes, received_by)
-      VALUES (${payNum}, ${arId}, CURRENT_DATE, ${payAmount}, ${method}, ${referenceNumber || null}, 
-              ${'Payment via webhook - ' + invoice.invoice_number}, ${adminId || 'system'})
-    `;
+    await recordArPayment(prisma, {
+      arId,
+      amount: payAmount,
+      method,
+      referenceNumber: referenceNumber || null,
+      notes: 'Payment via webhook - ' + invoice.invoice_number,
+      receivedBy: adminId || 'system',
+    });
     return arId;
   } catch (arErr) {
     console.error('AR sync error (payment still recorded):', arErr.message);

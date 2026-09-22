@@ -13,6 +13,7 @@ const express = require('express');
 const { defaultPortalPassword } = require('../utils/generators');
 const { getCompany } = require('../utils/company');
 const { parseLcp, lcpSiblingRegex } = require('../utils/lcp');
+const { recordArPayment } = require('../utils/receipts');
 
 // Mikrotik-Rate-Limit carries more than the sustained rate:
 //   rx/tx  burst-rate  burst-threshold  burst-time  [priority]  [min-rate]
@@ -2563,16 +2564,14 @@ router.post('/invoices/generate', adminAuth(), async (req, res) => {
               RETURNING id
             `;
             if (arNew.length > 0) {
-              const cntRes = await req.prisma.$queryRaw`
-                SELECT COALESCE(MAX(CAST(SUBSTRING(payment_number FROM 5) AS INTEGER)), 0) + 1 AS next_num
-                FROM ar_payments WHERE payment_number ~ '^RCV-[0-9]+$'
-              `;
-              const arPayNum = 'RCV-' + String(cntRes[0].next_num).padStart(6, '0');
-              await req.prisma.$queryRaw`
-                INSERT INTO ar_payments (payment_number, ar_id, payment_date, amount, payment_method, reference_number, notes, received_by)
-                VALUES (${arPayNum}, ${arNew[0].id}, CURRENT_DATE, ${creditToApply}, 'credit',
-                  ${'CREDIT-AUTO-' + invoiceNumber}, ${'Credit auto-applied to ' + invoiceNumber}, 'system')
-              `;
+              await recordArPayment(req.prisma, {
+                arId: arNew[0].id,
+                amount: creditToApply,
+                method: 'credit',
+                referenceNumber: 'CREDIT-AUTO-' + invoiceNumber,
+                notes: 'Credit auto-applied to ' + invoiceNumber,
+                receivedBy: 'system',
+              });
             }
           } catch (arErr) { console.error('Credit AR sync error:', arErr.message); }
         }
@@ -4883,22 +4882,18 @@ router.post('/invoices/:id/pay', adminAuth(), async (req, res) => {
         arId = arRecord[0].id;
       }
 
-      // Generate AR payment number — use MAX on the numeric suffix to avoid
-      // duplicates if rows were deleted or a previous insert partially failed
-      const maxResult = await req.prisma.$queryRaw`
-        SELECT COALESCE(MAX(CAST(SUBSTRING(payment_number FROM 5) AS INTEGER)), 0) + 1 AS next_num
-        FROM ar_payments
-        WHERE payment_number ~ '^RCV-[0-9]+$'
-      `;
-      const payNum = 'RCV-' + String(maxResult[0].next_num).padStart(6, '0');
-
-      // Record payment in ar_payments (trigger auto-updates AR amount_paid & status)
-      const arPaymentDate = paymentDate ? new Date(paymentDate) : new Date();
-      await req.prisma.$queryRaw`
-        INSERT INTO ar_payments (payment_number, ar_id, payment_date, amount, payment_method, reference_number, notes, received_by)
-        VALUES (${payNum}, ${arId}, ${arPaymentDate}::date, ${effectivePayment}, ${arMethod}, ${referenceNumber || null},
-                ${'Payment via CRM billing - ' + invoice.invoice_number}, ${'admin-' + req.adminId})
-      `;
+      // recordArPayment also brings amount_paid, status and the generated balance
+      // back in line. The comment that used to sit here said a trigger did that;
+      // no such trigger exists, which is why every receivable read 'pending'.
+      await recordArPayment(req.prisma, {
+        arId,
+        amount: effectivePayment,
+        method: arMethod,
+        referenceNumber: referenceNumber || null,
+        notes: 'Payment via CRM billing - ' + invoice.invoice_number,
+        receivedBy: 'admin-' + req.adminId,
+        paymentDate: paymentDate || null,
+      });
     } catch (arErr) {
       console.error('AR sync error (payment still recorded):', arErr);
     }
@@ -5281,17 +5276,14 @@ router.post('/invoices/:id/apply-credit', adminAuth(), async (req, res) => {
         arId = arRecord[0].id;
       }
       if (arId) {
-        const maxArRes = await req.prisma.$queryRaw`
-          SELECT COALESCE(MAX(CAST(SUBSTRING(payment_number FROM 5) AS INTEGER)), 0) + 1 AS next_num
-          FROM ar_payments WHERE payment_number ~ '^RCV-[0-9]+$'
-        `;
-        const arPayNum = 'RCV-' + String(maxArRes[0].next_num).padStart(6, '0');
-        await req.prisma.$queryRaw`
-          INSERT INTO ar_payments (payment_number, ar_id, payment_date, amount, payment_method, reference_number, notes, received_by)
-          VALUES (${arPayNum}, ${arId}, CURRENT_DATE, ${creditToApply}, 'credit',
-                  ${referenceNumber}, ${'Credit applied to invoice ' + invoice.invoice_number},
-                  ${'admin-' + req.adminId})
-        `;
+        await recordArPayment(req.prisma, {
+          arId,
+          amount: creditToApply,
+          method: 'credit',
+          referenceNumber,
+          notes: 'Credit applied to invoice ' + invoice.invoice_number,
+          receivedBy: 'admin-' + req.adminId,
+        });
       }
     } catch (arErr) { console.error('Apply-credit AR sync error:', arErr.message); }
 

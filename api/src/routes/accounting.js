@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const adminAuth = require('../middleware/adminAuth');
+const { recordArPayment, recordApPayment } = require('../utils/receipts');
 
 // BigInt serialization for Prisma raw queries (COUNT/SUM return BigInt)
 const serializeResult = (rows) => {
@@ -829,16 +830,16 @@ router.post('/receivables/:id/pay', adminAuth(), async (req, res) => {
     try {
         const { amount, payment_method, reference_number, payment_date, notes, received_by } = req.body;
 
-        // Generate payment number — use MAX on numeric suffix to avoid duplicates
-        const countResult = await dbQuery(req.prisma,
-          "SELECT COALESCE(MAX(CAST(SUBSTRING(payment_number FROM 5) AS INTEGER)), 0) + 1 AS next_num FROM ar_payments WHERE payment_number ~ '^RCV-[0-9]+$'"
-        );
-        const payNum = 'RCV-' + String(parseInt(countResult.rows[0].next_num)).padStart(6, '0');
-
-        const result = await dbQuery(req.prisma,`
-            INSERT INTO ar_payments (payment_number, ar_id, payment_date, amount, payment_method, reference_number, notes, received_by)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *
-        `, [payNum, parseInt(req.params.id), payment_date || new Date(), amount, payment_method || 'cash', reference_number, notes, received_by]);
+        const receipt = await recordArPayment(req.prisma, {
+            arId: parseInt(req.params.id),
+            amount,
+            method: payment_method || 'cash',
+            referenceNumber: reference_number,
+            notes,
+            receivedBy: received_by,
+            paymentDate: payment_date || null,
+        });
+        const result = await dbQuery(req.prisma, 'SELECT * FROM ar_payments WHERE id = $1', [receipt.id]);
 
         // Fetch updated invoice
         const updated = await dbQuery(req.prisma,'SELECT * FROM accounts_receivable WHERE id = $1', [parseInt(req.params.id)]);
@@ -1046,13 +1047,17 @@ router.post('/payables', adminAuth(), async (req, res) => {
 router.post('/payables/:id/pay', adminAuth(), async (req, res) => {
     try {
         const { amount, payment_method, reference_number, check_number, payment_date, notes, paid_by } = req.body;
-        const countResult = await dbQuery(req.prisma,"SELECT COUNT(*) FROM ap_payments");
-        const payNum = 'PAY-' + String(parseInt(countResult.rows[0].count) + 1).padStart(6, '0');
-
-        const result = await dbQuery(req.prisma,`
-            INSERT INTO ap_payments (payment_number, ap_id, payment_date, amount, payment_method, reference_number, check_number, notes, paid_by)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *
-        `, [payNum, parseInt(req.params.id), payment_date || new Date(), amount, payment_method || 'bank_transfer', reference_number, check_number, notes, paid_by]);
+        const receipt = await recordApPayment(req.prisma, {
+            apId: parseInt(req.params.id),
+            amount,
+            method: payment_method || 'bank_transfer',
+            referenceNumber: reference_number,
+            checkNumber: check_number,
+            notes,
+            paidBy: paid_by,
+            paymentDate: payment_date || null,
+        });
+        const result = await dbQuery(req.prisma, 'SELECT * FROM ap_payments WHERE id = $1', [receipt.id]);
 
         const updated = await dbQuery(req.prisma,'SELECT * FROM accounts_payable WHERE id = $1', [parseInt(req.params.id)]);
         res.json({ success: true, data: { payment: result.rows[0], bill: updated.rows[0] } });
@@ -1352,12 +1357,14 @@ router.post('/credits/apply-to-ar', adminAuth(), async (req, res) => {
         if (creditToApply <= 0) return res.status(400).json({ success: false, error: 'Invalid credit amount' });
 
         // 1. Record AR payment
-        const countResult = await dbQuery(req.prisma, "SELECT COALESCE(MAX(CAST(SUBSTRING(payment_number FROM 5) AS INTEGER)), 0) + 1 AS next_num FROM ar_payments WHERE payment_number ~ '^RCV-[0-9]+$'");
-        const payNum = 'RCV-' + String(parseInt(countResult.rows[0].next_num)).padStart(6, '0');
-        await dbQuery(req.prisma, `
-            INSERT INTO ar_payments (payment_number, ar_id, payment_date, amount, payment_method, reference_number, notes, received_by)
-            VALUES ($1, $2, CURRENT_DATE, $3, 'credit', $4, $5, $6)
-        `, [payNum, parseInt(arId), creditToApply, 'CREDIT-' + ar.invoice_number, 'Credit applied from subscriber balance', 'accounting']);
+        await recordArPayment(req.prisma, {
+            arId: parseInt(arId),
+            amount: creditToApply,
+            method: 'credit',
+            referenceNumber: 'CREDIT-' + ar.invoice_number,
+            notes: 'Credit applied from subscriber balance',
+            receivedBy: 'accounting',
+        });
 
         // 2. If AR has linked billing invoice, also record in payments table and update invoice
         if (ar.billing_invoice_id) {

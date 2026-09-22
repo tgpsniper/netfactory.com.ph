@@ -1,4 +1,5 @@
 const express = require('express');
+const { recordArPayment } = require('../utils/receipts');
 const router = express.Router();
 
 // ============================================================
@@ -244,13 +245,14 @@ router.post('/:subscriberId/apply', adminAuth(), async (req, res) => {
         SELECT id FROM accounts_receivable WHERE billing_invoice_id = ${invoice.id} LIMIT 1
       `;
       if (arRecord.length > 0) {
-        const countResult = await req.prisma.$queryRaw`SELECT COUNT(*)::int AS count FROM ar_payments`;
-        const payNum = 'RCV-' + String((countResult[0].count || 0) + 1).padStart(6, '0');
-        await req.prisma.$queryRaw`
-          INSERT INTO ar_payments (payment_number, ar_id, payment_date, amount, payment_method, reference_number, notes, received_by)
-          VALUES (${payNum}, ${arRecord[0].id}, CURRENT_DATE, ${creditToApply}, 'credit',
-                  ${'CREDIT-' + invoice.invoice_number}, ${'Credit applied to ' + invoice.invoice_number}, ${'admin-' + req.adminId})
-        `;
+        await recordArPayment(req.prisma, {
+          arId: arRecord[0].id,
+          amount: creditToApply,
+          method: 'credit',
+          referenceNumber: 'CREDIT-' + invoice.invoice_number,
+          notes: 'Credit applied to ' + invoice.invoice_number,
+          receivedBy: 'admin-' + req.adminId,
+        });
       }
     } catch (arErr) { console.error('Credit apply AR sync error:', arErr.message); }
 
