@@ -1465,7 +1465,8 @@ router.post('/invoices/:id/pay', portalAuth, async (req, res) => {
     }).catch(() => {});
 
       // ── New audit trail ──
-      req.auditLog('PAYMENT_MADE', { invoice: invoice.invoice_number, amount: Number(invoice.amount), method: 'xendit', xenditId: xenditData.id }).catch(() => {});
+      // Checkout opened, nothing paid yet — the webhook writes PAYMENT_RECEIVED.
+      req.auditLog('PAYMENT_INITIATED', { invoice: invoice.invoice_number, amount: Number(invoice.amount), method: 'xendit', xenditId: xenditData.id }).catch(() => {});
 
     console.log(`💳 Xendit checkout created for ${invoice.invoice_number}: ${xenditData.invoice_url}`);
 
@@ -1981,7 +1982,8 @@ router.post('/invoices/pay-all', portalAuth, async (req, res) => {
     }).catch(() => {});
 
       // ── New audit trail ──
-      req.auditLog('PAYMENT_MADE', { invoices: invoiceNumbers, amount: totalAmount, count: invoices.length, method: 'xendit', xenditId: xenditData.id }).catch(() => {});
+      // Checkout opened, nothing paid yet — the webhook writes PAYMENT_RECEIVED.
+      req.auditLog('PAYMENT_INITIATED', { invoices: invoiceNumbers, amount: totalAmount, count: invoices.length, method: 'xendit', xenditId: xenditData.id }).catch(() => {});
 
     console.log(`💳 Xendit pay-all created for ${invoices.length} invoices (₱${totalAmount}): ${xenditData.invoice_url}`);
 

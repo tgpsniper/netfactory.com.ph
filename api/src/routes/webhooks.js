@@ -441,6 +441,23 @@ const xenditWebhookHandler = async (req, res) => {
         }
 
         console.log('Pay-all done: ' + batchInvoices.length + ' invoices, P' + totalPaid + ' via ' + batchMethod);
+
+        // Same as the single-invoice path: the entry that means money arrived, as
+        // opposed to the PAYMENT_INITIATED written when the customer pressed Pay.
+        if (req.auditLog) {
+          req.auditLog('PAYMENT_RECEIVED', {
+            account: sub.account_number,
+            invoices: batchInvoices.map(i => i.invoice_number).join(', '),
+            count: batchInvoices.length,
+            amount: totalPaid,
+            credited: batchCredit ? batchCredit.credited : 0,
+            method: batchMethod,
+            reference: event.payment_id || event.id || event.external_id,
+            accessRestored: !!bRestore.restored,
+          }, { log_source: 'portal', user_id: sub.id, username: sub.account_number })
+            .catch(e => console.error('audit PAYMENT_RECEIVED failed:', e.message));
+        }
+
         return res.json({ status: "paid", invoiceCount: batchInvoices.length, total: totalPaid,
           accessRestored: !!bRestore.restored,
           credited: batchCredit ? batchCredit.credited : undefined,
@@ -599,6 +616,26 @@ const xenditWebhookHandler = async (req, res) => {
     }
 
     console.log('Payment recorded: ' + invoice.invoice_number + ' - P' + invoice.amount + ' via ' + paymentMethod);
+
+    // The audit trail the CRM reads is audit_logs, and nothing has ever written a
+    // successful online payment to it — only PAYMENT_MADE at checkout creation, which
+    // is not a payment. Staff read that as money received and chased three refunds
+    // for customers who had merely pressed Pay. This is the entry that means the money
+    // actually arrived. The audit_log write above is the older, separate trail.
+    if (req.auditLog) {
+      req.auditLog('PAYMENT_RECEIVED', {
+        account: sub.account_number,
+        invoice: invoice.invoice_number,
+        amount: payAmt,
+        appliedToInvoice: appliedAmt,
+        credited: xCredit ? xCredit.credited : 0,
+        method: paymentMethod,
+        reference: payRef,
+        accessRestored: !!xRestore.restored,
+      }, { log_source: 'portal', user_id: sub.id, username: sub.account_number })
+        .catch(e => console.error('audit PAYMENT_RECEIVED failed:', e.message));
+    }
+
     res.json({ status: "paid", invoiceNumber: invoice.invoice_number, paymentId: payment.id,
       accessRestored: !!xRestore.restored,
       credited: xCredit ? xCredit.credited : undefined,

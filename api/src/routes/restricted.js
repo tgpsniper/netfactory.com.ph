@@ -393,7 +393,9 @@ router.post('/pay', payLimiter, async (req, res) => {
     });
 
     if (req.auditLog) {
-      req.auditLog('PAYMENT_MADE', {
+      // The customer has opened a checkout, not paid. Only the webhook knows
+      // whether money ever arrived, and it writes PAYMENT_RECEIVED when it does.
+      req.auditLog('PAYMENT_INITIATED', {
         account: sub.account_number,
         amount: totalAmount,
         method: 'xendit',

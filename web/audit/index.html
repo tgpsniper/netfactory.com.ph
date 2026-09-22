@@ -124,6 +124,7 @@ tbody tr:last-child td{border-bottom:none;}
 .badge-update{background:#fef3c7;color:#d97706;}
 .badge-delete{background:#fee2e2;color:#dc2626;}
 .badge-payment{background:#d1fae5;color:#059669;}
+.badge-initiated{background:#fef3c7;color:#d97706;}
 .badge-settings{background:#e0e7ff;color:#4f46e5;}
 .badge-password{background:#fce7f3;color:#db2777;}
 .badge-ticket{background:#fef3c7;color:#d97706;}
@@ -319,17 +320,31 @@ function openDetail(log) {
 function sourceBadge(src) {
   return src === 'portal' ? '<span class="badge badge-portal">PORTAL</span>' : '<span class="badge badge-crm">CRM</span>';
 }
+// PAYMENT_MADE was written when a customer pressed Pay and a checkout was created,
+// never when money arrived — the name says the opposite of what the row means, and
+// staff chased payments that did not exist because of it. The code now writes
+// PAYMENT_INITIATED there and PAYMENT_RECEIVED from the webhook that sees the money.
+// The stored rows are left alone: an audit trail is not rewritten after the fact.
+// Every PAYMENT_MADE row ever written means "checkout opened", so it is displayed
+// that way, in amber rather than the green that reads as cash in hand.
+const ACTION_LABELS = {
+  'PAYMENT_MADE': 'PAYMENT INITIATED',
+};
+function actionLabel(action) {
+  return ACTION_LABELS[action] || action;
+}
 function actionBadge(action) {
   const map = {
     'LOGIN': 'badge-login', 'LOGOUT': 'badge-login',
     'LOGIN_FAILED': 'badge-failed',
     'SUBSCRIBER_CREATE': 'badge-create', 'INVOICE_CREATE': 'badge-create', 'TICKET_CREATE': 'badge-create',
     'SUBSCRIBER_UPDATE': 'badge-update', 'TICKET_UPDATE': 'badge-update', 'ACCOUNT_UPDATE': 'badge-update', 'PLAN_CHANGE': 'badge-update',
-    'PAYMENT_ACCEPT': 'badge-payment', 'PAYMENT_MADE': 'badge-payment',
+    'PAYMENT_ACCEPT': 'badge-payment', 'PAYMENT_RECEIVED': 'badge-payment',
+    'PAYMENT_INITIATED': 'badge-initiated', 'PAYMENT_MADE': 'badge-initiated',
     'PASSWORD_CHANGE': 'badge-password', 'PASSWORD_RESET': 'badge-password',
     'SETTINGS_CHANGE': 'badge-settings', 'STAFF_MANAGE': 'badge-settings',
   };
-  return `<span class="badge ${map[action] || 'badge-default'}">${action}</span>`;
+  return `<span class="badge ${map[action] || 'badge-default'}">${actionLabel(action)}</span>`;
 }
 
 // ── Relative Time ──
@@ -398,7 +413,7 @@ async function renderLogs() {
         <label>Action</label>
         <select id="fAction">
           <option value="">All Actions</option>
-          ${actions.map(a => `<option value="${a.action}" ${filters.action===a.action?'selected':''}>${a.action} (${a.count})</option>`).join('')}
+          ${actions.map(a => `<option value="${a.action}" ${filters.action===a.action?'selected':''}>${actionLabel(a.action)} (${a.count})</option>`).join('')}
         </select>
       </div>
       <div class="filter-group">
