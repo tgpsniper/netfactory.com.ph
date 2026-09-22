@@ -53,10 +53,18 @@ function findBogonDrop(filters) {
   return (filters || []).find(r =>
     r.chain === 'forward' && r.action === 'drop' && String(dstList(r)) === 'BOGONS') || null;
 }
+// The list holding customer source addresses is not named the same on every router.
+// Thirteen release customer traffic with src-address-list=NAT; AC-MALAULI and
+// AC-LEFTBANK use CLIENTS-POOL, which is the same rule doing the same job under a
+// different name. Matching only on 'NAT' is why those two were written off as unable
+// to take the garden: they have the anchor, it just is not spelled NAT. Nothing else
+// in the chain is scoped to these lists, so there is no other accept to confuse it
+// with.
+const CUSTOMER_LISTS = ['NAT', 'CLIENTS-POOL'];
 function findAnchor(filters) {
   const fwd = (filters || []).filter(r => r.chain === 'forward');
   return fwd.find(r => String(r.comment || '') === ANCHOR_COMMENT)
-      || fwd.find(r => r.action === 'accept' && srcList(r) === 'NAT')
+      || fwd.find(r => r.action === 'accept' && CUSTOMER_LISTS.includes(srcList(r)))
       || null;
 }
 
