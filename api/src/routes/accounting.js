@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const adminAuth = require('../middleware/adminAuth');
+const { OVERDUE_SQL } = require('../utils/overdue');
 const { recordArPayment, recordApPayment } = require('../utils/receipts');
 
 // BigInt serialization for Prisma raw queries (COUNT/SUM return BigInt)
@@ -47,8 +48,8 @@ router.get('/dashboard', adminAuth(), async (req, res) => {
             SELECT 
                 COUNT(*) FILTER (WHERE status IN ('pending','partial','overdue')) AS ar_open_count,
                 COALESCE(SUM(total_amount - amount_paid) FILTER (WHERE status IN ('pending','partial','overdue')), 0) AS ar_open_balance,
-                COUNT(*) FILTER (WHERE status = 'overdue') AS ar_overdue_count,
-                COALESCE(SUM(total_amount - amount_paid) FILTER (WHERE status = 'overdue'), 0) AS ar_overdue_balance
+                COUNT(*) FILTER (WHERE ${OVERDUE_SQL}) AS ar_overdue_count,
+                COALESCE(SUM(total_amount - amount_paid) FILTER (WHERE ${OVERDUE_SQL}), 0) AS ar_overdue_balance
             FROM accounts_receivable
         `);
         stats.ar = arResult.rows[0];
@@ -58,8 +59,8 @@ router.get('/dashboard', adminAuth(), async (req, res) => {
             SELECT 
                 COUNT(*) FILTER (WHERE status IN ('pending','partial','overdue')) AS ap_open_count,
                 COALESCE(SUM(total_amount - amount_paid) FILTER (WHERE status IN ('pending','partial','overdue')), 0) AS ap_open_balance,
-                COUNT(*) FILTER (WHERE status = 'overdue') AS ap_overdue_count,
-                COALESCE(SUM(total_amount - amount_paid) FILTER (WHERE status = 'overdue'), 0) AS ap_overdue_balance
+                COUNT(*) FILTER (WHERE ${OVERDUE_SQL}) AS ap_overdue_count,
+                COALESCE(SUM(total_amount - amount_paid) FILTER (WHERE ${OVERDUE_SQL}), 0) AS ap_overdue_balance
             FROM accounts_payable
         `);
         stats.ap = apResult.rows[0];

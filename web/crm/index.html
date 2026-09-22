@@ -2746,9 +2746,17 @@ const J2CRM = () => {
   // on this page — so the Overdue tile counted a value that is almost never present and
   // sat on 0 while 18 invoices were weeks past due. The rows beside it already flagged
   // them correctly (isOverdue, below), by date; this is that same rule, shared.
-  const isInvoiceOverdue = (inv) =>
-    (inv.status === "pending" || inv.status === "partial" || inv.status === "overdue") &&
-    inv.dueDate && new Date(inv.dueDate) < new Date();
+  // Compared as YYYY-MM-DD strings rather than as Dates. due_date is a DATE column
+  // and arrives as UTC midnight, while `new Date()` is local — so comparing the two
+  // directly made a bill due TODAY read as already overdue in Manila, and the API
+  // (due_date < CURRENT_DATE) disagreed with this tile by one day. The whole point
+  // of this helper is that the tile and the report behind it agree; see
+  // api/src/utils/overdue.js, which is the same rule on the server.
+  const isInvoiceOverdue = (inv) => {
+    if (!(inv.status === "pending" || inv.status === "partial" || inv.status === "overdue")) return false;
+    if (!inv.dueDate) return false;
+    return String(inv.dueDate).slice(0, 10) < new Date().toLocaleDateString("en-CA");
+  };
   // Takes the bucket explicitly so the tiles can count any bucket, not only the
   // selected one.
   const invoiceInBucket = (inv, bucket) => {

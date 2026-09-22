@@ -13,6 +13,7 @@ const express = require('express');
 const { defaultPortalPassword } = require('../utils/generators');
 const { getCompany } = require('../utils/company');
 const { parseLcp, lcpSiblingRegex } = require('../utils/lcp');
+const { overdueWhere, notYetDueWhere } = require('../utils/overdue');
 const { recordArPayment } = require('../utils/receipts');
 
 // Mikrotik-Rate-Limit carries more than the sustained rate:
@@ -407,8 +408,11 @@ router.get('/dashboard', adminAuth(), async (req, res) => {
       req.prisma.subscribers.count({ where: { status: 'disconnected', is_system: false } }),
       req.prisma.tickets.count({ where: { status: { in: ['open', 'in_progress'] } } }),
       req.prisma.tickets.count({ where: { status: { in: ['open', 'in_progress'] }, priority: 'critical' } }),
-      req.prisma.invoices.count({ where: { status: 'pending' } }),
-      req.prisma.invoices.count({ where: { status: 'overdue' } }),
+      // Owed but not yet late, and owed and past due. Both by due date — nothing
+      // writes status='overdue', so counting it reported 0 while 17 bills were
+      // weeks past due. Splitting them also stops the two KPIs double-counting.
+      req.prisma.invoices.count({ where: notYetDueWhere() }),
+      req.prisma.invoices.count({ where: overdueWhere() }),
       // Monthly revenue — bound to the actual calendar month. The upper bound
       // (lt firstOfNextMonth) keeps future-dated payments (data-entry errors
       // with paid_at in later months) from inflating this month's revenue.
@@ -424,15 +428,15 @@ router.get('/dashboard', adminAuth(), async (req, res) => {
         where: { status: 'success', paid_at: { gte: yearStart, lte: now } },
         select: { amount: true, paid_at: true }
       }),
-      // Outstanding (pending) invoices generated this year
+      // Outstanding (not yet due) invoices generated this year
       // Joined with subscriber so we can group by subscriber status
       req.prisma.invoices.findMany({
-        where: { status: 'pending', generated_at: { gte: yearStart, lt: yearEnd } },
+        where: notYetDueWhere({ generated_at: { gte: yearStart, lt: yearEnd } }),
         select: { amount: true, generated_at: true, subscriber: { select: { status: true } } }
       }),
-      // Outstanding (overdue) invoices generated this year
+      // Outstanding (past due) invoices generated this year
       req.prisma.invoices.findMany({
-        where: { status: 'overdue', generated_at: { gte: yearStart, lt: yearEnd } },
+        where: overdueWhere({ generated_at: { gte: yearStart, lt: yearEnd } }),
         select: { amount: true, generated_at: true, subscriber: { select: { status: true } } }
       }),
       req.prisma.notifications.findMany({
@@ -3605,8 +3609,8 @@ router.get('/reports/:type', adminAuth(), async (req, res) => {
       case 'collection': {
         const [paid, pending, overdue] = await Promise.all([
           req.prisma.invoices.aggregate({ where: { status: 'paid' }, _sum: { amount: true }, _count: true }),
-          req.prisma.invoices.aggregate({ where: { status: 'pending' }, _sum: { amount: true }, _count: true }),
-          req.prisma.invoices.aggregate({ where: { status: 'overdue' }, _sum: { amount: true }, _count: true })
+          req.prisma.invoices.aggregate({ where: notYetDueWhere(), _sum: { amount: true }, _count: true }),
+          req.prisma.invoices.aggregate({ where: overdueWhere(), _sum: { amount: true }, _count: true })
         ]);
 
         res.json({
