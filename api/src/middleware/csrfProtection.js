@@ -15,6 +15,16 @@ const EXEMPT_PATHS = [
   // themselves. Without this, the page breaks for anyone who also holds a j2_csrf
   // cookie from the CRM on the same domain, which is exactly who tests it first.
   '/api/paylink',
+  // The walled garden. Every route here is public and unauthenticated by design —
+  // server.js says so where it mounts them — and /pay resolves the subscriber from
+  // the connection the request arrives on, never from a cookie. It can only ever act
+  // on the line the caller is physically sitting on, and both routes are rate limited.
+  // CSRF defends against a third-party site spending someone's ambient credentials;
+  // there are none here. Same argument as /api/paylink above.
+  //
+  // Without this, Pay Now returns 403 for anyone whose browser also holds a j2_csrf
+  // cookie from the CRM on this domain — which is exactly the staff who test it.
+  '/api/restricted',
 ];
 
 function generateToken() {
