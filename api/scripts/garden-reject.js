@@ -14,10 +14,25 @@
 // which is the path that actually raises "Sign in to network".
 //
 // Inserted as a NEW rule directly above the existing drop rather than changing
-// that rule's action, for two reasons: reject-with=tcp-reset is meaningful only
-// for TCP, so UDP and everything else must still meet the original drop; and
-// leaving the known-good rule untouched means backing this out is a delete of
-// one rule, not an edit that has to be remembered correctly.
+// that rule's action, for two reasons: a reject needs a protocol-appropriate
+// reject-with, so one rule cannot cover everything and the original drop stays
+// as the catch-all; and leaving the known-good rule untouched means backing this
+// out is a delete, not an edit that has to be remembered correctly.
+//
+// UDP WAS THE BIGGER HALF AND THIS SCRIPT ORIGINALLY MISSED IT.
+//
+// Only TCP was rejected at first, on the reasoning that tcp-reset means nothing
+// to UDP — correct as far as it goes, but it left UDP in the black hole and UDP
+// is where the traffic actually is. Measured on CLGNT-AC1 2026-09-24, six days
+// after the TCP reject shipped: 258 packets rejected, 44,374 dropped. Chrome
+// reaches YouTube and every other Google property over QUIC, which is UDP/443,
+// so the browser sat through the full QUIC handshake timeout and reported
+// ERR_CONNECTION_TIMED_OUT — the exact hang this script exists to remove, on
+// the sites a customer is most likely to try first.
+//
+// UDP's equivalent is an ICMP port-unreachable. Chrome treats that as "QUIC is
+// broken to this host", falls straight back to TCP, and meets the reset above.
+// Two rules, both failing in well under a second.
 //
 //   node scripts/garden-reject.js                      # dry run, all routers
 //   node scripts/garden-reject.js --apply --only CLGNT-AC1
@@ -33,50 +48,63 @@ const OFF   = process.argv.includes('--off');
 const onlyIx = process.argv.indexOf('--only');
 const ONLY = onlyIx > -1 ? process.argv[onlyIx + 1] : null;
 
-const COMMENT    = 'nf-garden cutoff reset (tcp)';
+// Disjoint on protocol, so the order between them does not matter — only that both
+// sit above the drop. Everything that must stay reachable (portal, DNS, payment
+// hosts, the payment window) is accepted higher up the chain and never reaches here.
+const RULES = [
+  { comment: 'nf-garden cutoff reset (tcp)', protocol: 'tcp', rejectWith: 'tcp-reset' },
+  { comment: 'nf-garden cutoff reset (udp)', protocol: 'udp', rejectWith: 'icmp-port-unreachable' },
+];
 const DROP_MATCH = /^nf-garden cutoff \(out\)$/;
 const SRC_LIST   = 'nf-restricted';
 
 async function doDevice(dev) {
-  const rules = await mt.execute(prisma, dev.id, '/ip/firewall/filter', 'print');
+  const done = [];
 
-  const existing = rules.find(r => (r.comment || '') === COMMENT);
-  const dropIdx  = rules.findIndex(r => DROP_MATCH.test(r.comment || ''));
+  for (const spec of RULES) {
+    // Re-read every pass: adding one of these shifts the drop's index by one, and
+    // moving the next rule to a stale index would file it below the drop, where it
+    // is dead and looks installed.
+    const rules = await mt.execute(prisma, dev.id, '/ip/firewall/filter', 'print');
+    const existing = rules.find(r => (r.comment || '') === spec.comment);
+    const dropIdx  = rules.findIndex(r => DROP_MATCH.test(r.comment || ''));
 
-  if (OFF) {
-    if (!existing) return { status: 'absent' };
-    if (!APPLY) return { status: 'would-remove' };
-    await mt.execute(prisma, dev.id, '/ip/firewall/filter', 'remove', { id: existing.id });
-    return { status: 'removed' };
+    if (OFF) {
+      if (!existing) { done.push(spec.protocol + ':absent'); continue; }
+      if (!APPLY)    { done.push(spec.protocol + ':would-remove'); continue; }
+      await mt.execute(prisma, dev.id, '/ip/firewall/filter', 'remove', { id: existing.id });
+      done.push(spec.protocol + ':removed');
+      continue;
+    }
+
+    if (existing) { done.push(spec.protocol + ':already'); continue; }
+    // Without the cutoff rule this router is not running the garden at all; adding
+    // a reject here would block traffic that nothing was blocking before.
+    if (dropIdx === -1) return { status: 'no-cutoff-rule', note: 'garden not deployed here' };
+    if (!APPLY) { done.push(spec.protocol + ':would-add above #' + dropIdx); continue; }
+
+    const added = await mt.execute(prisma, dev.id, '/ip/firewall/filter', 'add', {
+      data: {
+        chain: 'forward',
+        action: 'reject',
+        'reject-with': spec.rejectWith,
+        protocol: spec.protocol,
+        'src-address-list': SRC_LIST,
+        comment: spec.comment,
+      }
+    });
+
+    // `add` appends to the end of the chain, which is below the drop and therefore
+    // dead. It only does anything once moved above the drop.
+    const newId = added && (added.id || added['.id']);
+    await mt.execute(prisma, dev.id, '/ip/firewall/filter', 'exec', {
+      command: 'move',
+      data: { numbers: newId, destination: String(dropIdx) }
+    });
+    done.push(spec.protocol + ':added at #' + dropIdx);
   }
 
-  if (existing) return { status: 'already' };
-  // Without the cutoff rule this router is not running the garden at all; adding
-  // a reject here would block traffic that nothing was blocking before.
-  if (dropIdx === -1) return { status: 'no-cutoff-rule', note: 'garden not deployed here' };
-
-  if (!APPLY) return { status: 'would-add', note: 'above rule #' + dropIdx };
-
-  const added = await mt.execute(prisma, dev.id, '/ip/firewall/filter', 'add', {
-    data: {
-      chain: 'forward',
-      action: 'reject',
-      'reject-with': 'tcp-reset',
-      protocol: 'tcp',
-      'src-address-list': SRC_LIST,
-      comment: COMMENT,
-    }
-  });
-
-  // `add` appends to the end of the chain, which is below the drop and therefore
-  // dead. It only does anything once moved above the drop.
-  const newId = added && (added.id || added['.id']);
-  await mt.execute(prisma, dev.id, '/ip/firewall/filter', 'exec', {
-    command: 'move',
-    data: { numbers: newId, destination: String(dropIdx) }
-  });
-
-  return { status: 'added', note: 'moved to #' + dropIdx };
+  return { status: done.join(', ') };
 }
 
 (async () => {

@@ -28,27 +28,10 @@ function parseRateToBps(v) {
   return parseFloat(m[1]) * mult;
 }
 
-// Build the Mikrotik-Rate-Limit value for a plan, including burst when the plan
-// defines it. Threshold is stored as a percentage rather than an absolute rate
-// so it stays valid when the plan speed changes — an absolute threshold silently
-// becomes nonsense the moment someone edits the speed.
-function buildRateLimit(downloadMbps, uploadMbps, burst) {
-  const dl = downloadMbps || 0;
-  const ul = uploadMbps || downloadMbps || 0;
-  const rate = dl + 'M/' + ul + 'M';
-
-  const bDl = Number(burst?.burst_download_mbps) || 0;
-  const bUl = Number(burst?.burst_upload_mbps) || bDl;
-  // Burst is only meaningful above the sustained rate.
-  if (!bDl || bDl <= dl) return rate;
-
-  const pct  = Math.min(Math.max(Number(burst?.burst_threshold_pct) || 80, 1), 99);
-  const time = Math.max(Number(burst?.burst_time_s) || 16, 1);
-  const tDl  = Math.max(Math.round(dl * pct / 100), 1);
-  const tUl  = Math.max(Math.round(ul * pct / 100), 1);
-
-  return `${rate} ${bDl}M/${bUl}M ${tDl}M/${tUl}M ${time}/${time}`;
-}
+// Moved to utils/radius-groups so unrestrictSubscriber can build the same string when
+// it has to recreate a plan's group. One definition — a restore that invented its own
+// rate-limit format would put the customer on a speed no screen in the CRM agrees with.
+const { buildRateLimit } = require('../utils/radius-groups');
 
 // Auto-sync single plan to RADIUS
 async function syncPlanToRadius(slug, downloadMbps, uploadMbps, isActive, burst) {
@@ -57,8 +40,31 @@ async function syncPlanToRadius(slug, downloadMbps, uploadMbps, isActive, burst)
     const rateLimit = buildRateLimit(downloadMbps, uploadMbps, burst);
     const [existing] = await radiusDb.query("SELECT id, value FROM radgroupreply WHERE groupname = ? AND attribute = 'Mikrotik-Rate-Limit'", [slug]);
 
-    if (isActive === false) {
-      // Plan deactivated — remove from RADIUS (but don't touch plan-suspended)
+    // Deactivating a plan means "stop offering this", not "cut off everyone already on
+    // it". Deleting the group unconditionally meant the second: the plan vanished from
+    // RADIUS while its subscribers still pointed at it, so they authenticated into a
+    // group that replies with nothing — no rate limit, no session timeout, no interim
+    // accounting. Found 2026-09-24 with five subscribers across four deactivated plans.
+    // The delete is now conditional on the plan being genuinely empty; otherwise we fall
+    // through and keep the group correct for whoever is still there.
+    let deactivatedButOccupied = false;
+    if (isActive === false && slug !== 'plan-suspended') {
+      // No status filter on purpose. Keeping a group nobody uses costs nothing;
+      // deleting one somebody still points at is the bug being fixed here.
+      const [occ] = await radiusDb.query(
+        `SELECT count(*)::int AS n FROM subscribers s
+           JOIN plans p ON p.id = s.plan_id
+          WHERE p.radius_group = ?`, [slug]);
+      const n = occ[0] ? Number(occ[0].n) : 0;
+      if (n > 0) {
+        deactivatedButOccupied = true;
+        console.warn('RADIUS sync: ' + slug + ' deactivated but ' + n +
+                     ' subscriber(s) still on it — keeping the group');
+      }
+    }
+
+    if (isActive === false && !deactivatedButOccupied) {
+      // Plan deactivated and empty — remove from RADIUS (but don't touch plan-suspended)
       if (slug !== 'plan-suspended') {
         await radiusDb.query("DELETE FROM radgroupreply WHERE groupname = ?", [slug]);
         console.log('RADIUS sync: removed group ' + slug + ' (plan deactivated)');
@@ -5001,6 +5007,7 @@ router.post('/invoices/:id/pay', adminAuth(), async (req, res) => {
         invoice: invoice.invoice_number, reference: referenceNumber || null,
         restrictionId: restore.restrictionId, devices: restore.devices,
         routerApplied: restore.routerApplied,
+        unshaped: restore.unshaped, rebuiltGroup: restore.rebuiltGroup,
       }).catch(() => {});
     }
 

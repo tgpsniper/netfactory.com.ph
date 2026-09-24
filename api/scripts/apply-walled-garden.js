@@ -28,6 +28,11 @@ const mikrotik = require('../src/utils/mikrotik');
 const PORTAL_PUBLIC   = process.env.WG_PORTAL_PUBLIC   || '36.50.30.102';
 const PORTAL_INTERNAL = process.env.WG_PORTAL_INTERNAL || '10.0.98.4';
 const REDIRECT_PORT   = process.env.WG_REDIRECT_PORT   || '80';
+// Where garden-dns answers. Unprivileged on purpose — it runs as the service user, so
+// it cannot bind 53, and the routers rewrite the port on the way in. Keep in step with
+// GARDEN_DNS_ADDR / GARDEN_DNS_PORT in src/services/garden-dns.js.
+const GARDEN_DNS_ADDR = process.env.WG_GARDEN_DNS_ADDR || '10.0.98.4';
+const GARDEN_DNS_PORT = process.env.WG_GARDEN_DNS_PORT || '5354';
 
 // The rule the customer-traffic accept lives on. Everything we add goes above it.
 // Matched by comment where the router has one, otherwise structurally: the first forward
@@ -144,10 +149,62 @@ const SRCNAT_RULE = { chain:'srcnat', action:'accept', 'src-address-list':'nf-re
 // guaranteed to be treated as a scanner and get 444. The test could not have returned
 // anything else, from a port that was working correctly. Probe from a router, or from a
 // customer address, or the answer means nothing.
-const DSTNAT_RULE = { chain:'dstnat', action:'dst-nat', 'src-address-list':'nf-restricted',
-  protocol:'tcp', 'dst-port':'80', 'dst-address-list':'!nf-portal',
-  'to-addresses':PORTAL_INTERNAL, 'to-ports':REDIRECT_PORT,
-  comment:'nf-garden captive redirect' };
+//
+// ORDER WITHIN THIS LIST IS THE CONTRACT. They are appended in sequence, so the array
+// order is the order on the router. Two placements matter and neither is obvious:
+//
+//   The captive redirect stays ABOVE the payer bypass. A customer mid-checkout is on
+//   nf-paying AND still on nf-restricted — openPaymentWindow adds to the one list and
+//   never removes from the other — so if the bypass came first, their port 80 would
+//   stop being redirected the instant they pressed Pay. They are sitting on
+//   http://1.1.1.1/restricted/ at that moment; 1.1.1.1 would resolve to the real
+//   Cloudflare resolver and the page polling for their payment would die under them.
+//
+//   The payer bypass stays ABOVE the DNS redirects, which is the whole reason it
+//   exists. See its own comment below.
+const DSTNAT_RULES = [
+  { chain:'dstnat', action:'dst-nat', 'src-address-list':'nf-restricted',
+    protocol:'tcp', 'dst-port':'80', 'dst-address-list':'!nf-portal',
+    'to-addresses':PORTAL_INTERNAL, 'to-ports':REDIRECT_PORT,
+    comment:'nf-garden captive redirect' },
+
+  // THE ONE RULE THAT KEEPS THE GARDEN FROM BECOMING A TRAP.
+  //
+  // garden-dns answers 10.0.98.4 for every A query except xendit.co and our own domain.
+  // That is correct for someone staring at the hold page and wrong for someone holding a
+  // card, because 3-D Secure does not redirect to Xendit — it redirects to the
+  // CARDHOLDER'S OWN BANK, whose domain is in no allow-list here and never could be.
+  // Hijack that and the card fails on the last screen, after the customer believes they
+  // have paid, with no way to tell them why.
+  //
+  // openPaymentWindow (src/routes/restricted.js) parks the address in nf-paying for 20
+  // minutes but leaves it on nf-restricted, so a DNS redirect scoped to nf-restricted
+  // alone matches a payer too. accept in dstnat means "stop NAT processing for this
+  // packet", so this rule hands payers straight through to real DNS for the window.
+  { chain:'dstnat', action:'accept', 'src-address-list':'nf-paying',
+    comment:'nf-garden payer DNS bypass',
+    // If the DNS rules somehow landed first — a half-finished earlier run — appending
+    // would put this BELOW them and quietly undo the protection above. Anchor to them.
+    placeBefore: ['nf-garden dns redirect', 'nf-garden dns redirect (tcp)'] },
+
+  // Force the OS captive probe to resolve to us. Without this, DNS leaves untouched
+  // (the 'allow DNS' filter accept has passed 116k packets), the probe resolves to the
+  // real Apple/Google address, and whether the portal pops depends on the phone having
+  // decided to re-probe at all. Measured on CLGNT-AC1 2026-09-24: 100.66.48.27 probed
+  // and got the portal automatically, 100.66.48.13 never probed once in a day.
+  //
+  // This does NOT make https:// show the portal. Nothing can, short of forging
+  // certificates. It makes the probe dependable, and the probe is what raises the
+  // "Sign in to network" sheet.
+  { chain:'dstnat', action:'dst-nat', 'src-address-list':'nf-restricted',
+    protocol:'udp', 'dst-port':'53',
+    'to-addresses':GARDEN_DNS_ADDR, 'to-ports':GARDEN_DNS_PORT,
+    comment:'nf-garden dns redirect' },
+  { chain:'dstnat', action:'dst-nat', 'src-address-list':'nf-restricted',
+    protocol:'tcp', 'dst-port':'53',
+    'to-addresses':GARDEN_DNS_ADDR, 'to-ports':GARDEN_DNS_PORT,
+    comment:'nf-garden dns redirect (tcp)' },
+];
 
 function arg(name, def) {
   const i = process.argv.indexOf('--' + name);
@@ -238,13 +295,27 @@ async function applyDevice(prisma, dev) {
     out.added.push(`nat ${SRCNAT_RULE.comment}`);
   }
 
-  if ((nats || []).some(n => String(n.comment || '') === DSTNAT_RULE.comment)) {
-    out.skipped.push(`nat ${DSTNAT_RULE.comment}`);
-  } else if (DRY) {
-    out.added.push(`nat ${DSTNAT_RULE.comment}`);
-  } else {
-    await raw(prisma, dev.id, '/ip/firewall/nat', 'add', DSTNAT_RULE);
-    out.added.push(`nat ${DSTNAT_RULE.comment}`);
+  // Appended in array order, so the list's order becomes the router's order. Re-read
+  // after each add: a rule placed this pass is the anchor the next one may need.
+  let natsNow = nats || [];
+  for (const rule of DSTNAT_RULES) {
+    if (natsNow.some(n => String(n.comment || '') === rule.comment)) {
+      out.skipped.push(`nat ${rule.comment}`); continue;
+    }
+    const { placeBefore, ...data } = rule;
+    // Only ever used to move a rule UP. Appending is the default and is correct as long
+    // as the rules above it already exist, which is the normal path.
+    if (placeBefore) {
+      const target = natsNow.find(n => placeBefore.includes(String(n.comment || '')));
+      if (target) data['place-before'] = idOf(target);
+    }
+    if (DRY) {
+      out.added.push(`nat ${rule.comment}` + (data['place-before'] ? '  [above the dns redirect]' : ''));
+      continue;
+    }
+    await raw(prisma, dev.id, '/ip/firewall/nat', 'add', data);
+    out.added.push(`nat ${rule.comment}`);
+    natsNow = await mikrotik.getFirewallNAT(prisma, dev.id);
   }
   return out;
 }
@@ -267,8 +338,24 @@ async function verifyDevice(prisma, dev) {
     problems.push('an accept sits BELOW a drop — restricted customers could not reach the payment page');
   if (drops.length && anchorAt !== -1 && Math.max(...drops) > anchorAt)
     problems.push('a drop sits BELOW the NAT-pool accept — restriction would not bite');
+
+  // dstnat order, which the filter chain says nothing about. Both of these are silent
+  // failures: the rules are all present and the router reports no error either way.
+  const nats = await mikrotik.getFirewallNAT(prisma, dev.id);
+  const dst = (nats || []).filter(r => r.chain === 'dstnat');
+  const at = (c) => dst.findIndex(r => String(r.comment || '') === c);
+  const bypassAt  = at('nf-garden payer DNS bypass');
+  const dnsAt     = [at('nf-garden dns redirect'), at('nf-garden dns redirect (tcp)')].filter(i => i !== -1);
+  const captiveAt = at('nf-garden captive redirect');
+  if (bypassAt !== -1 && dnsAt.length && bypassAt > Math.min(...dnsAt))
+    problems.push('the payer DNS bypass sits BELOW a dns redirect — a customer mid-checkout would have their bank\'s domain hijacked and the card would fail');
+  if (bypassAt !== -1 && captiveAt !== -1 && bypassAt < captiveAt)
+    problems.push('the payer DNS bypass sits ABOVE the captive redirect — the hold page would stop being served the moment they press Pay');
+
   return { device: `#${dev.id} ${dev.label}`, accepts: accepts.length, drops: drops.length,
     anchorAt, ok: problems.length === 0, problems,
+    dstnat: dst.filter(r => String(r.comment || '').startsWith(TAG))
+              .map((r, i) => `${i} ${r.action.padEnd(7)} ${r.comment}`),
     order: fwd.map((r, i) => `${i}${i === anchorAt ? '*' : ' '} ${r.action.padEnd(6)} ${r.comment || '(no comment)'}`) };
 }
 
@@ -296,6 +383,7 @@ async function verifyDevice(prisma, dev) {
       if (!ROLLBACK && !DRY && !out.errors.length) {
         const v = await verifyDevice(prisma, dev);
         console.log(`   verify: ${v.ok ? 'OK' : 'PROBLEM'} — ${v.accepts} accepts, ${v.drops} drops, anchor at ${v.anchorAt}`);
+        v.dstnat.forEach(l => console.log('      dstnat ' + l));
         v.problems.forEach(p => console.log('   !! ' + p));
         if (!v.ok) v.order.forEach(l => console.log('      ' + l));
       }

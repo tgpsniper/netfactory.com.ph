@@ -27,6 +27,7 @@
 // ============================================================
 
 const mikrotik = require('./mikrotik');
+const radiusGroups = require('./radius-groups');
 
 const RESTRICTED_GROUP = 'plan-restricted';
 const ADDRESS_LIST = 'nf-restricted';
@@ -141,18 +142,40 @@ async function routerDeviceIdForIp(prisma, radiusDb, ip) {
 // cutoff does not bite until they reconnect.
 async function desiredRestrictedByRouter(prisma, radiusDb) {
   const [rows] = await radiusDb.query(
-    `SELECT DISTINCT ON (d.mac)
-            d.mac,
-            r.subscriber_id,
+    `WITH identities AS (
+        -- Every RADIUS username belonging to a subscriber under an open restriction.
+        -- The MAC is the usual one. The account number is the second identity the
+        -- cutoff used to ignore completely, and a session dialled under it needs
+        -- walling exactly as much — putting it in plan-restricted only throttles it.
+        SELECT r.subscriber_id, d.mac AS username
+          FROM subscriber_restrictions r
+          JOIN hotspot_mac_devices d ON d.subscriber_id = r.subscriber_id
+         WHERE r.lifted_at IS NULL
+        UNION
+        -- Gated on an OPEN SESSION, not on the credential existing. Most of these
+        -- accounts never dial, and including a username with nothing to place would
+        -- report every restricted subscriber as "no open session" — making a cutoff
+        -- that is working look half-applied on the admin screen.
+        SELECT r.subscriber_id, s.account_number AS username
+          FROM subscriber_restrictions r
+          JOIN subscribers s ON s.id = r.subscriber_id
+         WHERE r.lifted_at IS NULL
+           AND s.account_number IS NOT NULL
+           AND EXISTS (SELECT 1 FROM radacct a
+                        WHERE a.username = s.account_number
+                          AND a.acctstoptime IS NULL
+                          AND a.framedipaddress IS NOT NULL)
+     )
+     SELECT DISTINCT ON (i.username)
+            i.username AS mac,
+            i.subscriber_id,
             host(a.framedipaddress) AS ip,
             host(a.nasipaddress)    AS nasip
-       FROM subscriber_restrictions r
-       JOIN hotspot_mac_devices d ON d.subscriber_id = r.subscriber_id
-       LEFT JOIN radacct a ON a.username = d.mac
+       FROM identities i
+       LEFT JOIN radacct a ON a.username = i.username
                           AND a.acctstoptime IS NULL
                           AND a.framedipaddress IS NOT NULL
-      WHERE r.lifted_at IS NULL
-      ORDER BY d.mac, a.radacctid DESC NULLS LAST`);
+      ORDER BY i.username, a.radacctid DESC NULLS LAST`);
 
   const map = await routerMap(prisma, radiusDb);
   const byDevice = new Map();      // device id -> Set of addresses
@@ -359,6 +382,9 @@ async function restrictionCandidates(prisma, radiusDb, graceDays) {
             (r.id IS NOT NULL)                        AS already_restricted,
             s.restriction_exempt
        FROM subscribers s
+       -- LEFT, not JOIN: three subscribers carry no plan at all, and dropping them
+       -- here would quietly exempt them from every cutoff.
+       LEFT JOIN plans pl ON pl.id = s.plan_id
        JOIN invoices i ON i.subscriber_id = s.id
                       AND i.status IN ('pending','partial','overdue')
                       -- A prepaid top-up is a purchase, never a debt. An abandoned
@@ -379,6 +405,15 @@ async function restrictionCandidates(prisma, radiusDb, graceDays) {
       -- Exempt accounts never appear as candidates at all, so no automated path can
       -- reach them. Restricting one by hand from their panel still works.
       WHERE s.restriction_exempt = false
+        -- A prepaid line is governed by its expiry date, never by arrears. The filter
+        -- on i.prepaid_days above only keeps top-up invoices from reading as debt; it
+        -- says nothing about the customer. Someone who moved onto a prepaid plan still
+        -- owing an old postpaid balance would otherwise buy 30 days, come back online,
+        -- and be cut off again at the next 9am sweep for the debt they did not pay —
+        -- less than a day of the time they bought. The arrears are not forgiven by
+        -- this: they stay on the invoice, in A/R and on the walled-garden page. They
+        -- are simply not what disconnects a prepaid customer. Running out of days is.
+        AND lower(coalesce(pl.billing_type, 'postpaid')) <> 'prepaid'
       GROUP BY s.id, r.id
       -- Filter in HAVING, not WHERE: the trigger is the OLDEST unpaid invoice passing
       -- grace, but the balance shown must be everything they owe. Filtering invoices
@@ -409,14 +444,52 @@ async function restrictSubscriber(prisma, radiusDb, subscriberId, opts = {}) {
 
   const [devices] = await radiusDb.query(
     `SELECT mac, profile FROM hotspot_mac_devices WHERE subscriber_id = ? ORDER BY mac`, [sid]);
-  if (!devices.length) {
+
+  // THE SECOND IDENTITY. A cutoff that only moves MACs is not a cutoff.
+  //
+  // Most of the fleet authenticates by MAC, but some subscribers also hold a
+  // username/password credential keyed on their account number, and restricting only
+  // ever touched hotspot_mac_devices. Measured 2026-09-24 on a restricted account: the
+  // MAC sat in plan-restricted while that subscriber's `radusergroup <account-number>`
+  // row stayed on their full-speed group with a working password, so dialling PPPoE
+  // with the account number came up at full speed straight past the walled garden.
+  // The account number is printed on the hold page the customer is looking at while
+  // they do it.
+  //
+  // has_cred matters as much as the group row: a credential with no radusergroup row
+  // authenticates into no group at all, which is unshaped rather than restricted, so
+  // that case needs a row INSERTED rather than updated.
+  const [acctRows] = await radiusDb.query(
+    `SELECT s.account_number AS username,
+            (SELECT g.groupname FROM radusergroup g
+              WHERE g.username = s.account_number LIMIT 1) AS groupname,
+            (SELECT c.value FROM radcheck c
+              WHERE c.username = s.account_number AND c.attribute = 'Auth-Type' LIMIT 1) AS prev_auth,
+            EXISTS(SELECT 1 FROM radcheck c WHERE c.username = s.account_number) AS has_cred
+       FROM subscribers s WHERE s.id = ? LIMIT 1`, [sid]);
+  const acct = acctRows[0] && acctRows[0].username &&
+               (acctRows[0].groupname || acctRows[0].has_cred) ? acctRows[0] : null;
+
+  if (!devices.length && !acct) {
     const err = new Error('Subscriber has no registered devices to restrict');
     err.status = 400;
     throw err;
   }
 
   // Snapshot BEFORE changing anything — this is the only record of what to restore to.
+  //
+  // `mac` holds the RADIUS username, which for an account entry is the account number
+  // rather than a MAC. kind tells the two apart on the way back; entries written before
+  // this existed have no kind and are MACs, which is what the restore assumes.
   const snapshot = devices.map(d => ({ mac: d.mac, prev_profile: d.profile || null }));
+  if (acct) snapshot.push({
+    mac: acct.username, kind: 'account',
+    prev_profile: acct.groupname || null,
+    // Null means "there was no Auth-Type row". Restoring that as Accept instead of
+    // deleting it would leave the account authenticating with no password check at
+    // all — a restriction that ends in an auth bypass.
+    prev_auth: acct.prev_auth || null,
+  });
   const macs = devices.map(d => d.mac);
 
   // Recorded per-restriction, so lifting always reverses what was actually applied
@@ -430,7 +503,10 @@ async function restrictSubscriber(prisma, radiusDb, subscriberId, opts = {}) {
        VALUES (?, ?, ?, ?, ?::jsonb, ?)`,
       [sid, reason, trigger, by, JSON.stringify(snapshot), mode]);
 
-    for (const d of devices) {
+    // Over the snapshot, not over devices: the account-number credential is in the
+    // snapshot and is not a device, and it has to be moved too or the cutoff has a
+    // front door standing open beside it.
+    for (const d of snapshot) {
       // A device with no group row yet still needs one, or it would authenticate
       // with no rate limit at all while nominally restricted.
       const [existing] = await conn.query(
@@ -443,8 +519,12 @@ async function restrictSubscriber(prisma, radiusDb, subscriberId, opts = {}) {
           'INSERT INTO radusergroup (username, groupname, priority) VALUES (?, ?, 1)',
           [d.mac, RESTRICTED_GROUP]);
       }
-      await conn.query('UPDATE hotspot_mac_devices SET profile = ? WHERE mac = ?',
-        [RESTRICTED_GROUP, d.mac]);
+      // Only a real device has a row here. An account number would match nothing,
+      // but being explicit keeps the intent readable.
+      if (d.kind !== 'account') {
+        await conn.query('UPDATE hotspot_mac_devices SET profile = ? WHERE mac = ?',
+          [RESTRICTED_GROUP, d.mac]);
+      }
 
       if (mode === 'full') {
         // Refuse the device at RADIUS. MAB authorises on User-Name alone via
@@ -497,10 +577,47 @@ async function unrestrictSubscriber(prisma, radiusDb, subscriberId, opts = {}) {
 
   // Fall back to the subscriber's current plan group for any device whose snapshot
   // has no previous profile — better than leaving it on plan-restricted forever.
+  // The whole plan record, not just the group name: if that group turns out to be
+  // empty we rebuild it from these speeds rather than restore into nothing.
   const [planRows] = await radiusDb.query(
-    `SELECT p.radius_group FROM subscribers s
+    `SELECT p.id, p.radius_group, p.download_mbps, p.upload_mbps, p.speed_mbps,
+            p.burst_download_mbps, p.burst_upload_mbps, p.burst_threshold_pct, p.burst_time_s
+       FROM subscribers s
        JOIN plans p ON p.id = s.plan_id WHERE s.id = ? LIMIT 1`, [sid]);
-  const planGroup = planRows[0] ? planRows[0].radius_group : null;
+  const plan = planRows[0] || null;
+  const planGroup = plan ? plan.radius_group : null;
+
+  // Every group that belongs to some plan, used only to tell two cases apart below.
+  const [planGroupRows] = await radiusDb.query(
+    `SELECT DISTINCT radius_group FROM plans WHERE radius_group IS NOT NULL`);
+  const planGroups = new Set(planGroupRows.map(r => r.radius_group));
+
+  // prev_profile is the right answer while nothing else moved, and the WRONG answer
+  // when the subscriber's plan changed during the cutoff — which is exactly what the
+  // walled garden's prepaid option will do. Someone cut off on fiber-200 who then buys
+  // the 50 Mbps prepaid tier would otherwise come back at 200 Mbps, having paid for a
+  // quarter of it, with the arrears still outstanding.
+  //
+  // Override ONLY when prev_profile is recognisably some other PLAN's group. A profile
+  // matching no plan is a hand-made group somebody set deliberately, and a restore has
+  // no business overwriting that.
+  const chooseTarget = (prev) => {
+    if (!prev) return planGroup;
+    if (planGroup && prev !== planGroup && planGroups.has(prev)) return planGroup;
+    return prev;
+  };
+
+  // Rebuild the plan's group before anybody is restored into it. Deactivating a plan
+  // used to delete its radgroupreply rows out from under the subscribers still on it,
+  // and a group with no attributes answers Access-Accept with no rate limit — the
+  // customer comes back unshaped and with no interim accounting, so the sync jobs
+  // cannot see the session either. No-op when the group is already there.
+  const healed = plan ? await radiusGroups.ensureGroupForPlan(radiusDb, plan) : null;
+  if (healed && healed.created) {
+    console.warn(`[restriction] sub#${sid}: rebuilt missing RADIUS group ` +
+                 `${planGroup} -> ${healed.rateLimit} before restoring`);
+  }
+  const unshaped = [];
 
   const restored = [];
   await radiusDb.transaction(async (conn) => {
@@ -517,13 +634,56 @@ async function unrestrictSubscriber(prisma, radiusDb, subscriberId, opts = {}) {
     }
 
     for (const d of snapshot) {
-      const target = d.prev_profile || planGroup;
+      const isAccount = d.kind === 'account';
+
+      // Put the account credential's Auth-Type back to EXACTLY what it was, which for
+      // an account number is normally no row at all. The MAC path above sets Reject
+      // back to Accept because MAB authorises on the username alone and Accept is its
+      // resting state. An account authenticates against Cleartext-Password, so
+      // Auth-Type := Accept there means "let this in WITHOUT checking the password" —
+      // lifting a restriction would hand out an auth bypass. Delete, do not flip.
+      if (isAccount && open.mode === 'full') {
+        if (d.prev_auth) {
+          await conn.query(
+            `UPDATE radcheck SET value = ? WHERE username = ? AND attribute = 'Auth-Type'`,
+            [d.prev_auth, d.mac]);
+        } else {
+          await conn.query(
+            `DELETE FROM radcheck WHERE username = ? AND attribute = 'Auth-Type'`, [d.mac]);
+        }
+      }
+
+      let target = chooseTarget(d.prev_profile);
+
+      // Never restore anybody into a group that replies with nothing. ensureGroupForPlan
+      // above has already rebuilt the current plan's group if it was missing, so this
+      // catches the remaining case: a stale prev_profile naming a group that has since
+      // been emptied. Prefer the plan over the ghost.
+      if (target && !(await radiusGroups.groupHasAttributes(conn, target))) {
+        if (planGroup && target !== planGroup &&
+            await radiusGroups.groupHasAttributes(conn, planGroup)) {
+          console.warn(`[restriction] sub#${sid}: ${target} has no attributes — ` +
+                       `restoring ${d.mac} to ${planGroup} instead`);
+          target = planGroup;
+        } else {
+          // Both empty. Unshaped is the lesser evil against leaving somebody who has
+          // paid throttled with no way out, but it is not silent: it is warned and
+          // reported back to the caller.
+          console.warn(`[restriction] sub#${sid}: no usable RADIUS group for ${d.mac} ` +
+                       `(${target} is empty) — restoring UNSHAPED`);
+          unshaped.push({ username: d.mac, group: target });
+          target = null;
+        }
+      }
+
       if (!target) {
         // Nothing sane to restore to. Drop the group row so the device authenticates
         // unrestricted rather than staying throttled with no way out.
         await conn.query('DELETE FROM radusergroup WHERE username = ?', [d.mac]);
-        await conn.query('UPDATE hotspot_mac_devices SET profile = NULL WHERE mac = ?', [d.mac]);
-        restored.push({ mac: d.mac, profile: null });
+        if (!isAccount) {
+          await conn.query('UPDATE hotspot_mac_devices SET profile = NULL WHERE mac = ?', [d.mac]);
+        }
+        restored.push({ mac: d.mac, profile: null, kind: d.kind });
         continue;
       }
       const [existing] = await conn.query(
@@ -534,8 +694,10 @@ async function unrestrictSubscriber(prisma, radiusDb, subscriberId, opts = {}) {
         await conn.query(
           'INSERT INTO radusergroup (username, groupname, priority) VALUES (?, ?, 1)', [d.mac, target]);
       }
-      await conn.query('UPDATE hotspot_mac_devices SET profile = ? WHERE mac = ?', [target, d.mac]);
-      restored.push({ mac: d.mac, profile: target });
+      if (!isAccount) {
+        await conn.query('UPDATE hotspot_mac_devices SET profile = ? WHERE mac = ?', [target, d.mac]);
+      }
+      restored.push({ mac: d.mac, profile: target, kind: d.kind });
     }
 
     // Devices registered DURING the restriction were forced onto plan-restricted by
@@ -574,7 +736,11 @@ async function unrestrictSubscriber(prisma, radiusDb, subscriberId, opts = {}) {
   const router = await safely('clear address-list', () =>
     syncAddressList(prisma, radiusDb, { comment: 'billing restriction' }), 45000);
 
-  return { wasRestricted: true, restored, router, restrictionId: open.id };
+  return { wasRestricted: true, restored, router, restrictionId: open.id,
+           // Non-empty means somebody came back with no rate limit on them. The caller
+           // can surface it; silence here is how five subscribers sat on deleted groups.
+           unshaped: unshaped.length ? unshaped : undefined,
+           rebuiltGroup: healed && healed.created ? planGroup : undefined };
 }
 
 // ── automation ──────────────────────────────────────────────
@@ -626,10 +792,26 @@ async function runAutoRestore(prisma, radiusDb) {
   const candidates = await restrictionCandidates(prisma, radiusDb, days);
   const stillOwing = new Set(candidates.map(c => Number(c.id)));
 
+  // Prepaid subscribers are excluded from restrictionCandidates by design — their
+  // cutoff is expiry, not arrears. Absence from that list must not read as "settled".
+  // Without this, a cutoff applied by the overdue job while the customer was postpaid
+  // would be lifted on the very next tick the moment they were moved onto a prepaid
+  // plan, handing back service nobody paid for — and nothing would catch it, because
+  // expiryCandidates deliberately skips `expires_at IS NULL` (never topped up). On a
+  // prepaid line only live paid time lifts a cutoff, and buying it goes through
+  // prepaid.grant(), which restores on its own.
+  const [noTime] = await radiusDb.query(
+    `SELECT s.id FROM subscribers s
+       JOIN plans p ON p.id = s.plan_id
+                   AND lower(coalesce(p.billing_type,'')) = 'prepaid'
+      WHERE s.expires_at IS NULL OR s.expires_at <= now()`);
+  const prepaidOutOfTime = new Set(noTime.map(r => Number(r.id)));
+
   const lifted = [];
   for (const r of open) {
     const sid = Number(r.subscriber_id);
     if (stillOwing.has(sid)) continue;         // still past grace with a balance
+    if (prepaidOutOfTime.has(sid)) continue;   // prepaid line with no days left
     try {
       const out = await unrestrictSubscriber(prisma, radiusDb, sid, { by: 'auto (account settled)' });
       if (out.wasRestricted) lifted.push({ subscriberId: sid, devices: out.restored.length });
@@ -684,6 +866,11 @@ async function restoreIfSettled(prisma, radiusDb, subscriberId, opts = {}) {
       devices: out.restored ? out.restored.length : 0,
       routerApplied: out.router ? out.router.ok : null,
       restrictionId: open.id,
+      // Passed through so a payment-triggered restore that came back with no rate
+      // limit on it lands in the audit log. Dropping these here would put the silence
+      // straight back: this is the path a paying customer actually takes.
+      unshaped: out.unshaped,
+      rebuiltGroup: out.rebuiltGroup,
     };
   } catch (err) {
     console.error(`[restore-on-payment] subscriber ${sid}: ${err.message}`);
